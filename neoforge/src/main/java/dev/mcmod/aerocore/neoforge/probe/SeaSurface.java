@@ -71,7 +71,7 @@ public final class SeaSurface {
     public static double time(Level level) { return level.getGameTime() * MinecraftUnits.TICK_SECONDS; }
 
     /** How far the surface can move from the still level in this region, m (ambient waves plus wakes present). */
-    public static double reach(Level level, WaveRegion region) { return region.compiled().maxAmplitude() + Wakes.maxElevation(level); }
+    public static double reach(Level level, WaveRegion region) { return region.reach() + Wakes.maxElevation(level); }
 
     /**
      * True when the column through block (x, z) has its free surface at the region's still level: a still water
@@ -152,10 +152,16 @@ public final class SeaSurface {
         return y < surfaceY(level, region, x, z, t);
     }
 
-    /** Ambient-wave orbital velocity (m/s) at a point of a governed column, tapered like the surface; wakes add none. */
+    /** Ambient-wave orbital velocity (m/s) at a point of a governed column, tapered and over the coast like the surface; wakes add none. */
     public static Vec3d orbitalVelocity(Level level, WaveRegion region, double x, double y, double z, double t) {
-        if (region.compiled().isEmpty()) { return Vec3d.ZERO; }
-        double w = region.weight(x, z);
-        return w == 0 ? Vec3d.ZERO : region.compiled().velocity(new Vec3d(x, y, z), region.stillWaterY(), t).scale(w);
+        return region.orbitalVelocity(x, y, z, t);
+    }
+
+    /**
+     * Water velocity at a point of a governed column whose surface is at surfaceY: the orbital velocity plus the
+     * wind-driven drift at the point's depth below that surface, m/s.
+     */
+    public static Vec3d waterVelocity(WaveRegion region, double x, double y, double z, double surfaceY, double t) {
+        return region.orbitalVelocity(x, y, z, t).add(region.windDrift(x, z, surfaceY - y));
     }
 }

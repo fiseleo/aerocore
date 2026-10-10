@@ -11,7 +11,8 @@ package dev.mcmod.aerocore.api;
  * <li>W_A is a tenth of the whitecap coverage W (stage A crests against stage B foam, Monahan and Lu 1990), and
  * W = 3.84e-6 U10^3.41 (Monahan and O'Muircheartaigh 1980, data to 16.6 m/s). The wind is the one that raises the
  * sea's Hs when fully developed (Pierson-Moskowitz: Hs = 0.2092 U19.5^2 / g, U19.5 = 1.05 U10, the middle of
- * 1.026-1.075); a sea younger or older than that gets that equivalent wind's whitecaps.</li>
+ * 1.026-1.075); a sea younger or older than that gets that equivalent wind's whitecaps, unless the wind over it is
+ * known (thresholdAtWind).</li>
  * <li>Foam decays exponentially with e-folding time 3.5 s (Monahan 1988; 3.53 s, Monahan et al. 1982; single
  * patches 0.2-10.4 s, Callaghan et al. 2012).</li>
  * </ul>
@@ -43,7 +44,12 @@ public final class Whitecaps {
      * LIMIT g. Infinite when nothing breaks.
      */
     public static double threshold(double accelerationDeviation, double significantHeightM) {
-        double active = 0.1 * coverage(equivalentWind(significantHeightM)), limit = LIMIT * Atmosphere.GRAVITY_MPS2;
+        return thresholdAtWind(accelerationDeviation, equivalentWind(significantHeightM));
+    }
+
+    /** threshold for a sea under a known 10 m wind (m/s), whose whitecap coverage it sets. */
+    public static double thresholdAtWind(double accelerationDeviation, double windMps) {
+        double active = 0.1 * coverage(windMps), limit = LIMIT * Atmosphere.GRAVITY_MPS2;
         if (!(active > 0) || !(accelerationDeviation > 0)) { return Double.POSITIVE_INFINITY; }
         return Math.min(limit, accelerationDeviation * inverseNormal(1 - active));
     }

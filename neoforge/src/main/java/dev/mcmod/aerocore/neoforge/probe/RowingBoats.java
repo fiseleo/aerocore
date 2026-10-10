@@ -25,6 +25,8 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.vehicle.Boat;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -141,7 +143,8 @@ public final class RowingBoats {
             @Override public Vec3d velocity(double x, double z) {
                 WaveRegion region = SeaSurface.governing(level, x, z, bottom - 1, bottom + Rowboat.DEPTH);
                 // Vanilla flowing water pushes boats itself (Entity fluid pushing), so vanilla water counts as still here.
-                return region == null ? Vec3d.ZERO : SeaSurface.orbitalVelocity(level, region, x, bottom, z, t);
+                if (region == null) { return Vec3d.ZERO; }
+                return SeaSurface.waterVelocity(region, x, bottom, z, SeaSurface.surfaceY(level, region, x, z, t, id), t);
             }
         };
     }
@@ -156,6 +159,13 @@ public final class RowingBoats {
             if (fluid.is(FluidTags.WATER)) { return y + fluid.getHeight(level, pos); }
         }
         return Double.NaN;
+    }
+
+    /** The wind of the sea region the boat is in (tapered like its waves), at standard sea-level air density; calm elsewhere. */
+    private static Rowboat.Air air(Boat boat) {
+        WaveRegion region = SeaSurface.governing(boat.level(), boat.getX(), boat.getZ(), boat.getY() - 1, boat.getY() + Rowboat.DEPTH);
+        if (region == null || region.wind().calm()) { return Rowboat.Air.CALM; }
+        return new Rowboat.Air(region.wind().vector().scale(region.weight(boat.getX(), boat.getZ())), Rowboat.Air.CALM.density());
     }
 
     private static Rowboat.Water ownWake(Boat boat) {
@@ -241,7 +251,7 @@ public final class RowingBoats {
         }
         Rowboat.State s = new Rowboat.State(new Vec3d(boat.getX(), boat.getY(), boat.getZ()), p.velocity, Math.toRadians(boat.getYRot()),
                 p.pitch, p.roll, p.yawRate, p.pitchRate, p.rollRate);
-        Rowboat.Result result = Rowboat.step(s, passengers(boat), oars, water, ownWake(boat), RHO, DT, p.memory);
+        Rowboat.Result result = Rowboat.step(s, passengers(boat), oars, water, ownWake(boat), air(boat), RHO, DT, p.memory);
         Rowboat.State n = result.state();
         p.velocity = n.velocity(); p.pitch = n.pitch(); p.roll = n.roll();
         p.pitchRate = n.pitchRate(); p.rollRate = n.rollRate(); p.yawRate = n.yawRate();
@@ -286,6 +296,36 @@ public final class RowingBoats {
         Physics p = STATES.get(boat);
         if (p == null) { return new float[]{0, 0}; }
         return new float[]{(float) Mth.lerp(partialTick, p.prevPitch, p.pitch), (float) Mth.lerp(partialTick, p.prevRoll, p.roll)};
+    }
+
+    /**
+     * The hull's pitch and roll as a world-frame rotation about its bottom centre (pitch about the boat's right axis,
+     * bow up; roll about its forward axis, right side down), or null when level.
+     */
+    public static Quaternionf tilt(Boat boat, float partialTick) {
+        float[] a = attitude(boat, partialTick);
+        if (a[0] == 0 && a[1] == 0) { return null; }
+        double yaw = Math.toRadians(boat.getViewYRot(partialTick));
+        float fx = (float) -Math.sin(yaw), fz = (float) Math.cos(yaw), rx = (float) -Math.cos(yaw), rz = (float) -Math.sin(yaw);
+        return new Quaternionf().rotateAxis(a[1], fx, 0, fz).rotateAxis(a[0], rx, 0, rz);
+    }
+
+    /** A seat offset from the boat's position (vanilla's attachment point) turned with the hull, or null when level. */
+    public static Vec3 tiltSeat(Boat boat, Vec3 seat) {
+        Quaternionf q = tilt(boat, 1);
+        if (q == null) { return null; }
+        Vector3f v = q.transform(new Vector3f((float) seat.x, (float) seat.y, (float) seat.z));
+        return new Vec3(v.x, v.y, v.z);
+    }
+
+    /**
+     * Camera roll (degrees, positive turns the view's right side down) of someone in this boat looking along viewYaw:
+     * the hull's roll seen ahead, its pitch seen to the side.
+     */
+    public static float cameraRoll(Boat boat, float viewYaw, float partialTick) {
+        float[] a = attitude(boat, partialTick);
+        double delta = Math.toRadians(viewYaw - boat.getViewYRot(partialTick));
+        return (float) Math.toDegrees(a[1] * Math.cos(delta) + a[0] * Math.sin(delta));
     }
 
     /** The last step's diagnostics for this boat, or null (tests and the inspect readout). */

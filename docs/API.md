@@ -591,3 +591,42 @@ UnsteadyWake.Forcing f = Rowboat.wakeForcing(Rowboat.draft(Rowboat.mass(crew).ma
 `ContactMaterial` 新增 `STEEL_ON_WOOD`、`STEEL_ON_ICE`、`STEEL_ON_SAND`、`STEEL_ON_GRAVEL`、`STEEL_ON_SOIL`、`STEEL_ON_MUD`、`STEEL_ON_SNOW`、
 `STEEL_ON_WOOL`、`STEEL_ON_GLASS` 與 `yieldVelocityFromPressure`（以硬度為 p_y）。把材質放進 `new WorldBox(min, max, material)`，求解器就逐接觸使用。
 Minecraft 端的分類在 `BlockMaterials.of(BlockState)`；係數來源見 [物理模型](PHYSICS.md)〈0.11 新增模型與係數來源〉。
+
+## 0.12 相容性變更
+
+- `CompiledWaves`：`surfaceTerms(x, z, t, coast, out)`、`at(coast, x, z, taper)`（局部波場）、`scaled(factor)`、`modulate`、`variance`、
+  `meanWavenumber`、`gridCoastal`、`gridCorrection(coast, ...)`、`cheapSecondOrderHeight`、`correctionHeight`。原有方法的結果不變，
+  `secondOrder`／`surfaceTerms` 多了 Sharma–Dean 修正（浪頭較高、波群下水位下降）。
+- `PlaningDynamics` 的靜水壓在艉板通氣時乘上 Garme 的艉板修正，航行俯仰角變大。
+- `Rowboat.oarThrust` 的滑移速度受 `BLADE_SPEED − U` 限制；`Rowboat.step` 多一個帶 `Rowboat.Air`（10 m 風與空氣密度）的多載，舊的簽名等於無風。
+- `Whitecaps.thresholdAtWind(accelerationDeviation, u10)`：已知風速時的碎浪門檻。
+- Minecraft 端：`WaveRegions.Local` 多 `compiled`（局部波場，給 `WorldWaterSampler` 的新多載）與 `windAt`；`WaveRegion` 多 `survey`、`wind`、`coast()`、
+  `localWaves`、`orbitalVelocity`、`windDrift`、`reach`；`WorldWaterSampler.drifting(region)` 加入風驅動的表層流；
+  `PlatformEnvironment.setSea` 每 tick 帶入海域，`airAt` 與 `windAt` 含海域的風。
+
+## 海岸（0.12）
+
+```java
+float[] depth = ...;                                    // 格點 (x0 + i·d, z0 + j·d)、索引 i·nz + j，單位 m，0 以下為陸地
+CoastalWaves coast = CoastalWaves.build(x0, z0, 2, nx, nz, depth, sea);   // 128 m 海域約 0.3 s，請在背景執行緒
+CompiledWaves fast = new CompiledWaves(sea);
+double[] terms = new double[6];
+fast.surfaceTerms(x, z, t, coast, terms);               // 海岸上的二階水面與坡度（coast 為 null 時是開放海面）
+CompiledWaves local = fast.at(coast, bodyX, bodyZ, taper);   // 物體位置的局部平面波（給取樣器與頻域負載，local.field()）
+fast.gridCoastal(coast, x0, z0, dx, dz, nx, nz, t, h, sx, sz, h2, s2x, s2z);   // 畫面用的格點
+double b = coast.breaking(x, z);                        // 水深上限移除的波能比例（碎浪帶白沫）
+```
+
+`envelopes(x, z, re, im, reX, imX, reZ, imZ)` 回傳每個分量的包絡相量 M 與其梯度；外海或格點外 M = 1。模型與驗證見 [海況](SEA.md)〈海岸〉。
+
+## 風（0.12）
+
+```java
+double ustar = SeaWind.frictionVelocity(u10);           // COARE 3.0 粗糙長度的中性對數律
+double u2 = SeaWind.speedAt(u10, 2);                    // 2 m 高的風速
+double[] hsTp = SeaWind.sea(u10, fetchM, depthM);       // JONSWAP 受風域限制的 Hs、Tp（風域無限大時為充分發展）
+double drift = SeaWind.drift(u10, depthM);              // 風驅動的表層流 0.53 u*，0.1 m e-folding
+Rowboat.Result r = Rowboat.step(state, crew, oars, water, ownWake, new Rowboat.Air(wind10, 1.225), rho, dt, memory);
+```
+
+係數來源與驗證見 [海況](SEA.md)〈風〉與 [原版船](ROWBOAT.md)。

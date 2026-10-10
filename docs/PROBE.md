@@ -17,7 +17,7 @@
 | `/aerocore probe spawn 1000` | 生成會在淡水中下沉的 1000 kg 球 |
 | `/aerocore probe spawn 250 10` | 沿視線以 10 m/s 發射 |
 | `/aerocore probe inspect` | 查看 32 m 內由你生成的最近一顆球 |
-| `/aerocore probe wind 10 0 0` | 對最近的自有球設定世界 +X 方向 10 m/s 測試風 |
+| `/aerocore probe wind 10 0 0` | 對最近的自有球設定世界 +X 方向 10 m/s 測試風（0.12 起加在海域的風上） |
 | `/aerocore probe current 1 0 0` | 對最近的自有球附加 +X 方向 1 m/s 水流 |
 | `/aerocore probe wind 0 0 0` | 清除該球的測試風 |
 | `/aerocore probe current 0 0 0` | 清除附加水流，仍讀取原版水流 |

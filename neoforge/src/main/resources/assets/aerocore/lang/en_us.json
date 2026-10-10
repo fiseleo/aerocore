@@ -50,7 +50,7 @@
   "command.aerocore.waves.removed": "Removed %s wave region(s).",
   "command.aerocore.waves.no_water": "No open water surface in the column at this position (searched 3 blocks up to 8 blocks down).",
   "command.aerocore.waves.limit": "This dimension already has 16 wave regions; remove some first.",
-  "command.aerocore.waves.sea_info": "Sea region %s: centre (%s, %s) | radius %s m (outer %s m tapers to calm) | JONSWAP Hs %s m, Tp %s s, gamma %s | mean heading %s deg, cos^%s spreading | %s components | peak wavelength %s m | depth %s m | still level y=%s. Linear irregular sea: no breaking crests; water blocks stay static and the client redraws the surface.",
+  "command.aerocore.waves.sea_info": "Sea region %s: centre (%s, %s) | radius %s m (outer %s m tapers to calm) | JONSWAP Hs %s m, Tp %s s, gamma %s | mean heading %s deg, cos^%s spreading | %s components | peak wavelength %s m | depth %s m | still level y=%s. Second-order irregular sea with whitecaps; water blocks stay static and the client redraws the surface.",
   "command.aerocore.waves.calm_info": "Calm sea region %s: centre (%s, %s) | radius %s m | still level y=%s. No ambient waves; the surface is still redrawn so ship wakes show and vanilla entities use it.",
   "command.aerocore.platform.waves.sea": "Waves: irregular sea Hs %s m | Tp %s s | gamma %s | mean heading %s deg | cos^%s spreading | %s components | depth %s m | still level y=%s | region radius %s m, local amplitude factor %s",
   "entity.aerocore.planing_boat": "AeroCore planing boat · 1048 kg",
@@ -59,5 +59,17 @@
   "command.aerocore.planing.blocked": "The boat's bounding box is obstructed, outside the world border or in unloaded chunks. Face open water with room for a 7 m hull.",
   "command.aerocore.planing.limit": "This dimension already has 8 loaded planing boats; clear some first.",
   "command.aerocore.planing.cleared": "Removed %s of your planing boats within 64 blocks.",
-  "command.aerocore.planing.info": "Planing boat #%s | speed %s m/s | surge %s m/s (C_V %s, V/sqrt(L) %s kn/sqrt(ft)) | bow yaw %s deg (Minecraft) | turn rate %s deg/s (+ to starboard) | heel %s deg (+ starboard) | trim %s deg (+ bow up) | wetted keel %s beams | transom ventilation %s%% | friction %s N | drag dissipation %s W"
+  "command.aerocore.planing.info": "Planing boat #%s | speed %s m/s | surge %s m/s (C_V %s, V/sqrt(L) %s kn/sqrt(ft)) | bow yaw %s deg (Minecraft) | turn rate %s deg/s (+ to starboard) | heel %s deg (+ starboard) | trim %s deg (+ bow up) | wetted keel %s beams | transom ventilation %s%% | friction %s N | drag dissipation %s W",
+  "command.aerocore.waves.environment": "  Wind %s m/s at 10 m toward %s deg | coast: %s",
+  "command.aerocore.waves.coast.none": "not surveyed (open-sea waves everywhere; /aerocore waves survey)",
+  "command.aerocore.waves.coast.pending": "surveyed, computing refraction",
+  "command.aerocore.waves.coast.ready": "%s of %s survey points on land; waves refract, shoal, are sheltered and break over the surveyed bed",
+  "command.aerocore.waves.coast.failed": "the survey could not be used; open-sea waves",
+  "command.aerocore.waves.no_region": "No wave region contains this position.",
+  "command.aerocore.waves.wind_set": "Wind over the wave region: %s m/s at 10 m, blowing toward %s deg. It sets the whitecaps, drifts the surface water and pushes boats and bodies; the waves stay as they are (windsea raises a sea from a wind).",
+  "command.aerocore.waves.surveyed": "Surveyed the bed under the wave region: %s x %s points every %s m, %s of them on land. The coastal waves are being computed (about a second).",
+  "command.aerocore.waves.wind_sea": "Wind sea: U10 %s m/s over %s raises Hs %s m, Tp %s s (JONSWAP fetch-limited growth up to a fully developed Pierson-Moskowitz sea; depth-limited in shallow water).",
+  "command.aerocore.waves.fetch_unlimited": "an unlimited fetch",
+  "command.aerocore.waves.fetch_km": "a %s km fetch",
+  "command.aerocore.waves.wind_sea_too_high": "This wind raises Hs %s m over that fetch, more than the 4 m the sea commands allow; give a shorter fetch."
 }

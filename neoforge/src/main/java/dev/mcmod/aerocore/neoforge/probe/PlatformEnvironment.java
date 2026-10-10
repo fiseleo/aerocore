@@ -4,20 +4,29 @@ import dev.mcmod.aerocore.api.*;
 
 /**
  * Per-platform experiment controls. Never edits world weather, biomes, or fluid blocks. Waves are not per platform:
- * they belong to the world's WaveRegions, so every body and the client renderer see the same surface.
+ * they belong to the world's WaveRegions, so every body and the client renderer see the same surface; so does the sea
+ * wind, which the body passes in every tick (setSea) and which airAt adds, by its log profile at each point's height
+ * above the still level, to the experiment's own uniform wind.
  */
 public final class PlatformEnvironment {
     private Double airKelvin;
     private double waterKelvin=293.15;
     private Vec3d wind=Vec3d.ZERO,current=Vec3d.ZERO;
     private ThermalFluidState water=Thermodynamics.liquidWater(waterKelvin,100000,Vec3d.ZERO);
+    private WaveRegions.Local sea=WaveRegions.Local.CALM;
+    /** The experiment's own uniform wind (without the sea region's). */
     public Vec3d wind() {return wind;}
+    /** The sea the body is in this tick, for its wind. */
+    public void setSea(WaveRegions.Local local) {sea=local;}
+    /** Experiment wind plus the sea region's wind at a point, m/s. */
+    public Vec3d windAt(Vec3d position) {return wind.add(sea.windAt(position.x(),position.y(),position.z()));}
     public Vec3d current() {return current;}
     public double waterKelvin() {return waterKelvin;}
     public ThermalFluidState waterThermal() {return water;}
     public ThermalFluidState airAt(Vec3d position,int seaLevel) {
-        Atmosphere.Sample standard=Atmosphere.atAltitude(Math.clamp(position.y()-seaLevel,-500,20000),wind);
-        return Thermodynamics.dryAir(airKelvin==null?standard.temperatureKelvin():airKelvin,standard.pressurePa(),wind);
+        Vec3d local=windAt(position);
+        Atmosphere.Sample standard=Atmosphere.atAltitude(Math.clamp(position.y()-seaLevel,-500,20000),local);
+        return Thermodynamics.dryAir(airKelvin==null?standard.temperatureKelvin():airKelvin,standard.pressurePa(),local);
     }
     public FluidState waterAt(Vec3d vanillaCurrent) {return water.fluid().withVelocity(vanillaCurrent.add(current));}
     public void setAirCelsius(double degrees) {

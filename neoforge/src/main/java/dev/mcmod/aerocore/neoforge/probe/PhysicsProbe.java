@@ -153,6 +153,7 @@ public final class PhysicsProbe extends Entity implements CoupledBody, SolidBody
         collision = new FloatingBodyDynamics.Collision(SHAPE, WorldObstacles.collect(this, region), MATERIAL);
         // The same world wave regions as the platform; the taper factor is taken at the sphere centre.
         waves = WaveRegions.of(server).at(state.position().x(), state.position().z());
+        sampler.drifting(waves.region());
         startTime = server.getGameTime() * MinecraftUnits.TICK_SECONDS;
         dragSum = Vec3d.ZERO; buoyancySum = Vec3d.ZERO; contactSum = Vec3d.ZERO; steps = 0; moving = true;
         entityLoads.beginTick();
@@ -179,8 +180,9 @@ public final class PhysicsProbe extends Entity implements CoupledBody, SolidBody
     @Override public RigidBodyState prepareSubstep(int step) {
         double dt = MinecraftUnits.TICK_SECONDS / SUBSTEPS, time = startTime + step * dt;
         FloatingBodyDynamics.Environment fluids = (center, radius) -> {
-            WorldWaterSampler.Contact c = sampler.sample(center, radius, waves.waves(), waves.stillWaterY(), time);
-            FluidState air = Atmosphere.atAltitude(Math.clamp(center.y() - seaLevel, -500, 20000), windMps).fluid();
+            WorldWaterSampler.Contact c = sampler.sample(center, radius, waves.compiled(), waves.stillWaterY(), time);
+            Vec3d wind = windMps.add(waves.windAt(center.x(), center.y(), center.z()));
+            FluidState air = Atmosphere.atAltitude(Math.clamp(center.y() - seaLevel, -500, 20000), wind).fluid();
             FluidState water = FluidState.FRESH_WATER_20C.withVelocity(c.currentMps().add(addedCurrentMps));
             return new FloatingBodyDynamics.Contact(c.fraction(), c.wetCentroidOffset(), air, water,
                     c.pressureFraction(), c.pressureCentroidOffset(), c.accelerationMps2(), c.fraction() > 0 && c.fraction() < 1);
@@ -218,7 +220,7 @@ public final class PhysicsProbe extends Entity implements CoupledBody, SolidBody
         buoyancyN = buoyancySum.scale(1 / n);
         contactN = contactSum.scale(1 / n);
         setPos(state.position().x(), state.position().y() - RADIUS_M, state.position().z());
-        entityData.set(WET, (float) sampler.sample(centerM(), RADIUS_M, waves.waves(), waves.stillWaterY(), startTime + steps * dt).fraction());
+        entityData.set(WET, (float) sampler.sample(centerM(), RADIUS_M, waves.compiled(), waves.stillWaterY(), startTime + steps * dt).fraction());
         publish();
         BodyCollisions.pushOut(this);
     }

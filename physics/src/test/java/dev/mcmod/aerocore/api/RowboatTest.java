@@ -89,9 +89,36 @@ class RowboatTest {
         assertEquals(0, s.yaw(), 1e-6, "Equal oars row straight");
         // Pulling only the right oar turns the boat left (Minecraft yaw decreases), as vanilla's left key does.
         Rowboat.State turn = at(-draft);
-        for (int i = 0; i < 40; i++) { turn = Rowboat.step(turn, crew, new Rowboat.Oars(0, 0.5), calm(0), null, RHO, DT, memory()).state(); }
-        System.out.printf("One oar for 2 s: yaw %.1f deg, rate %.1f deg/s%n", Math.toDegrees(turn.yaw()), Math.toDegrees(turn.yawRate()));
-        assertTrue(turn.yaw() < Math.toRadians(-10), "One oar must turn the boat: " + Math.toDegrees(turn.yaw()));
+        WaveRadiation.Memory turning = memory();
+        double after2s = 0;
+        for (int i = 0; i < 200; i++) {
+            turn = Rowboat.step(turn, crew, new Rowboat.Oars(0, 0.5), calm(0), null, RHO, DT, turning).state();
+            if (i == 39) { after2s = turn.yaw(); }
+        }
+        double rate = -turn.yawRate(), bound = Rowboat.BLADE_SPEED / Rowboat.OAR_REACH;
+        System.out.printf("One oar: %.1f deg after 2 s, steady %.1f deg/s (blade-speed bound %.1f deg/s), drift %.2f m/s%n",
+                Math.toDegrees(after2s), Math.toDegrees(rate), Math.toDegrees(bound), turn.velocity().length());
+        assertTrue(after2s < Math.toRadians(-10), "One oar must turn the boat: " + Math.toDegrees(after2s));
+        // The blade only drives while it moves aft through the water, so the boat cannot yaw faster than the blade's
+        // aft speed over its reach; a pram pivots well below that against its own yaw drag.
+        assertTrue(rate > 0 && rate < bound, "Steady one-oar yaw rate " + Math.toDegrees(rate) + " deg/s");
+        assertTrue(rate > Math.toRadians(15), "One oar still turns a pram briskly: " + Math.toDegrees(rate));
+    }
+
+    @Test void driftsDownwindLikeASmallOpenBoat() {
+        List<Rowboat.Passenger> crew = List.of(PERSON);
+        double draft = Rowboat.draft(Rowboat.mass(crew).massKg(), RHO), wind = 10;
+        WaveRadiation.Memory memory = memory();
+        Rowboat.State s = at(-draft);
+        Rowboat.Air air = new Rowboat.Air(new Vec3d(wind, 0, 0), 1.225);
+        for (int i = 0; i < 1200; i++) { s = Rowboat.step(s, crew, Rowboat.Oars.NONE, calm(0), null, air, RHO, DT, memory).state(); }
+        double downwind = s.velocity().x() / wind, across = s.velocity().z() / wind;
+        System.out.printf("Leeway at U10 %.0f m/s: %.1f %% downwind, %.1f %% across, heading %.0f deg%n", wind, 100 * downwind, 100 * across, Math.toDegrees(s.yaw()));
+        // Open boats drift at 2.5 % of U10 plus 0.15 m/s (4.15 m skiff, 4.1 % fitted through zero; Allen et al. 2010, MET
+        // Norway report 17/2010) and 3.65 % (5.5 m open boat, Allen and Fitzgerald 1997). A 2 m pram drawing 0.1 m has
+        // less underwater area per windage than a skiff, so it drifts faster, but within the same few percent.
+        assertTrue(downwind > 0.03 && downwind < 0.10, "Leeway " + downwind);
+        assertTrue(Math.abs(across) < 0.3 * downwind, "Mostly downwind");
     }
 
     @Test void followsLongWaves() {

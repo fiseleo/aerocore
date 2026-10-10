@@ -8,6 +8,7 @@ import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import dev.mcmod.aerocore.api.LinearWave;
 import dev.mcmod.aerocore.api.SeaSpectrum;
+import dev.mcmod.aerocore.api.SeaWind;
 import dev.mcmod.aerocore.api.WaveField;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -20,7 +21,9 @@ import java.util.Locale;
 
 /**
  * /aerocore waves: world sea regions centred on the command position. A region holds one regular wave, an irregular
- * JONSWAP sea, or calm water (no ambient waves, but the same surface handling for ship wakes and vanilla entities).
+ * JONSWAP sea (given by Hs and Tp, or raised by a wind over a fetch), or calm water (no ambient waves, but the same
+ * surface handling for ship wakes and vanilla entities). Regions with waves survey the bed when they are made (and on
+ * survey) so their waves follow the coast; wind sets a region's wind.
  */
 public final class WaveCommands {
     public static final double DEFAULT_RADIUS = 24, DEFAULT_SEA_RADIUS = 64;
@@ -30,6 +33,11 @@ public final class WaveCommands {
     public static final double DEFAULT_SPREADING = 4;
     private static final SimpleCommandExceptionType NO_WATER = new SimpleCommandExceptionType(Component.translatable("command.aerocore.waves.no_water"));
     private static final SimpleCommandExceptionType LIMIT = new SimpleCommandExceptionType(Component.translatable("command.aerocore.waves.limit"));
+    private static final SimpleCommandExceptionType NO_REGION = new SimpleCommandExceptionType(Component.translatable("command.aerocore.waves.no_region"));
+    private static final DynamicCommandExceptionType TOO_HIGH = new DynamicCommandExceptionType(
+            height -> Component.translatable("command.aerocore.waves.wind_sea_too_high", height));
+    /** Highest significant wave height the sea commands accept, m. */
+    public static final double MAX_SIGNIFICANT_HEIGHT = 4;
     private static final DynamicCommandExceptionType INVALID = new DynamicCommandExceptionType(
             reason -> Component.translatable("command.aerocore.platform.waves.invalid", reason));
     private WaveCommands() {}
@@ -55,6 +63,19 @@ public final class WaveCommands {
                     for (int i = 0; i < regions.size(); i++) { Component line = describe(i + 1, regions.get(i)); s.sendSuccess(() -> line, false); }
                     return regions.size();
                 }))
+                .then(Commands.literal("survey").executes(WaveCommands::survey))
+                .then(Commands.literal("wind")
+                        .then(Commands.argument("speed_mps", DoubleArgumentType.doubleArg(0, SeaWind.MAX_WIND))
+                                .then(Commands.argument("direction_degrees", DoubleArgumentType.doubleArg(-180, 180)).executes(WaveCommands::wind))))
+                .then(Commands.literal("windsea")
+                        .then(Commands.argument("wind_mps", DoubleArgumentType.doubleArg(0.5, SeaWind.MAX_WIND))
+                                .then(Commands.argument("direction_degrees", DoubleArgumentType.doubleArg(-180, 180))
+                                        .executes(context -> windSea(context, Double.POSITIVE_INFINITY, DEFAULT_SEA_RADIUS))
+                                        .then(Commands.argument("fetch_km", DoubleArgumentType.doubleArg(0.1, 1000))
+                                                .executes(context -> windSea(context, 1000 * DoubleArgumentType.getDouble(context, "fetch_km"), DEFAULT_SEA_RADIUS))
+                                                .then(Commands.argument("radius_m", DoubleArgumentType.doubleArg(WaveRegion.MIN_RADIUS, WaveRegion.MAX_RADIUS))
+                                                        .executes(context -> windSea(context, 1000 * DoubleArgumentType.getDouble(context, "fetch_km"),
+                                                                DoubleArgumentType.getDouble(context, "radius_m"))))))))
                 .then(Commands.literal("calm")
                         .executes(context -> calm(context, DEFAULT_SEA_RADIUS))
                         .then(Commands.argument("radius_m", DoubleArgumentType.doubleArg(WaveRegion.MIN_RADIUS, WaveRegion.MAX_RADIUS))
@@ -102,6 +123,60 @@ public final class WaveCommands {
         return 1;
     }
 
+    /** The region containing the command position, or an error. */
+    private static WaveRegion here(CommandSourceStack s) throws CommandSyntaxException {
+        WaveRegion region = WaveRegions.of(s.getLevel()).regionAt(s.getPosition().x, s.getPosition().z);
+        if (region == null) { throw NO_REGION.create(); }
+        return region;
+    }
+
+    private static int survey(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack s = context.getSource();
+        ServerLevel level = s.getLevel();
+        WaveRegion old = here(s);
+        WaveRegion.Survey survey = WaveRegions.survey(level, old.centerX(), old.centerZ(), old.radiusM(), old.stillWaterY());
+        WaveRegions.of(level).replace(level, old, old.withSurvey(survey));
+        s.sendSuccess(() -> Component.translatable("command.aerocore.waves.surveyed", survey.nx(), survey.nz(), f(survey.spacing()), survey.landNodes()), false);
+        return survey.landNodes();
+    }
+
+    private static int wind(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSourceStack s = context.getSource();
+        ServerLevel level = s.getLevel();
+        WaveRegion old = here(s);
+        double speed = DoubleArgumentType.getDouble(context, "speed_mps"), degrees = DoubleArgumentType.getDouble(context, "direction_degrees");
+        WaveRegions.of(level).replace(level, old, old.withWind(new WaveRegion.Wind(speed, Math.toRadians(degrees))));
+        s.sendSuccess(() -> Component.translatable("command.aerocore.waves.wind_set", f(speed), f(degrees)), false);
+        return 1;
+    }
+
+    /** A sea raised by a wind over a fetch (SeaWind.sea), the wind kept on the region. */
+    private static int windSea(CommandContext<CommandSourceStack> context, double fetch, double radius) throws CommandSyntaxException {
+        CommandSourceStack s = context.getSource();
+        double u10 = DoubleArgumentType.getDouble(context, "wind_mps"), degrees = DoubleArgumentType.getDouble(context, "direction_degrees");
+        double heading = Math.toRadians(degrees);
+        long seed = s.getLevel().getRandom().nextLong();
+        double[] state = new double[2];
+        WaveRegion region = add(s.getLevel(), s.getPosition().x, s.getPosition().y, s.getPosition().z, radius, depth -> {
+            double[] sea = SeaWind.sea(u10, fetch, depth);
+            if (sea[0] > MAX_SIGNIFICANT_HEIGHT) { throw new TooHigh(sea[0]); }
+            state[0] = sea[0]; state[1] = sea[1];
+            double gamma = SeaSpectrum.recommendedGamma(sea[0], sea[1]);
+            return SeaSpectrum.synthesize(sea[0], sea[1], gamma, heading, DEFAULT_SPREADING, depth, SEA_COMPONENTS, seed);
+        }, null, new WaveRegion.Wind(u10, heading), state);
+        Component reach = Double.isFinite(fetch) ? Component.translatable("command.aerocore.waves.fetch_km", f(fetch / 1000))
+                : Component.translatable("command.aerocore.waves.fetch_unlimited");
+        s.sendSuccess(() -> Component.translatable("command.aerocore.waves.wind_sea", f(u10), reach, f(state[0]), f(state[1])), false);
+        s.sendSuccess(() -> describe(1, region), false);
+        return 1;
+    }
+
+    /** A wind sea higher than the commands accept, carried out of the field builder. */
+    private static final class TooHigh extends RuntimeException {
+        final double height;
+        TooHigh(double height) { super(null, null, false, false); this.height = height; }
+    }
+
     /**
      * Measures the still surface and depth in the column through (x, y, z), then adds a region of the given radius
      * centred there, replacing overlapping regions. Shared with /aerocore platform waves.
@@ -125,19 +200,45 @@ public final class WaveCommands {
 
     private static WaveRegion add(ServerLevel level, double x, double y, double z, double radius, Field field, WaveRegion.Sea sea)
             throws CommandSyntaxException {
+        return add(level, x, y, z, radius, field, sea, WaveRegion.Wind.CALM, null);
+    }
+
+    /**
+     * Measures the still surface and depth at the position, builds the field (and its spectrum record when withSea,
+     * from the synthesised sea), surveys the bed when there are waves, and adds the region.
+     */
+    private static WaveRegion add(ServerLevel level, double x, double y, double z, double radius, Field field, WaveRegion.Sea sea,
+                                  WaveRegion.Wind wind, double[] seaState) throws CommandSyntaxException {
+        boolean withSea = seaState != null;
         WorldWaterSampler sampler = new WorldWaterSampler(level);
         BlockPos column = BlockPos.containing(x, y, z);
         double surface = sampler.stillSurface(column);
         if (Double.isNaN(surface)) { throw NO_WATER.create(); }
         WaveRegion region;
         try {
-            region = new WaveRegion(x, z, radius, surface, field.at(sampler.depthBelow(column, surface)), sea);
-        } catch (IllegalArgumentException invalid) { throw INVALID.create(invalid.getMessage()); }
+            WaveField waves = field.at(sampler.depthBelow(column, surface));
+            if (withSea && seaState != null && seaState[0] > 0) {
+                sea = new WaveRegion.Sea(seaState[0], seaState[1], SeaSpectrum.recommendedGamma(seaState[0], seaState[1]), wind.directionRadians(), DEFAULT_SPREADING);
+            }
+            WaveRegion.Survey survey = waves.isEmpty() ? null : WaveRegions.survey(level, x, z, radius, surface);
+            region = new WaveRegion(x, z, radius, surface, waves, sea, survey, wind);
+        } catch (TooHigh high) { throw TOO_HIGH.create(f(high.height)); }
+        catch (IllegalArgumentException invalid) { throw INVALID.create(invalid.getMessage()); }
         try { WaveRegions.of(level).add(level, region); } catch (IllegalStateException full) { throw LIMIT.create(); }
         return region;
     }
 
     static Component describe(int index, WaveRegion region) {
+        Component coast;
+        if (region.survey() == null) { coast = Component.translatable("command.aerocore.waves.coast.none"); }
+        else if (region.coastPending()) { coast = Component.translatable("command.aerocore.waves.coast.pending"); }
+        else if (region.coast() == null) { coast = Component.translatable("command.aerocore.waves.coast.failed"); }
+        else { coast = Component.translatable("command.aerocore.waves.coast.ready", region.survey().landNodes(), region.survey().nx() * region.survey().nz()); }
+        return summary(index, region).copy().append("\n").append(Component.translatable("command.aerocore.waves.environment",
+                f(region.wind().speedMps()), f(Math.toDegrees(region.wind().directionRadians())), coast));
+    }
+
+    private static Component summary(int index, WaveRegion region) {
         List<LinearWave> waves = region.waves().components();
         if (waves.isEmpty()) {
             return Component.translatable("command.aerocore.waves.calm_info", index, f(region.centerX()), f(region.centerZ()), f(region.radiusM()),

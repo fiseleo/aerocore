@@ -44,11 +44,16 @@ public final class WorldWaterSampler {
     private final double[] kinematics = new double[6], segment = new double[8], wake = new double[3], second = new double[3];
     /** Entity id whose own wake this sampler ignores (-1: none). */
     private int ownWake = -1;
+    /** Sea region whose wind-driven drift moves the water under its free surfaces (null: none). */
+    private WaveRegion drift;
 
     public WorldWaterSampler(ServerLevel level) { this.level = level; }
 
     /** Leaves out the wake of the given entity (a body's own wake is part of its resistance, not its surroundings). */
     public WorldWaterSampler excludingWakeOf(int entityId) { ownWake = entityId; return this; }
+
+    /** Adds the region's wind-driven drift (WaveRegion.windDrift) under its free surfaces; null for none. */
+    public WorldWaterSampler drifting(WaveRegion region) { drift = region == null || region.wind().calm() ? null : region; return this; }
 
     /** Wake elevation and slopes at (x, z) on the free surface at still level y, into wake[]. */
     private void wakeAt(double still, double x, double z) {
@@ -67,18 +72,25 @@ public final class WorldWaterSampler {
      * region's still level); other water inside the region stays calm. NaN moves every free surface.
      */
     public Contact sample(Vec3d center, double radiusM, WaveField waves, double waveLevelY, double timeSeconds) {
+        Objects.requireNonNull(waves, "waves");
+        return sample(center, radiusM, compile(waves), waveLevelY, timeSeconds);
+    }
+
+    /** sample with waves already compiled (a body's WaveRegions.Local.compiled, the local view of its sea). */
+    public Contact sample(Vec3d center, double radiusM, CompiledWaves fast, double waveLevelY, double timeSeconds) {
         if (!Double.isFinite(radiusM) || radiusM <= 0 || radiusM > 10) {
             throw new IllegalArgumentException("Water sampler radius must be in (0, 10] m");
         }
-        Objects.requireNonNull(waves, "waves");
+        Objects.requireNonNull(fast, "waves");
         if (!Double.isFinite(timeSeconds)) { throw new IllegalArgumentException("Time must be finite"); }
-        CompiledWaves fast = compile(waves);
+        ensurePhases(fast.size());
         double reach = fast.maxAmplitude();
         double wetLength = 0, totalLength = 0, pressure = 0;
         Vec3d weightedCurrent = Vec3d.ZERO, weightedAcceleration = Vec3d.ZERO;
         Vec3d weightedCentroid = Vec3d.ZERO, pressureCentroid = Vec3d.ZERO;
         double spacing = 2 * radiusM / COLUMNS;
         boolean phased = false;
+        double correction = 0;
         int components = fast.size();
         for (int ix = 0; ix < COLUMNS; ix++) {
             double x = -radiusM + (ix + 0.5) * spacing;
@@ -106,14 +118,17 @@ public final class WorldWaterSampler {
                     if (open) { wakeAt(still, columnX, columnZ); } else { wake[0] = 0; }
                     double wakeHeight = wake[0];
                     if (free && !phased) {
-                        // All 7 x 7 column phases at once by phasor recurrence.
+                        // All 7 x 7 column phases at once by phasor recurrence; the second-order correction, which varies
+                        // over half a dominant wavelength, once at the centre column for the whole sphere.
                         double first = -radiusM + 0.5 * spacing;
                         fast.gridPhases(center.x() + first, center.z() + first, spacing, spacing, COLUMNS, COLUMNS, timeSeconds, cos, sin);
+                        correction = fast.correctionHeight(cos, sin, (COLUMNS / 2 * COLUMNS + COLUMNS / 2) * components);
                         phased = true;
                     }
                     int phaseOffset = (ix * COLUMNS + iz) * components;
-                    if (free) { fast.secondOrder(cos, sin, phaseOffset, second); }
+                    if (free) { second[0] = fast.cheapSecondOrderHeight(sin, phaseOffset) + correction; }
                     double surface = (free ? still + fast.elevation(cos, phaseOffset) + second[0] : still) + wakeHeight;
+                    boolean drifts = open && drift != null && drift.ownsSurface(still);
                     double lower = Math.max(bottom, start), upper = Math.min(top, surface);
                     for (int cellY = start; cellY <= y && upper > lower; cellY++) {
                         // A crest above the top block is attributed to that block's flow.
@@ -123,6 +138,7 @@ public final class WorldWaterSampler {
                         double middleY = (segmentLow + segmentHigh) / 2;
                         Vec3d offset = new Vec3d(x, middleY - center.y(), z);
                         Vec3d flow = cell(blockX, cellY, blockZ).flow();
+                        if (drifts) { flow = flow.add(drift.windDrift(columnX, columnZ, surface - (segmentLow + segmentHigh) / 2)); }
                         // Linear pressure head relative to still water, zero on the instantaneous surface.
                         double drop = length;
                         if (free) {
@@ -153,9 +169,12 @@ public final class WorldWaterSampler {
         if (waves != compiledField) {
             compiledField = waves;
             compiled = new CompiledWaves(waves);
-            cos = new double[COLUMNS * COLUMNS * compiled.size()]; sin = new double[COLUMNS * COLUMNS * compiled.size()];
         }
         return compiled;
+    }
+
+    private void ensurePhases(int components) {
+        if (cos.length < COLUMNS * COLUMNS * components) { cos = new double[COLUMNS * COLUMNS * components]; sin = new double[COLUMNS * COLUMNS * components]; }
     }
 
     /**
@@ -169,25 +188,29 @@ public final class WorldWaterSampler {
     }
 
     public Column column(Vec3d point, WaveField waves, double waveLevelY, double timeSeconds) {
+        return column(point, waves.isEmpty() ? CompiledWaves.NONE : compile(waves), waveLevelY, timeSeconds);
+    }
+
+    /** column with waves already compiled (a body's local view of its sea). */
+    public Column column(Vec3d point, CompiledWaves fast, double waveLevelY, double timeSeconds) {
         int x = Mth.floor(point.x()), z = Mth.floor(point.z()), base = Mth.floor(point.y());
         for (int y = base + 3; y >= base - 8; y--) {
             if (!cell(x, y, z).water() || cell(x, y + 1, z).water()) { continue; }
             double still = cell(x, y, z).surfaceY();
             WaterCell above = cell(x, y + 1, z);
-            boolean moving = above.open() && !waves.isEmpty() && (Double.isNaN(waveLevelY) || Math.abs(still - waveLevelY) <= WaveRegion.LEVEL_TOLERANCE);
+            boolean moving = above.open() && !fast.isEmpty() && (Double.isNaN(waveLevelY) || Math.abs(still - waveLevelY) <= WaveRegion.LEVEL_TOLERANCE);
             int flowY = Math.clamp(base, y - 64, y);
             Vec3d flow = cell(x, flowY, z).water() ? cell(x, flowY, z).flow() : cell(x, y, z).flow();
             if (above.open()) { wakeAt(still, point.x(), point.z()); } else { wake[0] = 0; wake[1] = 0; wake[2] = 0; }
             Vec3d wakeSlope = new Vec3d(wake[1], 0, wake[2]);
+            if (above.open() && drift != null && drift.ownsSurface(still)) { flow = flow.add(drift.windDrift(point.x(), point.z(), still - point.y())); }
             if (!moving) { return new Column(still + wake[0], wakeSlope, Double.NaN, 0, flow, Vec3d.ZERO); }
-            CompiledWaves fast = compile(waves);
-            double amplitude = 0, weighted = 0;
-            for (var wave : waves.components()) { amplitude += wave.amplitudeM(); weighted += wave.amplitudeM() * wave.wavenumber(); }
+            ensurePhases(fast.size());
             fast.phases(point.x(), point.z(), timeSeconds, cos, sin);
             fast.kinematics(cos, sin, point.y() - still, kinematics);
             double[] slope = fast.slope(sin);
             fast.secondOrder(cos, sin, 0, second);
-            return new Column(still + fast.elevation(cos) + second[0] + wake[0], new Vec3d(slope[0] + second[1], 0, slope[1] + second[2]).add(wakeSlope), still, amplitude > 0 ? weighted / amplitude : 0,
+            return new Column(still + fast.elevation(cos) + second[0] + wake[0], new Vec3d(slope[0] + second[1], 0, slope[1] + second[2]).add(wakeSlope), still, fast.meanWavenumber(),
                     flow.add(new Vec3d(kinematics[0], kinematics[1], kinematics[2])), new Vec3d(kinematics[3], kinematics[4], kinematics[5]));
         }
         return Column.NONE;

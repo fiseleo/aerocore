@@ -6,6 +6,7 @@
   "mixins": [
     "BoatAccessor",
     "BoatPhysicsMixin",
+    "BoatSeatMixin",
     "BoatWaterMixin",
     "EntityCollideMixin",
     "EntityWaterMixin",
@@ -15,7 +16,8 @@
     "BoatClientMixin",
     "BoatRendererMixin",
     "CameraFogMixin",
-    "LiquidBlockRendererMixin"
+    "LiquidBlockRendererMixin",
+    "RiderTiltMixin"
   ],
   "injectors": {
     "defaultRequire": 1

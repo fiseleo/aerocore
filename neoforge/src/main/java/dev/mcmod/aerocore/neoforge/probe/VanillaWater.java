@@ -23,7 +23,8 @@ import net.neoforged.neoforge.fluids.FluidType;
 /**
  * Vanilla entities in sea regions: after vanilla scans the water blocks, the sea's contribution to the entity's water
  * height is replaced by the moving surface (so items, mobs, players and boats bob, swim and drown against the same
- * surface that is drawn and that AeroCore bodies feel), and the wave orbital velocity drifts the entity horizontally.
+ * surface that is drawn and that AeroCore bodies feel), and the wave orbital velocity and the wind-driven surface
+ * drift move the entity horizontally.
  * The drift uses each vanilla movement model's own per-tick water damping f: adding u (1 - f) / f per tick makes the
  * damping act on the velocity relative to the moving water, whose steady state is the water velocity. No new
  * coefficient is introduced; vanilla's movement models themselves are game models, not hydrodynamics.
@@ -49,7 +50,7 @@ public final class VanillaWater {
         double f = waterDamping(entity, height);
         if (!(f > 0 && f < 1)) { return; }
         double wetMiddle = box.minY + Math.min(height, box.getYsize()) / 2;
-        Vec3d u = SeaSurface.orbitalVelocity(level, region, x, wetMiddle, z, t);
+        Vec3d u = SeaSurface.waterVelocity(region, x, wetMiddle, z, surface, t);
         double gain = (1 - f) / f * MinecraftUnits.TICK_SECONDS;
         entity.setDeltaMovement(entity.getDeltaMovement().add(new Vec3(u.x() * gain, 0, u.z() * gain)));
     }

@@ -332,9 +332,9 @@ public final class PlatformGameTests {
             h.assertTrue(local.region()==region && Math.abs(local.stillWaterY()-still)<1e-12,"Centre must resolve to the region");
             Vec3d center=new Vec3d(column.getX()+0.5,still,column.getZ()+0.5);
             double crest=wave.wavenumber()*center.x()/wave.angularFrequency();
-            h.assertTrue(sampler.sample(center,0.3,local.waves(),local.stillWaterY(),crest).fraction()>0.9,"The region's own surface must rise under a crest");
+            h.assertTrue(sampler.sample(center,0.3,local.compiled(),local.stillWaterY(),crest).fraction()>0.9,"The region's own surface must rise under a crest");
             // The same field at another still level (another water body inside the circle) must not move it.
-            h.assertTrue(Math.abs(sampler.sample(center,0.3,local.waves(),still+1,crest).fraction()-0.5)<0.01,"Other levels stay calm");
+            h.assertTrue(Math.abs(sampler.sample(center,0.3,local.compiled(),still+1,crest).fraction()-0.5)<0.01,"Other levels stay calm");
             // Saved data round trip keeps the region exactly.
             WaveRegions copy=WaveRegions.load(regions.save(new net.minecraft.nbt.CompoundTag(),h.getLevel().registryAccess()),h.getLevel().registryAccess());
             h.assertTrue(copy.regions().contains(region),"Region must survive save and load: "+copy.regions());

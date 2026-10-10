@@ -17,27 +17,34 @@ import java.util.List;
  * longer balanced by a transom face, so it acts normal to the keel like Zarnick's sectional loads and carries the
  * pressure drag (Delta tan trim) of a ventilated bottom. Mercier and Savitsky (1973) find the transom fully ventilated
  * at C_vT = U / sqrt(g B_T) = 0.5 and planing developed by about 1.5; the load direction and dry hull sides (friction
- * area) are blended in over that interval (smoothstep, a modelling choice). Zarnick instead halved the buoyancy force
- * and quartered its moment, tuned to his running trims; Garme's (2005) near-transom correction
- * tanh(2.5 x / (0.34 B C_V)) was also tried. Against Fridsma both raised the trim of the light C_Delta 0.608 cases
- * past the data and made configuration B (LCG 62 %, V/sqrt(L) 6) porpoise where Fridsma ran steadily, so neither is used.
+ * area) are blended in over that interval (smoothstep, a modelling choice). Near the dry transom the pressure falls
+ * to atmospheric, so the hydrostatic load is scaled by Garme's (2005) tanh(2.5 x_T / (0.34 B C_V)) with his published
+ * coefficient, faded in with the ventilation (TRANSOM_REDUCTION). Applied to the hydrodynamic strip loads as well (as
+ * Garme did) it made the hull unstable here, and Zarnick's halving of the buoyancy overshot the trims, so only the
+ * hydrostatics are reduced.
  * <p>Heave radiation at low speed (Cummins memory, WaveRadiation) is not part of this step; a caller supplies it as an
  * external load, as for HullDynamics, faded out with the ventilation since the zero-speed memory does not hold for a
  * planing hull.
  * <p>Sideways the same slender-body form F = -D/Dt(m_22 w) is used with the Lewis sectional added mass of the wet
  * section, plus Hoerner's cross-flow drag; the time derivative of m_22 is neglected. Friction follows ITTC-1957 on the
  * wetted bottom (Reynolds number on the wetted keel length).
+ * <p>Whisker spray drag (Savitsky, DeLorme and Datla 2007) is added to the friction.
  * <p>Calm-water validation against Fridsma (1969), 20 deg deadrise, V/sqrt(L) 4 to 6 (C_V 2.7 to 4), PlaningDynamicsTest:
- * R/Delta within -15 % to 0 %; running trim 0.5 to 1.1 deg low at C_Delta 0.608 and 2.4 deg low for the heavy
- * C_Delta 0.912 case at V/sqrt(L) 4; steady where Fridsma ran steadily. Porpoising sets in later than in the tank:
- * Fridsma's LCG 70 % model porpoised from V/sqrt(L) about 5.85, here it is still steady at 7 (LCG 72 % oscillates at 8),
- * so the model is less prone to porpoising than real hulls with an aft centre of gravity. 2D+t is valid above
- * C_V of about 2; it under-predicts trim and resistance in the pre-planing range. Not modelled: spray drag, the flare and
- * bow flow of the curved bow, asymmetric (heeled) impact, aerodynamic lift and transom-draft effects below ventilation.
+ * running trim within 0.35 deg in all five Table 1 configurations (light and heavy) and Fig. 11; R/Delta 5 to 13 % high;
+ * steady where Fridsma ran steadily, and the LCG 70 % model starts to porpoise between V/sqrt(L) 5.5 and 6.2 (tank:
+ * about 5.85). 2D+t is valid above C_V of about 2; it under-predicts trim and resistance in the pre-planing range. Not
+ * modelled: spray drag other than the whisker spray, the flare and bow flow of the curved bow, asymmetric (heeled)
+ * impact, aerodynamic lift and transom-draft effects below ventilation.
  */
 public final class PlaningDynamics {
     /** Transom-beam speed coefficients bounding the change from displacement to planing hydrostatics. */
     public static final double VENTILATED = 0.5, PLANING = 1.5;
+    /**
+     * Garme's (2005) near-transom reduction: the pressure falls to atmospheric at a dry transom, so sectional lift
+     * builds up only over a length 0.34 B C_V forward of it, mu = tanh(2.5 x_T / (0.34 B C_V)) (coefficient as published,
+     * fitted by Garme to Fridsma's calm-water attitudes; form also in Ghadimi et al. 2016 eq. 19).
+     */
+    public static final double TRANSOM_REDUCTION = 0.34;
 
     private PlaningDynamics() {}
 
@@ -117,10 +124,12 @@ public final class PlaningDynamics {
         Vec3d transomRelative = s.velocity().add(omega.cross(s.worldOffset(p, new Vec3d(0, planing.keelY(0), 0)))).subtract(transomWater.velocity());
         double cvt = Math.abs(transomRelative.dot(ex)) / Math.sqrt(g * 2 * planing.chineHalfBeam(0));
         double ventilation = ventilation(cvt);
-        double dragPower = 0;
+        double dragPower = 0, reductionLength = TRANSOM_REDUCTION * 2 * planing.chineHalfBeam(0) * cvt;
         for (int i = 0; i < n; i++) {
             HullSection section = hull.sections().get(i);
             dx[i] = planing.boundary(i + 1) - planing.boundary(i);
+            // Applied to the hydrostatic load only, faded in with the transom's ventilation (it needs a dry transom).
+            double mu = reductionLength > 0 ? 1 - ventilation * (1 - Math.tanh(2.5 * section.xM() / reductionLength)) : 1;
             Vec3d origin = s.worldPoint(p, new Vec3d(section.xM(), 0, 0));
             Vec3d keel = origin.add(ey.scale(planing.keelY(i)));
             keelOffset[i] = keel.subtract(s.position());
@@ -141,7 +150,7 @@ public final class PlaningDynamics {
                 // Unventilated: Archimedes (vertical). With a dry transom the bottom pressure is no longer balanced by a
                 // transom face, so the hydrostatic load acts normal to the bottom (Zarnick: all sectional loads normal to the keel).
                 Vec3d direction = up.scale(1 - ventilation).add(ey.scale(ventilation)).normalized();
-                Vec3d buoyancy = direction.scale(g * rho * wet.areaM2() * dx[i]);
+                Vec3d buoyancy = direction.scale(g * rho * wet.areaM2() * dx[i] * mu);
                 hydro = hydro.add(Wrench.atOffset(buoyancy, centroid));
                 forces.add(new AppliedForce(AppliedForce.Kind.BUOYANCY, centroid, buoyancy));
                 wetVolume += wet.areaM2() * dx[i];

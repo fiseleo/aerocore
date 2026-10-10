@@ -50,7 +50,7 @@
   "command.aerocore.waves.removed": "已移除 %s 個波浪區域。",
   "command.aerocore.waves.no_water": "此位置的水柱找不到開放水面（往上 3 格到往下 8 格內）。",
   "command.aerocore.waves.limit": "此維度已有 16 個波浪區域，請先移除一些。",
-  "command.aerocore.waves.sea_info": "海況區域 %s：中心 (%s, %s)｜半徑 %s m（外圈 %s m 逐漸減弱為靜水）｜JONSWAP 有義波高 %s m、尖峰週期 %s s、γ %s｜平均方向 %s°、cos^%s 方向分布｜%s 個分量｜尖峰波長 %s m｜水深 %s m｜靜水面 y=%s。線性不規則海：沒有碎浪浪頭；水方塊不動，水面由客戶端重畫。",
+  "command.aerocore.waves.sea_info": "海況區域 %s：中心 (%s, %s)｜半徑 %s m（外圈 %s m 逐漸減弱為靜水）｜JONSWAP 有義波高 %s m、尖峰週期 %s s、γ %s｜平均方向 %s°、cos^%s 方向分布｜%s 個分量｜尖峰波長 %s m｜水深 %s m｜靜水面 y=%s。二階不規則海，有白浪；水方塊不動，水面由客戶端重畫。",
   "command.aerocore.waves.calm_info": "靜水海域 %s：中心 (%s, %s)｜半徑 %s m｜靜水面 y=%s。沒有環境波浪，但水面仍由本模組重畫，船的尾浪會顯示，原版實體也讀同一水面。",
   "command.aerocore.platform.waves.sea": "波浪：不規則海 有義波高 %s m｜尖峰週期 %s s｜γ %s｜平均方向 %s°｜cos^%s 方向分布｜%s 個分量｜水深 %s m｜靜水面 y=%s｜區域半徑 %s m，此處振幅係數 %s",
   "entity.aerocore.planing_boat": "AeroCore 滑行艇 · 1048 kg",
@@ -59,5 +59,17 @@
   "command.aerocore.planing.blocked": "船的碰撞箱被擋住、超出世界邊界或位於未載入區塊。請面向能容納 7 m 船體的開闊水面。",
   "command.aerocore.planing.limit": "此維度已有 8 艘載入中的滑行艇，請先清除一些。",
   "command.aerocore.planing.cleared": "已移除你 64 格內的 %s 艘滑行艇。",
-  "command.aerocore.planing.info": "滑行艇 #%s｜速度 %s m/s｜縱向 %s m/s（C_V %s，V/√L %s kn/√ft）｜艏向 %s°（Minecraft）｜轉向率 %s°/s（＋向右舷）｜橫傾 %s°（＋右舷）｜俯仰 %s°（＋艏上揚）｜龍骨濕長 %s 個船寬｜艉板通氣 %s%%｜摩擦 %s N｜阻力耗散 %s W"
+  "command.aerocore.planing.info": "滑行艇 #%s｜速度 %s m/s｜縱向 %s m/s（C_V %s，V/√L %s kn/√ft）｜艏向 %s°（Minecraft）｜轉向率 %s°/s（＋向右舷）｜橫傾 %s°（＋右舷）｜俯仰 %s°（＋艏上揚）｜龍骨濕長 %s 個船寬｜艉板通氣 %s%%｜摩擦 %s N｜阻力耗散 %s W",
+  "command.aerocore.waves.environment": "  風：10 m 高 %s m/s，吹向 %s°｜海岸：%s",
+  "command.aerocore.waves.coast.none": "未測量（全區用開放海面的波浪；/aerocore waves survey）",
+  "command.aerocore.waves.coast.pending": "已測量，正在計算折射",
+  "command.aerocore.waves.coast.ready": "%s／%s 個測點是陸地；波浪依測得的海床折射、淺化、受遮蔽並碎浪",
+  "command.aerocore.waves.coast.failed": "測量結果無法使用；維持開放海面的波浪",
+  "command.aerocore.waves.no_region": "這個位置不在任何波浪區域內。",
+  "command.aerocore.waves.wind_set": "波浪區域的風：10 m 高 %s m/s，吹向 %s°。它決定白浪多寡、帶動表層水漂流，並推動船與物體；現有波浪不變（windsea 才會由風生成海況）。",
+  "command.aerocore.waves.surveyed": "已測量波浪區域的海床：%s × %s 個測點、間距 %s m，其中 %s 個是陸地。海岸波浪正在計算（約一秒）。",
+  "command.aerocore.waves.wind_sea": "風浪：U10 %s m/s、%s，生成有義波高 %s m、尖峰週期 %s s（JONSWAP 受風域限制的成長，最多到充分發展的 Pierson–Moskowitz 海況；淺水再受水深限制）。",
+  "command.aerocore.waves.fetch_unlimited": "風域不限",
+  "command.aerocore.waves.fetch_km": "風域 %s km",
+  "command.aerocore.waves.wind_sea_too_high": "這個風在該風域會生成有義波高 %s m，超過海況指令允許的 4 m；請給較短的風域。"
 }

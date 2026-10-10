@@ -82,13 +82,13 @@ class PlaningDynamicsTest {
 
     @Test void fridsmaCalmWaterRunningTrimAndResistance() {
         // {deadrise, C_Delta, LCG %L, gyradius %L, V/sqrt(L), trim, R/Delta, static trim, trim tolerance} from Table 1
-        // (configurations A, B, E, F, G). The heavy F case is the model's largest miss (documented in PlaningDynamics).
+        // (configurations A, B, E, F, G).
         double[][] table = {
-                {20, 0.608, 59.0, 25.1, 4, 4, 0.158, 0.86, 1.2},
-                {20, 0.608, 62.0, 25.5, 6, 4, 0.206, 1.50, 1.2},
-                {20, 0.608, 65.5, 26.2, 4, 6, 0.156, 2.30, 1.2},
-                {20, 0.912, 58.0, 20.4, 4, 6, 0.150, 1.00, 2.6},
-                {20, 0.912, 58.0, 20.4, 6, 5, 0.178, 1.00, 1.2},
+                {20, 0.608, 59.0, 25.1, 4, 4, 0.158, 0.86, 0.5},
+                {20, 0.608, 62.0, 25.5, 6, 4, 0.206, 1.50, 0.5},
+                {20, 0.608, 65.5, 26.2, 4, 6, 0.156, 2.30, 0.5},
+                {20, 0.912, 58.0, 20.4, 4, 6, 0.150, 1.00, 0.5},
+                {20, 0.912, 58.0, 20.4, 6, 5, 0.178, 1.00, 0.5},
         };
         StringBuilder report = new StringBuilder();
         for (double[] c : table) {
@@ -103,14 +103,17 @@ class PlaningDynamicsTest {
         // Fig. 11 (digitised): LCG 60 %L, C_Delta 0.608 -- trim 4.36 and 3.78 deg, CG rise 0.061 and 0.110 b at V/sqrt(L) 4 and 6;
         // LCG 70 %L porpoises from V/sqrt(L) about 5.85.
         Run four = tow(20, 0.608, 60, 25, 4), six = tow(20, 0.608, 60, 25, 6), aft = tow(20, 0.608, 70, 26.5, 6.2);
-        Run aft7 = tow(20, 0.608, 70, 26.5, 7), aft8 = tow(20, 0.608, 72, 26.5, 8);
-        report.append(String.format(Locale.ROOT, "LCG 60: V/sqrtL 4 trim %.2f (4.36) rise %.3f (0.061); 6: trim %.2f (3.78) rise %.3f (0.110); LCG 70 oscillation at V/sqrtL 6.2 %.2f, 7 %.2f; LCG 72 at 8 %.2f deg%n",
-                four.trimDeg(), four.riseBeams(), six.trimDeg(), six.riseBeams(), aft.trimRangeDeg(), aft7.trimRangeDeg(), aft8.trimRangeDeg()));
+        Run aft55 = tow(20, 0.608, 70, 26.5, 5.5);
+        report.append(String.format(Locale.ROOT, "LCG 60: V/sqrtL 4 trim %.2f (4.36) rise %.3f (0.061); 6: trim %.2f (3.78) rise %.3f (0.110); LCG 70 oscillation at V/sqrtL 5.5 %.2f, 6.2 %.2f deg%n",
+                four.trimDeg(), four.riseBeams(), six.trimDeg(), six.riseBeams(), aft55.trimRangeDeg(), aft.trimRangeDeg()));
         System.out.println(report);
         assertEquals(0.061, four.riseBeams(), 0.03, report.toString());
         assertEquals(0.110, six.riseBeams(), 0.03, report.toString());
-        assertEquals(4.36, four.trimDeg(), 1.2, report.toString());
-        assertEquals(3.78, six.trimDeg(), 1.2, report.toString());
+        assertEquals(4.36, four.trimDeg(), 0.5, report.toString());
+        assertEquals(3.78, six.trimDeg(), 0.5, report.toString());
+        // Porpoising onset between 5.5 and 6.2 as in the tank (5.85).
+        assertTrue(aft55.trimRangeDeg() < 0.05, "steady at V/sqrt(L) 5.5: " + report);
+        assertTrue(aft.trimRangeDeg() > 0.1, "porpoising at V/sqrt(L) 6.2: " + report);
     }
 
     @Test void testBoatGetsOnThePlaneUnderItsOwnPropeller() {

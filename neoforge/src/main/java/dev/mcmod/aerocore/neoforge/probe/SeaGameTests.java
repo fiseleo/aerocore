@@ -1,5 +1,6 @@
 package dev.mcmod.aerocore.neoforge.probe;
 
+import dev.mcmod.aerocore.api.CompiledWaves;
 import dev.mcmod.aerocore.api.LinearWave;
 import dev.mcmod.aerocore.api.Vec3d;
 import dev.mcmod.aerocore.api.WaveField;
@@ -30,6 +31,8 @@ public final class SeaGameTests {
         BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8));
         WaveRegion region = WaveCommands.createSea(h.getLevel(), centre.getX() + 0.5, still, centre.getZ() + 0.5, 0.3, 3, 30, 12,
                 WaveCommands.DEFAULT_SPREADING, 7);
+        // The command surveys the pool; wait for its coastal field so every reader below sees the final surface.
+        region.awaitCoast();
         try {
             h.assertTrue(region.sea() != null && region.waves().components().size() == WaveCommands.SEA_COMPONENTS, "Sea must carry its spectrum");
             double floor = h.absolutePos(new BlockPos(0, 1, 0)).getY();
@@ -42,13 +45,13 @@ public final class SeaGameTests {
             for (int i = 0; i < 9; i++) {
                 double x = centre.getX() + 0.5 + (i % 3 - 1) * 3.3, z = centre.getZ() + 0.5 + (i / 3 - 1) * 2.7, time = t + 0.37 * i;
                 WaveRegions.Local local = regions.at(x, z);
-                double body = sampler.column(new Vec3d(x, still - 0.3, z), local.waves(), local.stillWaterY(), time).surfaceY();
+                double body = sampler.column(new Vec3d(x, still - 0.3, z), local.compiled(), local.stillWaterY(), time).surfaceY();
                 double vanilla = SeaSurface.surfaceNear(h.getLevel(), x, z, still - 1, still, time);
                 h.assertTrue(Math.abs(body - vanilla) < 1e-9, "Bodies and vanilla entities must see one surface: " + body + " vs " + vanilla);
             }
             // Cost of one 7 x 7 sphere sample in this 32-component sea (reported, not asserted).
             Vec3d sphere = new Vec3d(centre.getX() + 0.5, still, centre.getZ() + 0.5);
-            WaveField field = regions.at(sphere.x(), sphere.z()).waves();
+            CompiledWaves field = regions.at(sphere.x(), sphere.z()).compiled();
             long start = System.nanoTime();
             for (int i = 0; i < 2000; i++) { sampler.sample(sphere, 0.5, field, still, t + i * 0.005); }
             System.out.printf("[AeroCore] irregular-sea sphere sample: %.1f us%n", (System.nanoTime() - start) / 2000.0 / 1000);
@@ -204,6 +207,78 @@ public final class SeaGameTests {
             boat.discard(); villager.discard();
             h.succeed();
         });
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 40, batch = "aerocore_sea_coast")
+    public static void islandShadesItsLeeForEveryReader(GameTestHelper h) throws Exception {
+        double still = pool(h);
+        // A 3 x 4 m stone island standing out of the water upwind of the pool's centre, built before the survey.
+        for (int x = 7; x <= 9; x++) for (int z = 6; z <= 9; z++) for (int y = 1; y <= 5; y++) { h.setBlock(new BlockPos(x, y, z), Blocks.STONE); }
+        BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8));
+        WaveRegion region = WaveCommands.create(h.getLevel(), centre.getX() + 0.5, still, centre.getZ() + 0.5, 0.12, 8, 0, 12);
+        try {
+            h.assertTrue(region.survey() != null && region.survey().landNodes() > 0, "The command must survey the pool's walls and island");
+            h.assertTrue(region.awaitCoast() != null, "The coastal field must be built");
+            BlockPos o = h.absolutePos(BlockPos.ZERO);
+            double period = region.waves().components().getFirst().periodS(), t0 = SeaSurface.time(h.getLevel());
+            double front = amplitude(h, region, o.getX() + 4.5, o.getZ() + 8, t0, period);
+            double lee = amplitude(h, region, o.getX() + 13.5, o.getZ() + 8, t0, period);
+            System.out.printf("[AeroCore] island in the pool: wave amplitude %.3f m upwind, %.3f m in its lee%n", front, lee);
+            h.assertTrue(front > 0.06, "Waves must reach the island's weather side: " + front);
+            h.assertTrue(lee < 0.75 * front, "The island must shade its lee: " + lee + " vs " + front);
+            // One surface for every reader, behind the island too.
+            WorldWaterSampler sampler = new WorldWaterSampler(h.getLevel());
+            for (double dx : new double[]{11.5, 13.5, 18.5}) {
+                double x = o.getX() + dx, z = o.getZ() + 7.3, time = t0 + dx;
+                WaveRegions.Local local = WaveRegions.of(h.getLevel()).at(x, z);
+                double body = sampler.column(new Vec3d(x, still - 0.3, z), local.compiled(), local.stillWaterY(), time).surfaceY();
+                double vanilla = SeaSurface.surfaceNear(h.getLevel(), x, z, still - 1, still, time);
+                h.assertTrue(Math.abs(body - vanilla) < 1e-9, "Bodies and vanilla entities must see one coastal surface: " + body + " vs " + vanilla);
+            }
+        } finally {
+            remove(h, region);
+        }
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 220, batch = "aerocore_sea_wind")
+    public static void windDriftsAVanillaBoatDownwind(GameTestHelper h) {
+        double still = pool(h);
+        BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8)), o = h.absolutePos(BlockPos.ZERO);
+        // A calm region with a 10 m/s wind blowing toward +x.
+        WaveRegion region = new WaveRegion(centre.getX() + 0.5, centre.getZ() + 0.5, 12, still, WaveField.NONE, null, null, new WaveRegion.Wind(10, 0));
+        WaveRegions.of(h.getLevel()).add(h.getLevel(), region);
+        // A villager aboard, as the loaded pram of RowboatTest.driftsDownwindLikeASmallOpenBoat.
+        Boat boat = EntityType.BOAT.create(h.getLevel());
+        Villager villager = EntityType.VILLAGER.create(h.getLevel());
+        if (boat == null || villager == null) { throw new IllegalStateException("Entity factory failed"); }
+        boat.setPos(o.getX() + 4.5, still - 0.02, o.getZ() + 8.5);
+        h.getLevel().addFreshEntity(boat);
+        villager.setPos(boat.getX(), boat.getY() + 0.2, boat.getZ());
+        h.getLevel().addFreshEntity(villager);
+        villager.startRiding(boat, true);
+        final double[] start = new double[2];
+        h.runAfterDelay(20, () -> { start[0] = boat.getX(); start[1] = boat.getZ(); });
+        h.runAfterDelay(200, () -> {
+            double dx = boat.getX() - start[0], dz = boat.getZ() - start[1];
+            System.out.printf("[AeroCore] loaded boat in a 10 m/s wind: %.2f m downwind, %.2f m across in 9 s%n", dx, dz);
+            remove(h, region);
+            // Leeway of an occupied pram about 6 % of U10 plus the wind's surface drift (about 2 %): 0.6-0.8 m/s once steady.
+            h.assertTrue(dx > 3 && dx < 9, "The boat must drift downwind at a few percent of the wind: " + dx);
+            h.assertTrue(Math.abs(dz) < 0.3 * dx, "Mostly downwind: " + dz);
+            boat.discard(); villager.discard();
+            h.succeed();
+        });
+    }
+
+    /** Half the range of the surface at (x, z) over one period. */
+    private static double amplitude(GameTestHelper h, WaveRegion region, double x, double z, double t0, double period) {
+        double low = Double.MAX_VALUE, high = -Double.MAX_VALUE;
+        for (int i = 0; i < 48; i++) {
+            double y = SeaSurface.surfaceY(h.getLevel(), region, x, z, t0 + period * i / 48);
+            low = Math.min(low, y); high = Math.max(high, y);
+        }
+        return (high - low) / 2;
     }
 
     /** A 12 m regular wave across the pool in a 12 m region (3 m taper) centred on the pool. */

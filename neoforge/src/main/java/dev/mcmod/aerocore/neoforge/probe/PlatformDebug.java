@@ -24,7 +24,7 @@ public final class PlatformDebug {
         if(platform.debugMode()==0 || entity.tickCount%10!=0 || platform.owner()==null || !(entity.level() instanceof ServerLevel level)) {return;}
         ServerPlayer player=level.getServer().getPlayerList().getPlayer(platform.owner());
         if(player==null || player.level()!=level || player.distanceToSqr(entity)>32*32) {return;}
-        WaveField waves=platform.waves().waves();
+        CompiledWaves waves=platform.waves().compiled();
         double waveLevel=platform.waves().stillWaterY();
         if((platform.debugMode()&FORCES)!=0) {
             Painter painter=new Painter(level,player,140);
@@ -47,7 +47,7 @@ public final class PlatformDebug {
                 if(!level.hasChunkAt(block) || !level.getBlockState(block).getCollisionShape(level,block).isEmpty()) {continue;}
                 WorldWaterSampler.Contact sample=sampler.sample(point,0.025,waves,waveLevel,time);
                 boolean water=sample.fraction()>=0.5;
-                Vec3d velocity=water?platform.environment().waterAt(sample.currentMps()).velocity():platform.environment().wind();
+                Vec3d velocity=water?platform.environment().waterAt(sample.currentMps()).velocity():platform.environment().windAt(point);
                 if((platform.debugMode()&4)!=0) {
                     Vec3d r=point.subtract(platform.physicsState().position());
                     velocity=velocity.subtract(platform.physicsState().velocity())

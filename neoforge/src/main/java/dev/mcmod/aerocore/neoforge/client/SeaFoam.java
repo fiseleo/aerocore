@@ -1,6 +1,7 @@
 package dev.mcmod.aerocore.neoforge.client;
 
 import dev.mcmod.aerocore.api.BowSpray;
+import dev.mcmod.aerocore.api.CoastalWaves;
 import dev.mcmod.aerocore.api.CompiledWaves;
 import dev.mcmod.aerocore.api.LinearWave;
 import dev.mcmod.aerocore.api.Whitecaps;
@@ -26,9 +27,15 @@ import java.util.Map;
 /**
  * Foam on the sea surface, a client-side visual field on a 0.5 m grid in 16 m tiles within FOAM_RANGE of the camera
  * (a rendering budget), updated every tick: the ambient sea foams where it breaks (Whitecaps: downward surface
- * acceleration past the threshold for its whitecap coverage), boats add foam where their bow wave breaks (BowSpray,
+ * acceleration past the threshold for its whitecap coverage, set by the region's wind when it has one), the surf
+ * zone foams on its crests (below), boats add foam where their bow wave breaks (BowSpray,
  * crests of at least SprayRenderer's 3 cm) and in the aerated water behind a dry transom (Wakes.Design.whiteWaterWidth),
  * and all foam decays with Whitecaps.FOAM_DECAY_S. Foam stays where it formed (its drift is not modelled).
+ * <p>
+ * Surf: where the coast's depth limit removes a fraction b of the wave energy (CoastalWaves.breaking), a crest foams
+ * when the local surface stands above the level a Gaussian sea of the local variance exceeds with probability b, so
+ * about that share of the surface whitens at each moment (at most half). This is a presentation rule tied to the
+ * modelled dissipation, not a model of breaker types or bores.
  */
 @EventBusSubscriber(modid = AeroCore.MOD_ID, value = Dist.CLIENT)
 public final class SeaFoam {
@@ -36,6 +43,8 @@ public final class SeaFoam {
     public static final double SPACING = 0.5;
     public static final int POINTS = (int) Math.round(TILE / SPACING) + 1;
     private static final double FOAM_RANGE = 40, MIN_CREST_M = 0.03;
+    /** Breaking fractions below MIN_SURF draw no surf foam; above MAX_SURF the foamed share stays at one half (presentation limits). */
+    private static final double MIN_SURF = 0.01, MAX_SURF = 0.5;
     private static final int FORGET_TICKS = 40;
 
     private record Key(WaveRegion region, int x, int z) {}
@@ -62,6 +71,7 @@ public final class SeaFoam {
             if (waves.isEmpty()) { return Double.POSITIVE_INFINITY; }
             double m0 = 0;
             for (LinearWave w : r.waves().components()) { m0 += 0.5 * w.amplitudeM() * w.amplitudeM(); }
+            if (!r.wind().calm()) { return Whitecaps.thresholdAtWind(waves.accelerationDeviation(), r.wind().speedMps()); }
             return Whitecaps.threshold(waves.accelerationDeviation(), r.sea() != null ? r.sea().significantHeightM() : 4 * Math.sqrt(m0));
         });
     }
@@ -101,14 +111,23 @@ public final class SeaFoam {
         for (int i = 0; i < p.foam.length; i++) { p.foam[i] *= decay; }
         double threshold = threshold(region);
         CompiledWaves waves = region.compiled();
-        if (!Double.isFinite(threshold) || waves.isEmpty()) { return; }
+        CoastalWaves coast = region.coast();
+        boolean coastal = coast != null && coast.changedIn(tx, tz, tx + TILE, tz + TILE);
+        if (waves.isEmpty() || (!Double.isFinite(threshold) && !coastal)) { return; }
         int n = waves.size(), count = POINTS * POINTS * n;
         if (cos.length < count) { cos = new double[count]; sin = new double[count]; }
         waves.gridPhases(tx, tz, SPACING, SPACING, POINTS, POINTS, t, cos, sin);
         for (int i = 0; i < POINTS; i++) for (int k = 0; k < POINTS; k++) {
-            int q = i * POINTS + k;
-            double w = region.weight(tx + i * SPACING, tz + k * SPACING);
-            if (w > 0 && w * waves.verticalAcceleration(cos, q * n) < -threshold) { p.foam[q] = 1; }
+            int q = i * POINTS + k, offset = q * n;
+            double x = tx + i * SPACING, z = tz + k * SPACING, w = region.weight(x, z);
+            if (w == 0) { continue; }
+            if (coastal) { waves.modulate(coast, x, z, cos, sin, offset); }
+            if (Double.isFinite(threshold) && w * waves.verticalAcceleration(cos, offset) < -threshold) { p.foam[q] = 1; continue; }
+            double b = coastal ? Math.min(coast.breaking(x, z), MAX_SURF) : 0;
+            if (b > MIN_SURF) {
+                double sigma = w * Math.sqrt(waves.variance(cos, sin, offset));
+                if (sigma > 0 && w * waves.elevation(cos, offset) > sigma * Whitecaps.inverseNormal(1 - b)) { p.foam[q] = 1; }
+            }
         }
     }
 

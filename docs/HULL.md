@@ -41,7 +41,7 @@
 | `/aerocore hull propeller rev_per_s` | 螺旋槳轉速，−20～20 轉/秒；負值倒車 |
 | `/aerocore hull rudder degrees` | 舵角，−35～35°，正值右轉 |
 | `/aerocore hull debug off/forces/flow/all/relative/all_relative` | 粒子箭頭，與平台相同（藍色為升力） |
-| `/aerocore hull wind x y z`／`current x y z` | 測試風／附加水流，每軸 −10～10 m/s |
+| `/aerocore hull wind x y z`／`current x y z` | 測試風（0.12 起加在海域的風上）／附加水流，每軸 −10～10 m/s |
 | `/aerocore hull clear` | 移除 64 格內自己生成的測試船 |
 
 測試船不存檔，區塊卸載或重開世界後消失；12000 tick 後自動移除。波浪使用世界波浪區域（`/aerocore waves ...`）。

@@ -179,6 +179,8 @@ public final class PlaningBoat extends Entity implements DebugBody, CoupledBody,
         startTime = server.getGameTime() * MinecraftUnits.TICK_SECONDS;
         Vec3d origin = modelOrigin();
         waves = WaveRegions.of(server).at(origin.x(), origin.z());
+        environment.setSea(waves);
+        sampler.drifting(waves.region());
         thrustSum = torqueSum = frictionSum = surgeSum = wetSum = ventSum = rudderSum = powerSum = 0;
         contactSum = Wrench.ZERO; steps = 0; moving = true;
         entityLoads.beginTick();
@@ -192,7 +194,7 @@ public final class PlaningBoat extends Entity implements DebugBody, CoupledBody,
     @Override public RigidBodyState prepareSubstep(int i) {
         double dt = MinecraftUnits.TICK_SECONDS / SUBSTEPS, time = startTime + i * dt;
         HullDynamics.Environment water = point -> {
-            WorldWaterSampler.Column c = sampler.column(point, waves.waves(), waves.stillWaterY(), time);
+            WorldWaterSampler.Column c = sampler.column(point, waves.compiled(), waves.stillWaterY(), time);
             FluidState air = environment.airAt(point, seaLevel).fluid();
             FluidState liquid = environment.waterAt(c.currentMps());
             return new HullDynamics.Water(c.surfaceY(), c.slope(), c.stillY(), c.decayWavenumber(), liquid.velocity(), c.accelerationMps2(), liquid, air);
@@ -204,14 +206,14 @@ public final class PlaningBoat extends Entity implements DebugBody, CoupledBody,
             loads.add(new AppliedForce(f.kind(), f.offset(), f.force().scale(1 - ventilation), f.couple().scale(1 - ventilation)));
         }
         Vec3d hub = state.worldPoint(properties, TestPlaningBoat.PROPELLER.positionLocal());
-        WorldWaterSampler.Contact disk = sampler.sample(hub, TestPlaningBoat.PROPELLER.diameterM() / 2, waves.waves(), waves.stillWaterY(), time);
+        WorldWaterSampler.Contact disk = sampler.sample(hub, TestPlaningBoat.PROPELLER.diameterM() / 2, waves.compiled(), waves.stillWaterY(), time);
         PropellerSolver.Load screw = PropellerSolver.load(state, properties, TestPlaningBoat.PROPELLER, propellerRps, environment.waterAt(disk.currentMps()));
         double immersion = disk.fraction();
         if (immersion > 0 && (screw.force().force().lengthSquared() > 0 || screw.force().couple().lengthSquared() > 0)) {
             loads.add(new AppliedForce(AppliedForce.Kind.THRUST, screw.force().offset(), screw.force().force().scale(immersion), screw.force().couple().scale(immersion)));
         }
         Vec3d rudderPoint = state.worldPoint(properties, TestPlaningBoat.RUDDER.positionLocal());
-        WorldWaterSampler.Contact blade = sampler.sample(rudderPoint, TestPlaningBoat.RUDDER.spanM() / 2, waves.waves(), waves.stillWaterY(), time);
+        WorldWaterSampler.Contact blade = sampler.sample(rudderPoint, TestPlaningBoat.RUDDER.spanM() / 2, waves.compiled(), waves.stillWaterY(), time);
         SurfaceForces rudder = TestPlaningBoat.RUDDER.load(state, properties, rudderRadians, environment.waterAt(blade.currentMps()),
                 screw.thrustN() * immersion, TestPlaningBoat.PROPELLER.diameterM());
         Vec3d rudderForce = rudder.wrench().force().scale(blade.fraction());

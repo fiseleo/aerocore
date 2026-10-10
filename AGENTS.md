@@ -7,7 +7,7 @@
 
 - 為 Minecraft Java 載具 Mod 建立通用的空氣／水動力前置；載具形式尚未決定。
 - 先維持可驗證的物理核心，再逐步接入載具玩法。不要把近似模型描述成工程級 CFD。
-- 截至 2026-10-10，版本為 **0.11.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
+- 截至 2026-10-10，版本為 **0.12.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
   0.6 加入球形元件接觸反力（摩擦／反彈）、指定的線性 Airy 波浪、BEMT 螺旋槳推力（平台艉部示範槳）與阻力摩擦生熱；
   0.7 加入接觸摩擦生熱、波壓深度衰減（垂直 Froude–Krylov）、水平 Froude–Krylov 力與附加質量，測試球改用六自由度剛體與 `ContactSolver`；
   0.8 加入浮筒垂直方向的波浪輻射阻尼（Hulme 半球資料、Cummins 記憶力）與浮筒間點吸收體干擾；
@@ -16,9 +16,12 @@
   0.10（2026-10-10）加入 JONSWAP 不規則海況、所有讀取者共用的移動水面（原版實體／原版船／鏡頭霧 mixin）、Kelvin 尾浪與水花、
   Zarnick 2D+t 滑行艇（對 Fridsma 1969 驗證）與指令操作的滑行測試艇，並把示範係數換成文獻值（見 docs/PHYSICS.md〈0.10 係數來源〉）；
   0.11（2026-10-10）把水面改成二階（Choppy Wave Model）、尾浪改成每個來源一個 FFT 網格的線性非定常解、加入碎浪白沫（Monahan 白冠覆蓋率），
-  原版船改成真實划船物理（`Rowboat`／`RowingBoats`，使用者選擇；可駕駛的新載具使用者決定先不做），方塊依材質分類給摩擦與恢復係數，滑行艇加鬚狀水花阻力。
+  原版船改成真實划船物理（`Rowboat`／`RowingBoats`，使用者選擇；可駕駛的新載具使用者決定先不做），方塊依材質分類給摩擦與恢復係數，滑行艇加鬚狀水花阻力；
+  0.12（2026-10-10，使用者要求「浪頭、波浪碰到地形、風、乘客會跟船一起傾斜、單槳轉向、滑行艇船頭仰角」）加入 Sharma–Dean 完整二階浪頭、
+  海岸（測量海床、折射／淺化／遮蔽／碎浪，`CoastalWaves`）、海域的風（`SeaWind`：風浪、白冠、表層流、船與物體受風、水花受風）、
+  乘客隨船傾斜與第一人稱滾轉、槳葉速度上限（單槳轉向）、滑行艇的 Garme 艉板修正（只乘在靜水壓）。
 - 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是線性自由面的非定常解（勢流），不是黏性流場求解。
-- 尚無可駕駛的新載具、方塊組裝、引擎模型、旋翼、三維 CFD、碎浪動力、波浪反射與地形折射、相變或完整熱流耦合。
+- 尚無可駕駛的新載具、方塊組裝、引擎模型、旋翼、三維 CFD、碎浪動力、波浪反射、陣風、相變或完整熱流耦合；海岸是幾何光學（無反射、島後只有一個到達波）。
 - 載具形式仍未決定；船體模型刻意做成水面船與潛航體都能用的細長體，不要擅自改成特定載具玩法。
 
 ## 固定開發基底
@@ -44,7 +47,8 @@
 - 本機執行根目錄：`%USERPROFILE%\.mcmod\runs\aerocore`，每台電腦各自一份：原開發機（`DESKTOP-AH3A4MO`）為 `C:\Users\ZHU YU TA\.mcmod\runs\aerocore`，`DESKTOP-KLLC9QQ` 為 `C:\Users\CHU YU TA\.mcmod\runs\aerocore`。
 - 2026-10-10 起專案是 git 倉庫，依使用者要求上傳到公開的 GitHub `fiseleo/aerocore`；網路磁碟上的 git 指令要加
   `-c safe.directory=%(prefix)///100.96.25.71/share/MCMod`（不改全域設定）。推送是對外公開的動作，每次先經使用者同意。
-  大改前仍把原始碼備份到 `%USERPROFILE%\.mcmod\backups\`（0.9 開工前 `aerocore-src-0.8.0-20261010-002942`，0.11 開工前 `aerocore-src-0.10.0-20261010-130423`）。
+  大改前仍把原始碼備份到 `%USERPROFILE%\.mcmod\backups\`（0.9 開工前 `aerocore-src-0.8.0-20261010-002942`，0.11 開工前 `aerocore-src-0.10.0-20261010-130423`；
+  0.12 開工時的狀態是 git commit `be82bc5`，沒有另做資料夾備份）。
 - `client` 放開發客戶端資料，`server` 放開發伺服器資料，`gametest` 放自動測試世界。
 - `aerocore_runtime_id=aerocore` 保持磁碟代號與 UNC 啟動結果一致。只有獨立實驗專案才使用不同 ID。
 - JDK 位於 `%USERPROFILE%\.mcmod\java\jdk-21.0.12.1+1`，Java 暫存位於 `%USERPROFILE%\.mcmod\tmp`。優先使用啟動腳本偵測 JDK，不依賴舊的 AppData 路徑。
@@ -102,7 +106,7 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | `neoforge/src/main/java/dev/mcmod/aerocore/neoforge/` | Mod 註冊、指令、Minecraft 整合 |
 | 上述目錄的 `probe/` | 測試球、平台、環境取樣、粒子顯示與 GameTest |
 | 上述目錄的 `client/` | 客戶端模型與渲染（含波面），避免專用伺服器載入客戶端類別 |
-| neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船水面）、`BoatPhysicsMixin`（原版船改由 `RowingBoats` 移動、槳速）、`BoatAccessor`、`LivingEntityAccessor`；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）、`BoatRendererMixin`（船的俯仰橫搖）、`BoatClientMixin`（槳動畫內插）；只能放 mixin 類別 |
+| neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船水面）、`BoatPhysicsMixin`（原版船改由 `RowingBoats` 移動、槳速）、`BoatSeatMixin`（座位隨船傾斜）、`BoatAccessor`、`LivingEntityAccessor`；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）、`BoatRendererMixin`（船的俯仰橫搖）、`BoatClientMixin`（槳動畫內插）、`RiderTiltMixin`（乘客模型隨船傾斜）；只能放 mixin 類別 |
 | `scripts/` | JDK／IDE／本機資料與離線 CFD 繪圖工具 |
 | `docs/` | API、模型假設、操作和驗證說明 |
 
@@ -110,10 +114,11 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 `PropellerSolver`／`BladeElementPropeller`／`WageningenB`、`WaveRadiation`、`SlenderHull`／`HullSection`／`HullModel`／`HullDynamics`／`HullResistance`／`HullManoeuvring`、
 `Rudder`、`Thermodynamics`、`HeatTransfer`；0.10：`SeaSpectrum`／`CompiledWaves`、`KelvinWake`、`BowSpray`、`PlaningHull`／`PlaningDynamics`／`TestPlaningBoat`、
 `SphereDrag`、`BSeriesFourQuadrant`、`ContactMaterial`（Thornton）；0.11：`UnsteadyWake`／`Fft2D`、`Rowboat`、`Whitecaps`；
+0.12：`SecondOrderCorrection`、`CoastalWaves`、`SeaWind`；
 遊戲端入口為 `FloatingPlatform`、`FloatingHull`、`PhysicsProbe`（都實作 `CoupledBody`、`SolidBody`）、`BodyWorld`（每 tick 聯合推進）、
 `BodyCollisions`（原版實體）、`WaveRegions`／`WaveNetwork`／`WaveCommands`、`PlatformCommands`、`HullCommands`、`PlatformDebug`、`WorldWaterSampler`；
 0.10：`SeaSurface`（共用水面）、`VanillaWater`（原版實體）、`Wakes`（尾浪與靜水區）、`EntityMasses`、`PlaningBoat`／`PlaningCommands`，客戶端 `WaveSurfaceRenderer`、`SprayRenderer`；
-0.11：`RowingBoats`（原版船）、`BlockMaterials`，客戶端 `SeaFoam`。
+0.11：`RowingBoats`（原版船）、`BlockMaterials`，客戶端 `SeaFoam`；0.12：客戶端 `BoatCamera`（第一人稱隨船滾轉）。
 修改來源檔，不直接修改 `build/`、Gradle 快取或生成的 Mod 中繼資料。
 
 ## 物理與顯示約定
@@ -158,10 +163,21 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
   `KelvinWake` 只作為驗證的定常解。碎浪門檻由 `Whitecaps` 對準 Monahan 覆蓋率，白沫是客戶端視覺（`SeaFoam`）。
 - 0.11 原版船：`RowingBoats` 在移動船的那一端取代 floatBoat／controlBoat，位移交給原版 `move()`；其他客戶端只算俯仰橫搖。
   船底壓力（尾浪與波阻）用有翹度的拋物線分布，不要改回方形銳邊（會產生假的阻力起伏）；按鍵到槳的對應是操作規則。
-  已知不確定：單槳轉向比文獻估計快。
-- 0.10 滑行：`PlaningDynamics` 用 Zarnick 2D+t（Wagner 堆水、C_Dc = cosβ、轉動座標項），靜水壓用完整 Archimedes，通氣後垂直於龍骨；
-  Zarnick 的浮力減半與 Garme 艉板修正都試過、會讓 Fridsma B 組態縱搖不穩，不要再加回。低速垂直輻射由呼叫者提供、隨通氣淡出。
-  驗證基準：Fridsma 表 1（0.11 加鬚狀水花阻力後阻力 −10%～+8%、俯仰低 0.5～1.1°、重載低 2.4°），縱搖不穩起始比水槽晚。
+  0.12：槳葉相對船的速度上限 `Rowboat.BLADE_SPEED`（槳把 1.3 m/s，Kleshnev）限制滑移，單槳首搖穩定約 58°/s；小艇單槳轉向沒有量測可對照。
+  乘客隨船傾斜只改座位點與模型、鏡頭滾轉（顯示），不是新的力。
+- 0.12 浪頭：二階水面 = CWM（便宜）＋ `SecondOrderCorrection`（Sharma–Dean 與 CWM 的差，低秩二次式，依波向量與水深快取、振幅以 fold 摺入）。
+  畫面 32 m 外只畫便宜部分；球體取樣的修正項只在球心欄算一次。不要把修正項改成逐對雙重和（太慢）。
+- 0.12 海岸：有波浪的海域建立時測量海床（`WaveRegions.survey`，2 m 格點，存檔並同步），`CoastalWaves` 在背景執行緒建立（完成前用開放海面）。
+  所有讀取者都要用海岸水面：點查詢 `CompiledWaves.surfaceTerms(..., coast, ...)`，物體用 `WaveRegion.localWaves`（WKB 局部波場，頻率不變），
+  畫面用 `gridCoastal`。自由場的陸地用最近水域的深度（不要改回外海深度：會讓波穿過陸地抄捷徑、把淺岸誤判成陰影）；
+  封閉水域的波源取自由場的相位；路徑差小於 `SHADOW_NOISE` 視為照亮。寬度不到 2 m 的牆可能被測點漏掉。
+- 0.12 風：`WaveRegion.Wind`（10 m 風速、吹向，與波浪方向同一慣例）只在海域內、外圈漸弱；剖面 `SeaWind.speedAt`（COARE 3.0 對數律）。
+  風驅動表層流 0.53 u*（不另加 Stokes 漂流：解析的波浪已給浮體）經 `WaveRegion.windDrift`／`WorldWaterSampler.drifting`／`SeaSurface.waterVelocity` 加入；
+  物體的空氣負載經 `PlatformEnvironment.setSea`／`airAt` 取海域風加上各物體的測試風；白冠用 `Whitecaps.thresholdAtWind`。
+- 0.10 滑行：`PlaningDynamics` 用 Zarnick 2D+t（Wagner 堆水、C_Dc = cosβ、轉動座標項），靜水壓用 Archimedes，通氣後垂直於龍骨；
+  0.12 起靜水壓乘上 Garme 艉板修正 tanh(2.5x_T/(0.34 B C_V))、隨通氣淡入。不要把它也乘在動力項上（Fridsma B 組態會大幅縱搖不穩），
+  Zarnick 的浮力減半也不要加回。低速垂直輻射由呼叫者提供、隨通氣淡出。
+  驗證基準：Fridsma 表 1（航行俯仰差 0.35° 內、阻力偏高 5～13%），LCG 70% 的縱搖不穩起始在 V/√L 5.5～6.2 之間（水槽 5.85）。
 - 0.10 係數：浮筒阻力用 `FloatingBodyDynamics.STANDARD_DRAG`（Clift 標準曲線）；物體為鋼；0.11 起方塊由 `BlockMaterials`（標籤＋音效類型）
   分成冰、木、沙、礫石、泥土、泥巴、雪、羊毛、玻璃、金屬、岩石，材質放在 `WorldBox` 上；Thornton 的 p_y 用硬度而非降伏強度；實體碰撞箱仍用物體預設。沒有資料的值（虛構生物質量、原版水流速度、顯示用水滴數量）要在註解寫明是規則或顯示預算，不可寫成量測值。
 - 熱力學 API 使用 K，指令使用 °C。空氣支援 180～500 K、1～300 kPa；純水支援 273.15～353.15 K、80～300 kPa，超界拒絕。
@@ -189,6 +205,7 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | 0.9.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 147＋5 | 29 | 見下方待實測清單 |
 | 0.10.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 168＋5 | 36 | 只確認開發客戶端能啟動到標題畫面、客戶端 mixin 套用無錯誤；功能畫面未實測 |
 | 0.11.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 189＋5 | 38 | 只確認開發客戶端能啟動到標題畫面、客戶端 mixin（含船的渲染）無錯誤；功能畫面未實測 |
+| 0.12.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 202＋5 | 40 | 只確認開發客戶端能啟動到標題畫面、新的客戶端 mixin（乘客傾斜）無錯誤；功能畫面未實測 |
 
 **客戶端仍待實測**（0.6～0.9）：螺旋槳模型與轉動、洋紅接觸／橙推力／淡紫慣性／墨綠輻射／藍升力箭頭、淺藍波面粒子、
 測試球反彈與滾動及其旋轉顯示、平台在靜水中幾秒內停止起伏、新的中英文指令訊息；
@@ -196,7 +213,9 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 玩家站在平台與測試船甲板上的碰撞、被載運與伺服器回拉，以及平台壓斜；
 0.10：不規則海面與分級細節接縫、整片海域的效能、尾浪與臨時靜水區的出現／移動（區塊重建）、水花、鏡頭水下霧切換、
 原版船與生物隨浪起伏、玩家游泳與溺水判定、滑行艇外觀與操作、多人連線；
-0.11：二階波形外觀、非定常尾浪（轉彎、停船）、白沫與白水、划船手感與轉向、船的俯仰橫搖畫面與乘客位置、各方塊材質的手感、尾浪背景執行緒的負載。
+0.11：二階波形外觀、非定常尾浪（轉彎、停船）、白沫與白水、划船手感與轉向、船的俯仰橫搖畫面與乘客位置、各方塊材質的手感、尾浪背景執行緒的負載；
+0.12：浪頭外觀、海岸的折射／遮蔽／碎浪帶白沫與海岸區塊的渲染效能、海岸計算在客戶端完成前後的切換、風中的漂流與水花、
+乘客隨船傾斜與第一人稱滾轉（含其他玩家看到的乘客）、單槳轉向手感、滑行艇船艏仰角的外觀、`survey`／`wind`／`windsea` 的中英文訊息。
 JUnit 報告在各模組 `build/reports/tests/test/` 與 `build/test-results/test/`；網路磁碟偶爾寫入 HTML 報告失敗，以 XML 結果為準後重跑即可。
 
 JAR 在 `neoforge/build/libs/aerocore-neoforge-1.21.1-<版本>.jar`，已包含 physics API。測試安裝只保留一個 AeroCore 版本，不把 sources JAR 放入 mods。

@@ -3,9 +3,12 @@ package dev.mcmod.aerocore.neoforge.client;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.mcmod.aerocore.api.Atmosphere;
 import dev.mcmod.aerocore.api.BowSpray;
+import dev.mcmod.aerocore.api.Vec3d;
 import dev.mcmod.aerocore.neoforge.AeroCore;
 import dev.mcmod.aerocore.neoforge.MinecraftUnits;
+import dev.mcmod.aerocore.neoforge.probe.SeaSurface;
 import dev.mcmod.aerocore.neoforge.probe.Wakes;
+import dev.mcmod.aerocore.neoforge.probe.WaveRegion;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -32,17 +35,23 @@ import java.util.List;
 
 /**
  * Bow spray of moving wake sources (Wakes.moving): where BowSpray says the bow wave breaks, droplets leave both
- * sides of the bow with the BowSpray velocity (plus the source's own) and fly ballistically under real gravity, without
- * air drag, until they fall back through the still surface. How many droplets are drawn (a few per side per tick,
- * with +-15 % scatter in launch speed) is a display budget, not a spray mass flux.
+ * sides of the bow with the BowSpray velocity (plus the source's own) and fly under real gravity and quadratic air drag
+ * toward the local wind (the sea region's log profile; still air elsewhere), g |w - v| (w - v) / v_t^2, which makes a
+ * drop's fall speed in still air tend to its terminal speed v_t, until they fall back through the still surface. The
+ * drops are taken as about 1 mm across (v_t = 3.9 m/s, Gunn and Kinzer 1949), scattered between 0.5 and 2 mm
+ * (2.1-6.5 m/s) for display: bow-spray drop sizes are not modelled. How many droplets are drawn (a few per side per
+ * tick, with +-15 % scatter in launch speed) is a display budget, not a spray mass flux.
  */
 @EventBusSubscriber(modid = AeroCore.MOD_ID, value = Dist.CLIENT)
 public final class SprayRenderer {
     private static final int MAX_DROPLETS = 1500, PER_SIDE = 3, MAX_AGE_TICKS = 80;
     private static final double MIN_CREST_M = 0.03, SIZE_M = 0.09;
     private static final double G = Atmosphere.GRAVITY_MPS2, DT = MinecraftUnits.TICK_SECONDS;
+    /** Terminal fall speeds of 0.5, 1 and 2 mm water drops in air, m/s (Gunn and Kinzer 1949). */
+    private static final double FALL_SMALL = 2.06, FALL_MEDIUM = 3.89, FALL_LARGE = 6.49;
+    private static final int SUBSTEPS = 4;
     private static final class Droplet {
-        double x, y, z, px, py, pz, vx, vy, vz, floor;
+        double x, y, z, px, py, pz, vx, vy, vz, floor, fall;
         int age;
     }
     private static final List<Droplet> DROPLETS = new ArrayList<>();
@@ -54,11 +63,20 @@ public final class SprayRenderer {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) { DROPLETS.clear(); return; }
         if (Minecraft.getInstance().isPaused()) { return; }
+        List<WaveRegion> regions = ClientWaveRegions.current();
         for (Iterator<Droplet> it = DROPLETS.iterator(); it.hasNext(); ) {
             Droplet d = it.next();
             d.px = d.x; d.py = d.y; d.pz = d.z;
-            // Exact ballistic step under constant gravity.
-            d.x += d.vx * DT; d.z += d.vz * DT; d.y += d.vy * DT - 0.5 * G * DT * DT; d.vy -= G * DT;
+            WaveRegion region = SeaSurface.regionAt(regions, d.x, d.z);
+            Vec3d wind = region == null ? Vec3d.ZERO : region.wind().at(d.y - region.stillWaterY()).scale(region.weight(d.x, d.z));
+            // Gravity and quadratic drag toward the wind, semi-implicit in the drag (stable at any relative speed).
+            double h = DT / SUBSTEPS;
+            for (int k = 0; k < SUBSTEPS; k++) {
+                double rx = wind.x() - d.vx, ry = -d.vy, rz = wind.z() - d.vz, rate = G * Math.sqrt(rx * rx + ry * ry + rz * rz) / (d.fall * d.fall);
+                double keep = 1 / (1 + rate * h);
+                d.vx = (d.vx + rate * h * wind.x()) * keep; d.vz = (d.vz + rate * h * wind.z()) * keep; d.vy = (d.vy - G * h) * keep;
+                d.x += d.vx * h; d.y += d.vy * h; d.z += d.vz * h;
+            }
             if (++d.age > MAX_AGE_TICKS || (d.vy < 0 && d.y < d.floor)) { it.remove(); }
         }
         for (Wakes.Moving m : Wakes.moving(level)) {
@@ -78,6 +96,8 @@ public final class SprayRenderer {
                     d.vx = (m.dirX() * spray.forwardMps() + nx * spray.lateralMps()) * scatter;
                     d.vz = (m.dirZ() * spray.forwardMps() + nz * spray.lateralMps()) * scatter;
                     d.vy = spray.verticalMps() * scatter;
+                    double size = RANDOM.nextDouble();
+                    d.fall = size < 0.5 ? FALL_SMALL + (FALL_MEDIUM - FALL_SMALL) * 2 * size : FALL_MEDIUM + (FALL_LARGE - FALL_MEDIUM) * (2 * size - 1);
                     DROPLETS.add(d);
                 }
             }

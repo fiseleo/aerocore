@@ -1,6 +1,7 @@
 package dev.mcmod.aerocore.neoforge.client;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import dev.mcmod.aerocore.api.CoastalWaves;
 import dev.mcmod.aerocore.api.Vec3d;
 import dev.mcmod.aerocore.neoforge.AeroCore;
 import dev.mcmod.aerocore.neoforge.MinecraftUnits;
@@ -33,8 +34,8 @@ import java.util.Map;
 
 /**
  * Draws each sea region's surface in place of the vanilla water top faces that ClientWaveRegions hides, from the same
- * second-order field (CompiledWaves), still level, wakes and time base as the server physics (game time x 0.05 s),
- * whitened by SeaFoam's foam. The whole region is drawn out to
+ * second-order field (CompiledWaves, over the region's coast where it has one), still level, wakes and time base as
+ * the server physics (game time x 0.05 s), whitened by SeaFoam's foam. The whole region is drawn out to
  * the render distance in 16 x 16 tiles. Vertex spacing grows with distance from the camera (0.25 / 0.5 m near, 1 m to
  * 48 m, 2 m beyond, where full 2 x 2 cells merge into one quad); heights are always the exact field at the vertices,
  * and a finer tile's edge vertices are moved onto its coarser neighbour's edge so the levels meet without cracks.
@@ -58,6 +59,9 @@ public final class WaveSurfaceRenderer {
     private static double[] height = new double[0], slopeX = new double[0], slopeZ = new double[0];
     private static double[] height2 = new double[0], slope2X = new double[0], slope2Z = new double[0];
     private static float[] shade = new float[0], foam = new float[0];
+    /** Tiles nearer than this get the full second-order surface; farther ones its cheap part (a drawing budget). */
+    private static final double CORRECTION_RANGE = 32;
+    private static final double[] latticeH = new double[(TILE / 2 + 1) * (TILE / 2 + 1)], latticeX = new double[latticeH.length], latticeZ = new double[latticeH.length];
     /** How white full foam draws: a presentation choice. */
     private static final float FOAM_WHITE = 0.85f;
 
@@ -100,7 +104,7 @@ public final class WaveSurfaceRenderer {
                 if (tile.refreshed == Long.MIN_VALUE || (tick - tile.refreshed >= CACHE_TICKS && budget[0]-- > 0)) { refresh(level, regions, region, tile, tx, tz, tick); }
                 if (!tile.any) { continue; }
                 double[] neighbours = {step(region, eye, tx - TILE, tz), step(region, eye, tx + TILE, tz), step(region, eye, tx, tz - TILE), step(region, eye, tx, tz + TILE)};
-                draw(out, level, region, tile, sprite, eye, time, tx, tz, step(region, eye, tx, tz), neighbours, back && distance < 48);
+                draw(out, level, region, tile, sprite, eye, time, tx, tz, step(region, eye, tx, tz), neighbours, back && distance < 48, distance < CORRECTION_RANGE);
             }
         }
         buffers.endBatch(RenderType.translucent());
@@ -142,15 +146,22 @@ public final class WaveSurfaceRenderer {
     }
 
     private static void draw(VertexConsumer out, ClientLevel level, WaveRegion region, Tile tile, TextureAtlasSprite sprite, Vec3 eye,
-                             double time, int tx, int tz, double s, double[] neighbours, boolean back) {
+                             double time, int tx, int tz, double s, double[] neighbours, boolean back, boolean corrected) {
         int points = (int) Math.round(TILE / s) + 1, count = points * points;
         if (height.length < count) {
             height = new double[count]; slopeX = new double[count]; slopeZ = new double[count]; shade = new float[count]; foam = new float[count];
             height2 = new double[count]; slope2X = new double[count]; slope2Z = new double[count];
         }
         // The second-order surface the physics reads (CompiledWaves): the linear part times the taper w, the bound part w^2.
-        region.compiled().grid(tx, tz, s, s, points, points, time, height, slopeX, slopeZ);
-        region.compiled().gridSecondOrder(tx, tz, s, s, points, points, time, height2, slope2X, slope2Z);
+        CoastalWaves coast = region.coast();
+        boolean coastal = coast != null && coast.changedIn(tx, tz, tx + TILE, tz + TILE);
+        if (coastal) {
+            region.compiled().gridCoastal(coast, tx, tz, s, s, points, points, time, height, slopeX, slopeZ, height2, slope2X, slope2Z);
+        } else {
+            region.compiled().grid(tx, tz, s, s, points, points, time, height, slopeX, slopeZ);
+            region.compiled().gridSecondOrder(tx, tz, s, s, points, points, time, height2, slope2X, slope2Z);
+        }
+        if (corrected) { addCorrection(region, coastal ? coast : null, tx, tz, s, points, time); }
         double still = region.stillWaterY();
         boolean core = Math.hypot(Math.max(Math.abs(tx - region.centerX()), Math.abs(tx + TILE - region.centerX())),
                 Math.max(Math.abs(tz - region.centerZ()), Math.abs(tz + TILE - region.centerZ()))) <= region.radiusM() - region.taperM();
@@ -222,6 +233,27 @@ public final class WaveSurfaceRenderer {
             shade[p] = (float) (shade[a] + (shade[b] - shade[a]) * f);
             foam[p] = (float) (foam[a] + (foam[b] - foam[a]) * f);
         }
+    }
+
+    /**
+     * The rest of the second-order surface (CompiledWaves.gridCorrection), evaluated on a 2 m lattice and bilinear in
+     * between: its shortest scales are the bound waves of the dominant components, half their length.
+     */
+    private static void addCorrection(WaveRegion region, CoastalWaves coast, int tx, int tz, double s, int points, double time) {
+        int m = TILE / 2 + 1;
+        java.util.Arrays.fill(latticeH, 0); java.util.Arrays.fill(latticeX, 0); java.util.Arrays.fill(latticeZ, 0);
+        region.compiled().gridCorrection(coast, tx, tz, 2, 2, m, m, time, latticeH, latticeX, latticeZ);
+        for (int i = 0; i < points; i++) for (int k = 0; k < points; k++) {
+            double gx = i * s / 2, gz = k * s / 2;
+            int a = Math.min((int) gx, m - 2), b = Math.min((int) gz, m - 2);
+            double fx = gx - a, fz = gz - b;
+            int q = a * m + b, p = i * points + k;
+            height2[p] += bilinear(latticeH, q, m, fx, fz); slope2X[p] += bilinear(latticeX, q, m, fx, fz); slope2Z[p] += bilinear(latticeZ, q, m, fx, fz);
+        }
+    }
+
+    private static double bilinear(double[] v, int q, int m, double fx, double fz) {
+        return (v[q] * (1 - fz) + v[q + 1] * fz) * (1 - fx) + (v[q + m] * (1 - fz) + v[q + m + 1] * fz) * fx;
     }
 
     /** Foam (0 to 1) at a tile-local point, bilinear on SeaFoam's grid. */

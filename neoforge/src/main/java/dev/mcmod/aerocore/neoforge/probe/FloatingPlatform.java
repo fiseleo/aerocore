@@ -193,6 +193,8 @@ public final class FloatingPlatform extends Entity implements DebugBody, Coupled
         startTime=server.getGameTime()*MinecraftUnits.TICK_SECONDS;
         Vec3d origin=modelOrigin();
         waves=WaveRegions.of(server).at(origin.x(),origin.z());
+        environment.setSea(waves);
+        sampler.drifting(waves.region());
         fluidSum=Wrench.ZERO; contactSum=Wrench.ZERO;
         airPower=waterPower=airSquare=waterSquare=staticFriction=pairFriction=0;
         thrustSum=torqueSum=advanceSum=powerSum=immersionSum=0;
@@ -228,7 +230,7 @@ public final class FloatingPlatform extends Entity implements DebugBody, Coupled
     @Override public RigidBodyState prepareSubstep(int i) {
         double dt=MinecraftUnits.TICK_SECONDS/SUBSTEPS, time=startTime+i*dt;
         FloatingBodyDynamics.Environment fluids=(center,radius)-> {
-            WorldWaterSampler.Contact contact=sampler.sample(center,radius,waves.waves(),waves.stillWaterY(),time);
+            WorldWaterSampler.Contact contact=sampler.sample(center,radius,waves.compiled(),waves.stillWaterY(),time);
             FluidState air=environment.airAt(center,seaLevel).fluid();
             // Surface-piercing floats take their heave diffraction from the radiation memory's hemisphere table.
             return new FloatingBodyDynamics.Contact(contact.fraction(),contact.wetCentroidOffset(),air,
@@ -309,7 +311,7 @@ public final class FloatingPlatform extends Entity implements DebugBody, Coupled
     private Thrust propeller(WorldWaterSampler sampler,int seaLevel,double time) {
         Propeller p=TestPlatform.PROPELLER;
         Vec3d hub=state.worldPoint(properties,p.positionLocal());
-        WorldWaterSampler.Contact disk=sampler.sample(hub,p.diameterM()/2,waves.waves(),waves.stillWaterY(),time);
+        WorldWaterSampler.Contact disk=sampler.sample(hub,p.diameterM()/2,waves.compiled(),waves.stillWaterY(),time);
         PropellerSolver.Load water=PropellerSolver.load(state,properties,p,propellerRps,environment.waterAt(disk.currentMps()));
         PropellerSolver.Load air=PropellerSolver.load(state,properties,p,propellerRps,environment.airAt(hub,seaLevel).fluid());
         double f=disk.fraction(),g=1-f;
