@@ -30,6 +30,26 @@ public final class WaveNetwork {
         @Override public Type<RegionsPayload> type() { return TYPE; }
     }
 
+    /** Present heights of the regions' seas (WaveRegion.scale), in the order of the dimension's region list. */
+    public record ScalesPayload(ResourceLocation dimension, List<Double> scales) implements CustomPacketPayload {
+        public static final Type<ScalesPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(AeroCore.MOD_ID, "wave_scales"));
+        public static final StreamCodec<FriendlyByteBuf, ScalesPayload> STREAM_CODEC = StreamCodec.composite(
+                ResourceLocation.STREAM_CODEC, ScalesPayload::dimension,
+                ByteBufCodecs.DOUBLE.apply(ByteBufCodecs.list(WaveRegions.MAX_REGIONS)), ScalesPayload::scales,
+                ScalesPayload::new);
+        public ScalesPayload { scales = List.copyOf(scales); }
+        @Override public Type<ScalesPayload> type() { return TYPE; }
+    }
+
+    private static volatile Consumer<ScalesPayload> clientScales = payload -> {};
+    public static void setClientScales(Consumer<ScalesPayload> handler) { clientScales = handler; }
+
+    /** Sends the regions' present sea heights to the dimension's players. */
+    public static void syncScales(ServerLevel level) {
+        List<Double> scales = WaveRegions.of(level).regions().stream().map(WaveRegion::scale).toList();
+        PacketDistributor.sendToPlayersInDimension(level, new ScalesPayload(level.dimension().location(), scales));
+    }
+
     /** Set by the client bootstrap; the dedicated server never receives this payload. */
     private static volatile Consumer<RegionsPayload> clientHandler = payload -> {};
 
@@ -39,7 +59,9 @@ public final class WaveNetwork {
 
     public static void register(RegisterPayloadHandlersEvent event) {
         event.registrar("1").playToClient(RegionsPayload.TYPE, RegionsPayload.STREAM_CODEC,
-                (payload, context) -> clientHandler.accept(payload));
+                (payload, context) -> clientHandler.accept(payload))
+                .playToClient(ScalesPayload.TYPE, ScalesPayload.STREAM_CODEC, (payload, context) -> clientScales.accept(payload))
+                .playToClient(WorldWind.WindPayload.TYPE, WorldWind.WindPayload.STREAM_CODEC, (payload, context) -> WorldWind.accept(payload));
     }
 
     public static void sync(ServerLevel level) {

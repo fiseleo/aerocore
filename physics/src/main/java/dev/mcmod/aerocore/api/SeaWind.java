@@ -11,8 +11,10 @@ package dev.mcmod.aerocore.api;
  * <li>Waves: fetch-limited growth of JONSWAP (Hasselmann et al. 1973, eqs. 2.4.3 and 2.4.7 with x~ = g x / U10^2):
  * Hm0 = 1.6e-3 (U10^2 / g) x~^(1/2), Tp = (U10 / g) x~^0.33 / 3.5, up to the fully developed Pierson-Moskowitz sea
  * (Hs = 0.2092 U19.5^2 / g, omega_p = 0.877 g / U19.5, U19.5 = 1.05 U10 as in Whitecaps), which JONSWAP's growth
- * reaches at x~ = 2.1e4. In finite depth Tp <= 9.78 sqrt(d / g) (CEM II-2-39) and Hs <= CoastalWaves'
- * depth-saturated 0.59 d. Duration limits and swell are not modelled.</li>
+ * reaches at x~ = 2.1e4. In finite depth Tp <= 9.78 sqrt(d / g) (CEM II-2-39) and Hs <= 0.78 d / 1.86, so the
+ * largest expected wave (1.86 Hs) stays below McCowan's 0.78 d as SeaSpectrum requires. At short fetch (x~ below
+ * about 45, under 660 m at 12 m/s) the growth law gives seas steeper than DNV-RP-C205's S_p = 2 pi Hs / (g Tp^2) = 1/15;
+ * such young seas break, and Hs is held at that steepness. Duration limits and swell are not modelled.</li>
  * <li>Drift: the wind-driven surface current is 0.53 u* (Wu 1975, J. Fluid Mech. 68:49; as applied by Laxague et al.
  * 2018, GRL 45:245), 1.9 % of U10 at 10 m/s, decaying below the surface with the e-folding depth DRIFT_DEPTH; the
  * strong shear is confined to the top decimetre (Laxague 2018) but the exponential shape is an assumption. Measured
@@ -32,9 +34,16 @@ public final class SeaWind {
     public static final double MIN_HEIGHT = 0.1;
     /** Strongest wind accepted, m/s (the Charnock fit of COARE 3.0 is held constant beyond 18 m/s). */
     public static final double MAX_WIND = 30;
+    /**
+     * 10 m wind below which the log profile is scaled linearly from this one, m/s: a region's tapered rim or deep shelter
+     * gives winds of 1e-8 m/s, where 0.14-0.16 crashed a boat with NaN.
+     */
+    public static final double LIGHT_AIR = 0.1;
     private static final double G = Atmosphere.GRAVITY_MPS2;
     /** Pierson-Moskowitz constants and the U19.5 / U10 ratio used with them. */
     private static final double PM_HEIGHT = 0.2092, PM_PEAK = 0.877, U195_PER_U10 = 1.05;
+    /** DNV-RP-C205 limit of the sea steepness 2 pi Hs / (g Tp^2) for Tp up to 8 s, the one SeaSpectrum enforces. */
+    public static final double MAX_STEEPNESS = 1.0 / 15;
 
     private SeaWind() {}
 
@@ -49,6 +58,9 @@ public final class SeaWind {
     public static double frictionVelocity(double u10) {
         check(u10);
         if (u10 == 0) { return 0; }
+        // Below LIGHT_AIR the smooth-flow iteration has no positive solution (the viscous roughness outgrows 10 m and
+        // the logarithm turns negative, then NaN): such air is still; scale the LIGHT_AIR profile linearly.
+        if (u10 < LIGHT_AIR) { return u10 / LIGHT_AIR * frictionVelocity(LIGHT_AIR); }
         double ustar = 0.035 * u10;
         for (int i = 0; i < 60; i++) {
             double next = KARMAN * u10 / Math.log(10 / roughness(ustar, u10));
@@ -70,8 +82,42 @@ public final class SeaWind {
     /** Mean wind speed at a height above the mean surface, m/s (log law; MIN_HEIGHT below that). */
     public static double speedAt(double u10, double heightM) {
         if (u10 == 0) { return 0; }
+        if (u10 < LIGHT_AIR) { return u10 / LIGHT_AIR * speedAt(LIGHT_AIR, heightM); }
         double ustar = frictionVelocity(u10), z = Math.max(heightM, MIN_HEIGHT);
         return Math.max(0, ustar / KARMAN * Math.log(z / roughness(ustar, u10)));
+    }
+
+    /**
+     * Time a wind sea takes to reach its fetch-limited state, s: CEM II-2-35, t = 77.23 X^0.67 / (U^0.34 g^0.33) (SI, after
+     * Resio and Vincent 1982), for a 10 m wind u10 over a fetch (m; infinite: the fetch at which growth reaches the fully
+     * developed sea, x~ = 2.1e4).
+     */
+    public static double growthTime(double u10, double fetchM) {
+        check(u10);
+        double u = Math.max(u10, 0.5), x = Double.isFinite(fetchM) ? Math.max(fetchM, 1) : 2.1e4 * u * u / G;
+        return 77.23 * Math.pow(x, 0.67) / (Math.pow(u, 0.34) * Math.pow(G, 0.33));
+    }
+
+    /** Distances behind a barrier (in barrier heights) and the wind there as a share of the open wind (Brandle et al. 2002). */
+    private static final double[] SHELTER_DISTANCE = {5, 10, 15, 20, 30, 40};
+    private static final double[] SHELTER_SOLID = {0.25, 0.70, 0.90, 0.95, 1.00, 1.00}, SHELTER_TREES = {0.25, 0.35, 0.65, 0.85, 0.95, 1.00};
+
+    /**
+     * Wind behind a barrier as a share of the open wind, at a distance downwind of it in barrier heights: Brandle, Hodges
+     * and Zhou (2002, Univ. Nebraska Extension EC02-1763, fig. 2), a solid fence (100 % density: 25 % at 5 H, 70 % at
+     * 10 H, 95 % at 20 H, open by 30 H) or a dense multi-row tree belt (60-80 %: 25 %, 35 %, 85 %, 95 % at 30 H, taken
+     * open by 40 H); linear between their points and held at the 5 H value closer in (the minimum lies at 4-6 H).
+     */
+    public static double shelter(double heightsDownwind, boolean trees) {
+        double[] share = trees ? SHELTER_TREES : SHELTER_SOLID;
+        if (!(heightsDownwind > SHELTER_DISTANCE[0])) { return share[0]; }
+        for (int i = 1; i < SHELTER_DISTANCE.length; i++) {
+            if (heightsDownwind <= SHELTER_DISTANCE[i]) {
+                double f = (heightsDownwind - SHELTER_DISTANCE[i - 1]) / (SHELTER_DISTANCE[i] - SHELTER_DISTANCE[i - 1]);
+                return share[i - 1] + f * (share[i] - share[i - 1]);
+            }
+        }
+        return 1;
     }
 
     /** Wind-driven current at a depth below the surface (0 at the surface), m/s, along the wind. */
@@ -96,8 +142,9 @@ public final class SeaWind {
         }
         if (Double.isFinite(depthM)) {
             tp = Math.min(tp, 9.78 * Math.sqrt(depthM / G));
-            hs = Math.min(hs, CoastalWaves.SATURATED_HS_PER_DEPTH * depthM);
+            hs = Math.min(hs, LinearWave.MAX_HEIGHT_TO_DEPTH * depthM / 1.86);
         }
+        hs = Math.min(hs, (1 - 1e-9) * MAX_STEEPNESS * G * tp * tp / (2 * Math.PI));
         return new double[]{hs, tp};
     }
 }

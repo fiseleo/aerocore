@@ -22,10 +22,12 @@ import java.util.List;
  * linear. gridSecondOrder holds only the cheap part; gridCorrection adds the rest on a grid.
  * <p>
  * Coasts (CoastalWaves): each component becomes Re(M a e^{i theta}) with its envelope phasor M at the point. The
- * linear slope includes the envelope's gradient (so refracted, shortened waves have their own slopes); the second-order
- * part is evaluated from the enveloped phasors with the open sea's kernels, because Stokes-type theory is not valid in
- * the shallow water where the local kernels would differ (Ursell number above about 26) and cnoidal shoaling crests
- * are not modelled. A body samples a local view (at()): plane waves with the envelope's amplitude and phase at its
+ * linear slope includes the envelope's gradient (so refracted, shortened waves have their own slopes). The Choppy
+ * Wave Model part of the second order takes the local wavenumber, direction and coth(k h) (the coast's kernels): the
+ * surface particles' horizontal excursion a coth(k h) grows as the water shoals, so crests sharpen and troughs flatten
+ * toward the shore, as shoaling waves do, while the depth limit keeps the height below breaking. The Sharma-Dean
+ * correction keeps the open sea's kernels: its finite-depth difference terms grow without bound in shallow water
+ * (Ursell number above about 26), where cnoidal theory applies instead, which is not modelled. A body samples a local view (at()): plane waves with the envelope's amplitude and phase at its
  * position, travelling along the local phase gradient with the wavenumber and depth there, which agrees with the
  * coastal surface at that point and approximates it nearby (WKB).
  */
@@ -41,6 +43,7 @@ public final class CompiledWaves {
     /** Amplitudes over the ones the correction was decomposed with (SecondOrderCorrection.fold). */
     private final double[] fold;
     private static final ThreadLocal<double[][]> PHASES = ThreadLocal.withInitial(() -> new double[8][0]);
+    private static final ThreadLocal<double[][]> KERNELS = ThreadLocal.withInitial(() -> new double[2][0]);
 
     public CompiledWaves(WaveField field) {
         this.field = field;
@@ -69,8 +72,14 @@ public final class CompiledWaves {
 
     /** A view of open with other linear components (amplitude, wave vector, depth, phase), sharing its second-order kernels. */
     private CompiledWaves(CompiledWaves open, double[] amplitude, double[] kx, double[] kz, double[] depth, double[] phase, WaveField field) {
+        this(open, amplitude, kx, kz, depth, phase, field, open.sx, open.sz, open.sk, open.scoth);
+    }
+
+    /** A view with its own Choppy-Wave-Model kernels (sx, sz, sk, scoth); the correction stays the open sea's. */
+    private CompiledWaves(CompiledWaves open, double[] amplitude, double[] kx, double[] kz, double[] depth, double[] phase, WaveField field,
+                          double[] sx, double[] sz, double[] sk, double[] scoth) {
         this.field = field; this.amplitude = amplitude; this.kx = kx; this.kz = kz; this.depth = depth; this.phase = phase;
-        omega = open.omega; sx = open.sx; sz = open.sz; sk = open.sk; scoth = open.scoth; correction = open.correction;
+        omega = open.omega; this.sx = sx; this.sz = sz; this.sk = sk; this.scoth = scoth; correction = open.correction;
         int n = amplitude.length;
         k = new double[n]; cosineDenominator = new double[n]; sineDenominator = new double[n]; imageFactor = new double[n];
         double[] f = new double[n];
@@ -121,10 +130,29 @@ public final class CompiledWaves {
     }
 
     /**
+     * This sea without the components shorter than minWavelength (m), which a mesh of a quarter of that spacing cannot
+     * draw without aliasing; the same components are kept (at zero amplitude), so coastal envelopes still line up.
+     */
+    public CompiledWaves withoutShorterThan(double minWavelength) {
+        double kMax = 2 * Math.PI / minWavelength;
+        boolean any = false;
+        for (int i = 0; i < amplitude.length; i++) { any |= k[i] > kMax && amplitude[i] > 0; }
+        if (!any) { return this; }
+        double[] a = amplitude.clone();
+        java.util.List<LinearWave> kept = new ArrayList<>();
+        for (int i = 0; i < a.length; i++) {
+            LinearWave w = field.components().get(i);
+            if (k[i] > kMax) { a[i] = 0; kept.add(new LinearWave(0, w.wavelengthM(), w.directionRadians(), w.depthM(), w.phaseRadians())); }
+            else { kept.add(w); }
+        }
+        return new CompiledWaves(this, a, kx, kz, depth, phase, new WaveField(kept));
+    }
+
+    /**
      * This sea at (x, z) on a coast, its amplitudes times taper (0 to 1): each component is the plane wave with the
      * envelope's gain and phase at the point, travelling along the local phase gradient with the wavenumber of the
-     * local smoothed depth (so its frequency is unchanged) over that depth. The second-order part keeps the open sea's
-     * kernels as the coastal surface does. field() lists the same waves as LinearWaves for frequency-domain loads,
+     * local smoothed depth (so its frequency is unchanged) over that depth. The second-order part takes the coast's
+     * local kernels at the point (Choppy Wave Model) and the open sea's correction, as the coastal surface does. field() lists the same waves as LinearWaves for frequency-domain loads,
      * their amplitudes held within LinearWave's steepness and height limits. Without a coast (or outside its grid)
      * this is scaled(taper).
      */
@@ -136,6 +164,8 @@ public final class CompiledWaves {
         if (!(taper >= 0 && taper <= 1)) { throw new IllegalArgumentException("Amplitude factor must be in [0, 1]"); }
         double local = coast.depth(x, z);
         double[] a = new double[n], qx = new double[n], qz = new double[n], h = new double[n], ph = new double[n];
+        double[] lk = new double[n], lc = new double[n], lsx = new double[n], lsz = new double[n];
+        coast.kernels(x, z, lk, lc);
         List<LinearWave> waves = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
             double g2 = re[i] * re[i] + im[i] * im[i];
@@ -148,12 +178,13 @@ public final class CompiledWaves {
             h[i] = Double.isFinite(local) && local > 0 && local < 1e3 ? Math.max(local, MIN_DEPTH) : depth[i];
             double kl = CoastalWaves.wavenumber(omega[i], h[i]);
             qx[i] = kl * gx / length; qz[i] = kl * gz / length;
+            lsx[i] = lk[i] * gx / length; lsz[i] = lk[i] * gz / length;
             ph[i] = phase[i] + Math.atan2(im[i], re[i]) + (kx[i] - qx[i]) * x + (kz[i] - qz[i]) * z;
             double wavelength = 2 * Math.PI / kl, limit = 0.5 * LinearWave.MAX_STEEPNESS * wavelength;
             if (Double.isFinite(h[i])) { limit = Math.min(limit, 0.5 * LinearWave.MAX_HEIGHT_TO_DEPTH * h[i]); }
             waves.add(new LinearWave(Math.min(a[i], 0.999 * limit), wavelength, Math.atan2(qz[i], qx[i]), h[i], ph[i]));
         }
-        return new CompiledWaves(this, a, qx, qz, h, ph, new WaveField(waves));
+        return new CompiledWaves(this, a, qx, qz, h, ph, new WaveField(waves), lsx, lsz, lk, lc);
     }
 
     private static double[][] scratch(int n) {
@@ -226,6 +257,10 @@ public final class CompiledWaves {
         double[][] scratch = scratch(n);
         double[] cs = scratch[0], sn = scratch[1], re = scratch[2], im = scratch[3], reX = scratch[4], imX = scratch[5], reZ = scratch[6], imZ = scratch[7];
         boolean modulated = coast != null && coast.components() == n && coast.envelopes(x, z, re, im, reX, imX, reZ, imZ);
+        double[][] kernels = KERNELS.get();
+        if (kernels[0].length < n) { kernels[0] = new double[n]; kernels[1] = new double[n]; }
+        double[] lk = kernels[0], lc = kernels[1];
+        if (modulated) { coast.kernels(x, z, lk, lc); }
         double eta = 0, lx = 0, lz = 0, mean = 0, dx = 0, dz = 0, gx = 0, gz = 0, axx = 0, axz = 0, azz = 0, hxx = 0, hxz = 0, hzz = 0;
         for (int i = 0; i < n; i++) {
             double theta = kx[i] * x + kz[i] * z - omega[i] * t + phase[i], c0 = Math.cos(theta), s0 = Math.sin(theta);
@@ -236,13 +271,22 @@ public final class CompiledWaves {
                 dcx = reX[i] * c0 - imX[i] * s0 - kx[i] * s; dcz = reZ[i] * c0 - imZ[i] * s0 - kz[i] * s;
             } else { c = c0; s = s0; dcx = -kx[i] * s; dcz = -kz[i] * s; }
             cs[i] = c; sn[i] = s;
-            double a = amplitude[i], ex = sx[i] / sk[i], ez = sz[i] / sk[i], ac = a * scoth[i];
+            double a = amplitude[i], ex = sx[i] / sk[i], ez = sz[i] / sk[i], kk = sk[i], th = scoth[i];
+            if (modulated) {
+                // The local wave: along the phase gradient k + grad(delta), with the local wavenumber and coth(kh).
+                double g2 = re[i] * re[i] + im[i] * im[i], px = kx[i], pz = kz[i];
+                if (g2 > 1e-12) { px += (re[i] * imX[i] - im[i] * reX[i]) / g2; pz += (re[i] * imZ[i] - im[i] * reZ[i]) / g2; }
+                double pl = Math.hypot(px, pz);
+                if (pl > 1e-9) { ex = px / pl; ez = pz / pl; }
+                kk = lk[i]; th = lc[i];
+            }
+            double ac = a * th, qx = kk * ex, qz = kk * ez;
             eta += a * c; lx += a * dcx; lz += a * dcz;
-            mean += 0.5 * a * a * sk[i] * scoth[i] * (c * c + s * s);
+            mean += 0.5 * a * a * kk * th * (c * c + s * s);
             dx -= ac * ex * s; dz -= ac * ez * s;
-            gx -= a * sx[i] * s; gz -= a * sz[i] * s;
-            axx += ac * ex * sx[i] * c; axz += ac * ex * sz[i] * c; azz += ac * ez * sz[i] * c;
-            hxx += a * sx[i] * sx[i] * c; hxz += a * sx[i] * sz[i] * c; hzz += a * sz[i] * sz[i] * c;
+            gx -= a * qx * s; gz -= a * qz * s;
+            axx += ac * ex * qx * c; axz += ac * ex * qz * c; azz += ac * ez * qz * c;
+            hxx += a * qx * qx * c; hxz += a * qx * qz * c; hzz += a * qz * qz * c;
         }
         out[0] = eta; out[1] = lx; out[2] = lz;
         double[] second = {mean - (dx * gx + dz * gz), axx * gx + dx * hxx + axz * gz + dz * hxz, axz * gx + dx * hxz + azz * gz + dz * hzz};
@@ -298,6 +342,8 @@ public final class CompiledWaves {
     }
 
     public WaveField field() { return field; }
+    /** Amplitude of component i, m (0 where a drawing left it out). */
+    public double amplitude(int i) { return amplitude[i]; }
     public boolean isEmpty() { return amplitude.length == 0; }
     public int size() { return amplitude.length; }
     /** Upper bound of the second-order surface elevation above or below still water, m (the linear bound is WaveField.maxAmplitude). */
@@ -365,7 +411,7 @@ public final class CompiledWaves {
         double sum = 0, z = Math.min(heightAboveStill, 0);
         for (int i = 0; i < amplitude.length; i++) {
             double zc = Double.isFinite(depth[i]) ? Math.max(z, -depth[i]) : z, decay = Math.exp(k[i] * zc);
-            sum += amplitude[i] * (decay + imageFactor[i] / decay) / cosineDenominator[i] * cos[i];
+            sum += amplitude[i] * (decay + image(imageFactor[i], decay)) / cosineDenominator[i] * cos[i];
         }
         return sum;
     }
@@ -377,7 +423,7 @@ public final class CompiledWaves {
         double ux = 0, uy = 0, uz = 0, ax = 0, ay = 0, az = 0, z = Math.min(heightAboveStill, 0);
         for (int i = 0; i < amplitude.length; i++) {
             double zc = Double.isFinite(depth[i]) ? Math.max(z, -depth[i]) : z;
-            double decay = Math.exp(k[i] * zc), image = imageFactor[i] / decay;
+            double decay = Math.exp(k[i] * zc), image = image(imageFactor[i], decay);
             double horizontal = (decay + image) / sineDenominator[i], vertical = (decay - image) / sineDenominator[i];
             double speed = amplitude[i] * omega[i], accel = speed * omega[i], dirX = kx[i] / k[i], dirZ = kz[i] / k[i];
             double uh = speed * horizontal * cos[i], ah = accel * horizontal * sin[i];
@@ -403,9 +449,9 @@ public final class CompiledWaves {
             double dm = geometric && (!finite || low >= -depth[i]) ? Math.sqrt(dl * dh)
                     : Math.exp(k[i] * (finite ? Math.max(zm, -depth[i]) : zm));
             double f = imageFactor[i], a = amplitude[i];
-            hl += a * (dl + f / dl) / cosineDenominator[i] * c;
-            hh += a * (dh + f / dh) / cosineDenominator[i] * c;
-            double im = f / dm, horizontal = (dm + im) / sineDenominator[i], vertical = (dm - im) / sineDenominator[i];
+            hl += a * (dl + image(f, dl)) / cosineDenominator[i] * c;
+            hh += a * (dh + image(f, dh)) / cosineDenominator[i] * c;
+            double im = image(f, dm), horizontal = (dm + im) / sineDenominator[i], vertical = (dm - im) / sineDenominator[i];
             double speed = a * omega[i], accel = speed * omega[i], dirX = kx[i] / k[i], dirZ = kz[i] / k[i];
             double uh = speed * horizontal * c, ah = accel * horizontal * s;
             ux += uh * dirX; uz += uh * dirZ; uy += speed * vertical * s;
@@ -413,6 +459,13 @@ public final class CompiledWaves {
         }
         out[0] = hl; out[1] = hh; out[2] = ux; out[3] = uy; out[4] = uz; out[5] = ax; out[6] = ay; out[7] = az;
     }
+    /**
+     * The bed's image term exp(-k(z+2h)) = exp(-2kh) / exp(kz) from a component's imageFactor and depth decay. It never
+     * exceeds the decay (z >= -h), so when the decay underflows to 0 (k|z| > 745: centimetre ripples of a short-fetch
+     * wind sea a metre or more down) the image is 0 as well, not 0/0.
+     */
+    private static double image(double factor, double decay) { return decay > 0 ? factor / decay : 0; }
+
     /** Orbital velocity at a point, m/s; equals WaveField.velocity. */
     public Vec3d velocity(Vec3d point, double stillWaterY, double t) {
         double[] cos = new double[amplitude.length], sin = new double[amplitude.length], out = new double[6];
@@ -435,6 +488,8 @@ public final class CompiledWaves {
         for (int r = 0; r < 10; r++) { Arrays.fill(s[r], 0, points, 0); }
         double[] ddx = s[0], ddz = s[1], gx = s[2], gz = s[3], axx = s[4], axz = s[5], azz = s[6], hxx = s[7], hxz = s[8], hzz = s[9];
         for (int c = 0; c < amplitude.length; c++) {
+            // Components a drawing left out (withoutShorterThan) add nothing; skip their recurrences.
+            if (amplitude[c] == 0) { continue; }
             double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz), a = amplitude[c], ex = sx[c] / sk[c], ez = sz[c] / sk[c], ac = a * scoth[c];
             double cdx = ac * ex, cdz = ac * ez, cgx = a * sx[c], cgz = a * sz[c];
             double cxx = ac * ex * sx[c], cxz = ac * ex * sz[c], czz = ac * ez * sz[c], qxx = a * sx[c] * sx[c], qxz = a * sx[c] * sz[c], qzz = a * sz[c] * sz[c];
@@ -493,32 +548,40 @@ public final class CompiledWaves {
         int cnz = coast.nz();
         double inv = 1 / coast.spacing();
         for (int c = 0; c < amplitude.length; c++) {
-            float[] cr = coast.re[c], ci = coast.im[c];
-            double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz), a = amplitude[c], ex = sx[c] / sk[c], ez = sz[c] / sk[c], ac = a * scoth[c];
-            double half = 0.5 * a * a * sk[c] * scoth[c];
+            if (amplitude[c] == 0) { continue; }
+            float[] cr = coast.re[c], ci = coast.im[c], ck = coast.kLocal[c], cth = coast.cothLocal[c];
+            double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz), a = amplitude[c];
             for (int i = 0; i < nx; i++) {
                 double theta = kx[c] * (x0 + i * dx) + kz[c] * z0 - omega[c] * t + phase[c], re = Math.cos(theta), im = Math.sin(theta);
                 int row = i * nz;
                 for (int j = 0; j < nz; j++) {
                     int p = row + j, q = base[p];
-                    double mr = 1, mi = 0, mrx = 0, mix = 0, mrz = 0, miz = 0;
+                    double mr = 1, mi = 0, mrx = 0, mix = 0, mrz = 0, miz = 0, ex = sx[c] / sk[c], ez = sz[c] / sk[c], kk = sk[c], th = scoth[c];
                     if (q >= 0) {
-                        double fx = fxs[p], fz = fzs[p];
+                        double fx = fxs[p], fz = fzs[p], w00 = (1 - fx) * (1 - fz), w01 = (1 - fx) * fz, w10 = fx * (1 - fz), w11 = fx * fz;
                         double r00 = cr[q], r01 = cr[q + 1], r10 = cr[q + cnz], r11 = cr[q + cnz + 1];
                         double i00 = ci[q], i01 = ci[q + 1], i10 = ci[q + cnz], i11 = ci[q + cnz + 1];
                         mr = (r00 * (1 - fz) + r01 * fz) * (1 - fx) + (r10 * (1 - fz) + r11 * fz) * fx;
                         mi = (i00 * (1 - fz) + i01 * fz) * (1 - fx) + (i10 * (1 - fz) + i11 * fz) * fx;
                         mrx = ((r10 - r00) * (1 - fz) + (r11 - r01) * fz) * inv; mix = ((i10 - i00) * (1 - fz) + (i11 - i01) * fz) * inv;
                         mrz = ((r01 - r00) * (1 - fx) + (r11 - r10) * fx) * inv; miz = ((i01 - i00) * (1 - fx) + (i11 - i10) * fx) * inv;
+                        // The local wave's direction, wavenumber and coth(kh), as surfaceTerms takes them.
+                        double g2 = mr * mr + mi * mi, px = kx[c], pz = kz[c];
+                        if (g2 > 1e-12) { px += (mr * mix - mi * mrx) / g2; pz += (mr * miz - mi * mrz) / g2; }
+                        double pl = Math.hypot(px, pz);
+                        if (pl > 1e-9) { ex = px / pl; ez = pz / pl; }
+                        kk = w00 * ck[q] + w01 * ck[q + 1] + w10 * ck[q + cnz] + w11 * ck[q + cnz + 1];
+                        th = w00 * cth[q] + w01 * cth[q + 1] + w10 * cth[q + cnz] + w11 * cth[q + cnz + 1];
                     }
+                    double ac = a * th, qx = kk * ex, qz = kk * ez, half = 0.5 * a * a * kk * th;
                     double cc = mr * re - mi * im, ss = mr * im + mi * re;
                     height[p] += a * cc;
                     slopeX[p] += a * (mrx * re - mix * im - kx[c] * ss);
                     slopeZ[p] += a * (mrz * re - miz * im - kz[c] * ss);
                     mean[p] += half * (cc * cc + ss * ss);
-                    ddx[p] -= ac * ex * ss; ddz[p] -= ac * ez * ss; gx[p] -= a * sx[c] * ss; gz[p] -= a * sz[c] * ss;
-                    axx[p] += ac * ex * sx[c] * cc; axz[p] += ac * ex * sz[c] * cc; azz[p] += ac * ez * sz[c] * cc;
-                    hxx[p] += a * sx[c] * sx[c] * cc; hxz[p] += a * sx[c] * sz[c] * cc; hzz[p] += a * sz[c] * sz[c] * cc;
+                    ddx[p] -= ac * ex * ss; ddz[p] -= ac * ez * ss; gx[p] -= a * qx * ss; gz[p] -= a * qz * ss;
+                    axx[p] += ac * ex * qx * cc; axz[p] += ac * ex * qz * cc; azz[p] += ac * ez * qz * cc;
+                    hxx[p] += a * qx * qx * cc; hxz[p] += a * qx * qz * cc; hzz[p] += a * qz * qz * cc;
                     double next = re * stepRe - im * stepIm;
                     im = re * stepIm + im * stepRe;
                     re = next;
@@ -540,51 +603,102 @@ public final class CompiledWaves {
         gridCorrection(null, x0, z0, dx, dz, nx, nz, t, height2, slope2X, slope2Z);
     }
 
+    /**
+     * The correction's modes with the fold factors and wave vectors multiplied in, per mode r: {u, u kx, u kz} over the
+     * components, cosine modes first. Built on first use (a benign race recomputes the same values).
+     */
+    private volatile double[][] foldedModes;
+
+    private double[][] foldedModes() {
+        double[][] f = foldedModes;
+        if (f != null) { return f; }
+        int rc = correction.cosModes.length, rs = correction.sinModes.length, n = amplitude.length;
+        f = new double[3 * (rc + rs)][n];
+        for (int r = 0; r < rc + rs; r++) {
+            double[] u = r < rc ? correction.cosModes[r] : correction.sinModes[r - rc];
+            for (int c = 0; c < n; c++) {
+                double v = u[c] * fold[c];
+                f[3 * r][c] = v; f[3 * r + 1][c] = v * sx[c]; f[3 * r + 2][c] = v * sz[c];
+            }
+        }
+        foldedModes = f;
+        return f;
+    }
+
+    private static final ThreadLocal<double[][]> ROW_SCRATCH = ThreadLocal.withInitial(() -> new double[2][0]);
+
+    /** Phasors of row x of a grid (z0 + j dz, j < nz) into cos/sin[j n + c], by recurrence along z. */
+    private void rowPhases(double x, double z0, double dz, int nz, double t, double[] cos, double[] sin) {
+        int n = amplitude.length;
+        for (int c = 0; c < n; c++) {
+            double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz);
+            double theta = kx[c] * x + kz[c] * z0 - omega[c] * t + phase[c], re = Math.cos(theta), im = Math.sin(theta);
+            for (int j = 0; j < nz; j++) {
+                cos[j * n + c] = re; sin[j * n + c] = im;
+                double next = re * stepRe - im * stepIm;
+                im = re * stepIm + im * stepRe; re = next;
+            }
+        }
+    }
+
     /** gridCorrection with every phasor enveloped by the coast (null for open sea), as surfaceTerms with a coast. */
     public void gridCorrection(CoastalWaves coast, double x0, double z0, double dx, double dz, int nx, int nz, double t,
                                double[] height2, double[] slope2X, double[] slope2Z) {
-        int points = nx * nz, rc = correction.cosModes.length, rs = correction.sinModes.length;
+        int rc = correction.cosModes.length, rs = correction.sinModes.length, n = amplitude.length;
         if (rc + rs == 0) { return; }
-        double[][] acc = new double[3 * (rc + rs)][points];
-        double[] fxs = new double[points], fzs = new double[points];
-        int[] base = coast == null ? null : stencils(coast, x0, z0, dx, dz, nx, nz, fxs, fzs).clone();
-        int cnz = coast == null ? 0 : coast.nz();
-        for (int c = 0; c < amplitude.length; c++) {
-            double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz);
-            float[] cr = coast == null ? null : coast.re[c], ci = coast == null ? null : coast.im[c];
-            for (int i = 0; i < nx; i++) {
-                double theta = kx[c] * (x0 + i * dx) + kz[c] * z0 - omega[c] * t + phase[c], re = Math.cos(theta), im = Math.sin(theta);
-                int row = i * nz;
-                for (int j = 0; j < nz; j++) {
-                    int p = row + j;
-                    double cc = re, ss = im;
-                    if (base != null && base[p] >= 0) {
-                        int q = base[p];
-                        double fx = fxs[p], fz = fzs[p];
-                        double mr = (cr[q] * (1 - fz) + cr[q + 1] * fz) * (1 - fx) + (cr[q + cnz] * (1 - fz) + cr[q + cnz + 1] * fz) * fx;
-                        double mi = (ci[q] * (1 - fz) + ci[q + 1] * fz) * (1 - fx) + (ci[q + cnz] * (1 - fz) + ci[q + cnz + 1] * fz) * fx;
-                        cc = mr * re - mi * im; ss = mr * im + mi * re;
+        double[][] modes = foldedModes();
+        double[][] row = ROW_SCRATCH.get();
+        if (row[0].length < n * nz) { row[0] = new double[n * nz]; row[1] = new double[n * nz]; }
+        double[] cs = row[0], sn = row[1];
+        boolean coastal = coast != null && coast.components() == n && !coast.uniform();
+        int cnz = coastal ? coast.nz() : 0;
+        for (int i = 0; i < nx; i++) {
+            double x = x0 + i * dx;
+            rowPhases(x, z0, dz, nz, t, cs, sn);
+            if (coastal) { envelopeRow(coast, x, z0, dz, nz, cs, sn, cnz); }
+            for (int j = 0; j < nz; j++) {
+                int base = j * n, p = i * nz + j;
+                double h = 0, hx = 0, hz = 0;
+                for (int r = 0; r < rc + rs; r++) {
+                    double[] u = modes[3 * r], ux = modes[3 * r + 1], uz = modes[3 * r + 2];
+                    // v = u . (cos or sin), vx = -/+ ux . (sin or cos), vz likewise, as four interleaved partial sums.
+                    double[] main = r < rc ? cs : sn, other = r < rc ? sn : cs;
+                    double v0 = 0, v1 = 0, v2 = 0, v3 = 0, x0s = 0, x1s = 0, x2s = 0, x3s = 0, z0s = 0, z1s = 0, z2s = 0, z3s = 0;
+                    int c = 0;
+                    for (; c + 3 < n; c += 4) {
+                        int q = base + c;
+                        v0 += u[c] * main[q]; v1 += u[c + 1] * main[q + 1]; v2 += u[c + 2] * main[q + 2]; v3 += u[c + 3] * main[q + 3];
+                        x0s += ux[c] * other[q]; x1s += ux[c + 1] * other[q + 1]; x2s += ux[c + 2] * other[q + 2]; x3s += ux[c + 3] * other[q + 3];
+                        z0s += uz[c] * other[q]; z1s += uz[c + 1] * other[q + 1]; z2s += uz[c + 2] * other[q + 2]; z3s += uz[c + 3] * other[q + 3];
                     }
-                    for (int r = 0; r < rc; r++) {
-                        double u = correction.cosModes[r][c] * fold[c];
-                        acc[3 * r][p] += u * cc; acc[3 * r + 1][p] -= u * sx[c] * ss; acc[3 * r + 2][p] -= u * sz[c] * ss;
-                    }
-                    for (int r = 0; r < rs; r++) {
-                        double u = correction.sinModes[r][c] * fold[c];
-                        int b = 3 * (rc + r);
-                        acc[b][p] += u * ss; acc[b + 1][p] += u * sx[c] * cc; acc[b + 2][p] += u * sz[c] * cc;
-                    }
-                    double next = re * stepRe - im * stepIm;
-                    im = re * stepIm + im * stepRe;
-                    re = next;
+                    for (; c < n; c++) { int q = base + c; v0 += u[c] * main[q]; x0s += ux[c] * other[q]; z0s += uz[c] * other[q]; }
+                    double sign = r < rc ? -1 : 1, v = (v0 + v1) + (v2 + v3), vx = sign * ((x0s + x1s) + (x2s + x3s)), vz = sign * ((z0s + z1s) + (z2s + z3s));
+                    double w = r < rc ? correction.cosWeights[r] : correction.sinWeights[r - rc];
+                    h += w * v * v; hx += 2 * w * v * vx; hz += 2 * w * v * vz;
                 }
+                height2[p] += h; slope2X[p] += hx; slope2Z[p] += hz;
             }
         }
-        for (int p = 0; p < points; p++) {
-            for (int r = 0; r < rc + rs; r++) {
-                double w = r < rc ? correction.cosWeights[r] : correction.sinWeights[r - rc];
-                double v = acc[3 * r][p];
-                height2[p] += w * v * v; slope2X[p] += 2 * w * v * acc[3 * r + 1][p]; slope2Z[p] += 2 * w * v * acc[3 * r + 2][p];
+    }
+
+    /** Multiplies a row's phasors (cos/sin[j n + c]) by the coast's envelope phasors at (x, z0 + j dz), in place. */
+    private void envelopeRow(CoastalWaves coast, double x, double z0, double dz, int nz, double[] cs, double[] sn, int cnz) {
+        int n = amplitude.length;
+        double gx = (x - coast.x0()) / coast.spacing();
+        if (!(gx >= 0) || gx > coast.nx() - 1) { return; }
+        int a = Math.min((int) gx, coast.nx() - 2);
+        double fx = gx - a;
+        for (int j = 0; j < nz; j++) {
+            double gz = (z0 + j * dz - coast.z0()) / coast.spacing();
+            if (!(gz >= 0) || gz > coast.nz() - 1) { continue; }
+            int b = Math.min((int) gz, coast.nz() - 2), q = a * cnz + b, base = j * n;
+            double fz = gz - b, w00 = (1 - fx) * (1 - fz), w01 = (1 - fx) * fz, w10 = fx * (1 - fz), w11 = fx * fz;
+            for (int c = 0; c < n; c++) {
+                float[] cr = coast.re[c], ci = coast.im[c];
+                double mr = w00 * cr[q] + w01 * cr[q + 1] + w10 * cr[q + cnz] + w11 * cr[q + cnz + 1];
+                double mi = w00 * ci[q] + w01 * ci[q + 1] + w10 * ci[q + cnz] + w11 * ci[q + cnz + 1];
+                double re = cs[base + c], im = sn[base + c];
+                cs[base + c] = mr * re - mi * im; sn[base + c] = mr * im + mi * re;
             }
         }
     }
@@ -597,6 +711,7 @@ public final class CompiledWaves {
     public void grid(double x0, double z0, double dx, double dz, int nx, int nz, double t, double[] height, double[] slopeX, double[] slopeZ) {
         Arrays.fill(height, 0, nx * nz, 0); Arrays.fill(slopeX, 0, nx * nz, 0); Arrays.fill(slopeZ, 0, nx * nz, 0);
         for (int c = 0; c < amplitude.length; c++) {
+            if (amplitude[c] == 0) { continue; }
             double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz), a = amplitude[c];
             for (int i = 0; i < nx; i++) {
                 double theta = kx[c] * (x0 + i * dx) + kz[c] * z0 - omega[c] * t + phase[c], re = Math.cos(theta), im = Math.sin(theta);

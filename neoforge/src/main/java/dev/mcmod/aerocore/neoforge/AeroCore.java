@@ -41,6 +41,8 @@ public final class AeroCore {
                 .then(ProbeCommands.tree())
                 .then(PlatformCommands.tree())
                 .then(WaveCommands.tree())
+                .then(dev.mcmod.aerocore.neoforge.probe.WindCommands.tree())
+                .then(dev.mcmod.aerocore.neoforge.probe.GroundSurfaces.tree())
                 .then(dev.mcmod.aerocore.neoforge.probe.HullCommands.tree())
                 .then(dev.mcmod.aerocore.neoforge.probe.PlaningCommands.tree())
                 .then(Commands.literal("sample")

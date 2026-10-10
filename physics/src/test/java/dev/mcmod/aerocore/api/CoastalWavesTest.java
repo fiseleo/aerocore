@@ -130,6 +130,51 @@ class CoastalWavesTest {
         }
     }
 
+    @Test void aWindSeaGrowsWithFetchBehindLandInsteadOfStayingInShadow() {
+        // A 12 m/s wind toward +x over a 200 x 100 m, 4 m deep lake (land all round) with a 10 x 10 m island; the sea is
+        // the one this wind raises over 100 m of fetch.
+        double u = 12, design = 100;
+        double[] hsTp = SeaWind.sea(u, design, Double.POSITIVE_INFINITY);
+        WaveField sea = SeaSpectrum.synthesize(hsTp[0], hsTp[1], SeaSpectrum.recommendedGamma(hsTp[0], hsTp[1]), 0, 4, 4, 16, 5);
+        int nx = 104, nz = 54;
+        float[] d = grid(nx, nz, (i, j) -> {
+            boolean lake = i >= 2 && i < nx - 2 && j >= 2 && j < nz - 2, island = Math.abs(i - 40) <= 2 && Math.abs(j - 27) <= 2;
+            return lake && !island ? 4.0 : 0.0;
+        });
+        CoastalWaves c = CoastalWaves.build(0, 0, 2, nx, nz, d, sea, new CoastalWaves.WindSea(u, 0, 0, hsTp[1]));
+        // The gain is relative to the Hs of the components as synthesised (a few percent off the target with 16 bins).
+        double hsSea = 4 * Math.sqrt(sea.components().stream().mapToDouble(w -> 0.5 * w.amplitudeM() * w.amplitudeM()).sum());
+        double[] lee = new double[4];
+        StringBuilder row = new StringBuilder();
+        for (double x : new double[]{8, 40, 100, 160, 200}) { row.append(String.format(" x%.0f:%.2f", x, envelope(c, x, 30)[0])); }
+        for (int k = 0; k < 4; k++) { lee[k] = envelope(c, 86 + 20 * k, 54)[0]; }
+        System.out.printf("Wind sea on a lake (Hs at 100 m fetch %.3f m, Tp %.2f s): gain along z = 30:%s; behind the island %.2f %.2f %.2f %.2f%n",
+                hsTp[0], hsTp[1], row, lee[0], lee[1], lee[2], lee[3]);
+        // The gain is the fetch growth Hs(fetch) / Hs(100 m) (JONSWAP's square root of fetch) until the sea reaches
+        // the steepness limit at its own peak period (its frequencies stay as synthesised).
+        double steepest = Math.max(hsSea, SeaWind.MAX_STEEPNESS * Atmosphere.GRAVITY_MPS2 * hsTp[1] * hsTp[1] / (2 * Math.PI));
+        for (double x : new double[]{40, 100, 160}) {
+            double expected = Math.min(SeaWind.sea(u, x - 2, Double.POSITIVE_INFINITY)[0], steepest) / hsSea;
+            // Within 10 %: the fetch is measured on the 2 m grid and the growth averaged over 3 x 3 nodes.
+            assertEquals(expected, envelope(c, x, 30)[0], 0.10 * expected, "Growth with fetch at x = " + x);
+        }
+        assertTrue(envelope(c, 8, 30)[0] < 0.4, "Small waves at the upwind shore");
+        // Behind the island the sea starts again from the island's shore and regrows downwind.
+        assertTrue(lee[0] < lee[1] && lee[1] < lee[2] && lee[2] < lee[3], "Regrowth behind the island");
+        assertTrue(lee[0] < 0.8 * envelope(c, 86, 30)[0], "Sheltered close behind the island");
+        // With the upwind shore open to the grid's edge, the open water beyond the grid adds its fetch.
+        float[] bay = grid(nx, nz, (i, j) -> j >= 2 && j < nz - 2 && i < nx - 2 ? 4.0 : 0.0);
+        CoastalWaves open = CoastalWaves.build(0, 0, 2, nx, nz, bay, sea, new CoastalWaves.WindSea(u, 0, 1000, hsTp[1]));
+        double far = SeaWind.sea(u, 1000 + 10, Double.POSITIVE_INFINITY)[0] / hsSea, limited = Math.min(far, steepest / hsSea);
+        System.out.printf("Bay open to 1 km of sea upwind: gain at x = 8 m %.2f (fetch growth %.2f, steepness limit %.2f)%n",
+                envelope(open, 8, 30)[0], far, steepest / hsSea);
+        assertEquals(limited, envelope(open, 8, 30)[0], 0.05 * limited, "Fetch beyond the grid counts, up to the steepness limit");
+        // Nowhere steeper than DNV's limit at the spectrum's peak period (a 0.14 lake grew 3 times past it and foamed over).
+        for (double x = 4; x < 200; x += 6) for (double z = 6; z < 100; z += 6) {
+            assertTrue(envelope(open, x, z)[0] * hsSea <= 1.05 * steepest, "Within the steepness limit at " + x + ", " + z);
+        }
+    }
+
     @Test void largestRegionBuildsInAboutASecond() {
         // A 128 m region: a 129 x 129 survey of a sloping, island-studded bed under a 32-component sea (reported, not asserted).
         WaveField sea = SeaSpectrum.synthesize(1.2, 6, 3.3, 0.3, 4, 15, 32, 3);
@@ -139,6 +184,25 @@ class CoastalWavesTest {
         CoastalWaves c = CoastalWaves.build(0, 0, 2, 129, 129, bed, sea);
         System.out.printf("Coastal build, 129 x 129 nodes x 32 components: %.0f ms, largest gain %.2f%n", (System.nanoTime() - start) / 1e6, c.maxGain());
         assertFalse(c.uniform());
+    }
+
+    @Test void crestsSharpenAsTheWaterShoals() {
+        // One 8 s wave over the 1:10 beach: crest height over trough depth grows toward the shore (local kernels).
+        double omega = 2 * Math.PI / 8, k0 = CoastalWaves.wavenumber(omega, 20);
+        WaveField sea = new WaveField(List.of(new LinearWave(0.3, 2 * Math.PI / k0, 0, 20, 0)));
+        CoastalWaves c = beach(sea, 96, 41);
+        CompiledWaves waves = new CompiledWaves(sea);
+        double[] terms = new double[6], ratio = new double[3], depths = {14, 6, 3};
+        for (int q = 0; q < 3; q++) {
+            double x = 10 * (20 - depths[q]), crest = -1e9, trough = 1e9;
+            for (double t = 0; t < 8; t += 0.02) {
+                waves.surfaceTerms(x, 40, t, c, terms);
+                crest = Math.max(crest, terms[0] + terms[3]); trough = Math.min(trough, terms[0] + terms[3]);
+            }
+            ratio[q] = crest / -trough;
+        }
+        System.out.printf("Crest over trough on the beach at 14 / 6 / 3 m: %.3f / %.3f / %.3f%n", ratio[0], ratio[1], ratio[2]);
+        assertTrue(ratio[0] > 1 && ratio[1] > ratio[0] && ratio[2] > ratio[1], "Crests sharpen toward the shore");
     }
 
     /** A short-crested sea on the plane beach of planeBeachFollowsSnellAndShoaling. */

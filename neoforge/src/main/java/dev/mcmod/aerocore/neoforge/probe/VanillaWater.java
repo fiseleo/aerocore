@@ -50,7 +50,7 @@ public final class VanillaWater {
         double f = waterDamping(entity, height);
         if (!(f > 0 && f < 1)) { return; }
         double wetMiddle = box.minY + Math.min(height, box.getYsize()) / 2;
-        Vec3d u = SeaSurface.waterVelocity(region, x, wetMiddle, z, surface, t);
+        Vec3d u = SeaSurface.waterVelocity(level, region, x, wetMiddle, z, surface, t);
         double gain = (1 - f) / f * MinecraftUnits.TICK_SECONDS;
         entity.setDeltaMovement(entity.getDeltaMovement().add(new Vec3(u.x() * gain, 0, u.z() * gain)));
     }

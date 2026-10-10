@@ -26,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <li>Oars: each blade is a flat plate (C_D 1.2, Hoerner) slipping through the water at v_s, with
  * (rho/2) C_D A v_s^2 (U + v_s) = P_drive: the drive power goes partly into the boat (U) and partly into the water
  * (v_s), Kleshnev's (1999) blade efficiency U / (U + v_s). The stroke-averaged thrust is the drive fraction times
- * the drive force. Oar size by Shaw and Tenney's rule for the beam. The blade moves aft relative to the boat no faster
+ * the drive force; with a stroke phase (Oars) the force comes only during the drive, as a half sine with that mean
+ * (pi/2 times it at mid-drive), so the boat surges and slows with every stroke. Oar size by Shaw and Tenney's rule for the beam. The blade moves aft relative to the boat no faster
  * than the rower sweeps it (BLADE_SPEED, from handle speed and oar geometry), so its slip through the water is at most
  * BLADE_SPEED - U: a fast boat outruns its oars, and one oar cannot spin the boat faster than its blade moves aft
  * (the oarlock side swings forward at the yaw rate times the reach).</li>
@@ -35,9 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * acting at the freeboard's middle; and on each person aboard, C_D A 0.35 m^2 facing the wind and 0.25 m^2 side-on for
  * a seated adult above the gunwale (upright cyclists 0.27-0.52 m^2 with their bicycle, Crouch et al. 2017, Sports Eng.
  * 20:81), scaled by (mass / 75 kg)^(2/3) for other riders (geometric similarity, a rule), 0.15 m above their centre of
- * mass. The wind at each height comes from SeaWind's log profile above the still water level.</li>
+ * mass. The wind at each height comes from SeaWind's log profile above the still water level, plus the gust.</li>
  * </ul>
- * Not modelled: the stroke-by-stroke surge, the crew balancing the boat, spray and water shipped over the gunwale,
+ * Not modelled: the rower's body moving fore and aft, the crew balancing the boat, spray and water shipped over the gunwale,
  * gusts, and ground contact (on land the boat is vanilla's level box; the caller relaxes tilt there).
  */
 public final class Rowboat {
@@ -116,9 +117,23 @@ public final class Rowboat {
     /** Someone or something on board: mass, position of its centre of mass (forward, height above the bottom), own inertia. */
     public record Passenger(double massKg, double forwardM, double heightM, double ownInertiaKgM2) {}
 
-    /** Oar commands: share of the rower's power on each oar, -1 to 1 (negative backs water). */
-    public record Oars(double left, double right) {
+    /**
+     * Oar commands: share of the rower's power on each oar, -1 to 1 (negative backs water), and where each oar is in its
+     * stroke at the tick's start (0 to 1, the drive first; NaN: the stroke-averaged thrust).
+     */
+    public record Oars(double left, double right, double leftPhase, double rightPhase) {
         public static final Oars NONE = new Oars(0, 0);
+        public Oars(double left, double right) { this(left, right, Double.NaN, Double.NaN); }
+    }
+
+    /**
+     * Thrust of an oar over its stroke-averaged value at a stroke phase (0 to 1): a half sine over the drive
+     * (DRIVE_FRACTION), zero through the recovery; its mean over a stroke is 1. NaN phase: 1.
+     */
+    public static double strokeFactor(double phase) {
+        if (Double.isNaN(phase)) { return 1; }
+        double p = phase - Math.floor(phase);
+        return p < DRIVE_FRACTION ? Math.PI / 2 * Math.sin(Math.PI * p / DRIVE_FRACTION) / DRIVE_FRACTION : 0;
     }
 
     /**
@@ -137,9 +152,13 @@ public final class Rowboat {
         Vec3d velocity(double x, double z);
     }
 
-    /** The air: the 10 m wind (horizontal, m/s, the way it blows) and the air density (kg/m^3). */
-    public record Air(Vec3d wind10, double density) {
-        public static final Air CALM = new Air(Vec3d.ZERO, 1.225);
+    /**
+     * The air: the 10 m mean wind (horizontal, m/s, the way it blows), the gust on top of it at the boat (WindGusts; the
+     * same at every height near the surface) and the air density (kg/m^3).
+     */
+    public record Air(Vec3d wind10, Vec3d gust, double density) {
+        public static final Air CALM = new Air(Vec3d.ZERO, Vec3d.ZERO, 1.225);
+        public Air(Vec3d wind10, double density) { this(wind10, Vec3d.ZERO, density); }
     }
 
     /** One tick's result with diagnostics (forces averaged over the tick). */
@@ -343,7 +362,8 @@ public final class Rowboat {
                     if (share == 0) { continue; }
                     Vec3d blade = x.bottom().add(offset(x.yaw(), x.pitch(), x.roll(), 0, side * OAR_REACH, draft));
                     double speedAlong = x.velocity().add(omega.cross(blade.subtract(cg))).subtract(flow).dot(f) * Math.signum(share);
-                    double t = Math.signum(share) * oarThrust(Math.abs(share) * ROWER_POWER, speedAlong, density);
+                    double phase = (side < 0 ? oars.leftPhase() : oars.rightPhase()) + STROKE_RATE * h * (step + 0.5);
+                    double t = Math.signum(share) * oarThrust(Math.abs(share) * ROWER_POWER, speedAlong, density) * strokeFactor(phase);
                     Vec3d push = f.scale(t);
                     force = force.add(push); torque = torque.add(blade.subtract(cg).cross(push));
                     thrust += t;
@@ -351,9 +371,9 @@ public final class Rowboat {
                 thrustSum += thrust;
             }
             double windSpeed = air.wind10().length();
-            if (windSpeed > 0) {
+            if (windSpeed > 0 || air.gust().length() > 0) {
                 // Heights above the water from the bottom's depth below it (draft) at this substep.
-                Vec3d direction = air.wind10().scale(1 / windSpeed);
+                Vec3d direction = windSpeed > 0 ? air.wind10().scale(1 / windSpeed) : Vec3d.ZERO;
                 double freeboard = Math.max(0, DEPTH - draft);
                 if (freeboard > 0) {
                     Vec3d point = x.bottom().add(offset(x.yaw(), x.pitch(), x.roll(), 0, 0, draft + freeboard / 2));
@@ -396,7 +416,7 @@ public final class Rowboat {
     private static Vec3d windLoad(Air air, Vec3d direction, double u10, double height, Vec3d point, State x, Vec3d omega, Vec3d cg,
                                   Vec3d f, Vec3d r, double endArea, double sideArea) {
         Vec3d moving = x.velocity().add(omega.cross(point.subtract(cg)));
-        Vec3d relative = direction.scale(SeaWind.speedAt(u10, height)).subtract(new Vec3d(moving.x(), 0, moving.z()));
+        Vec3d relative = direction.scale(u10 > 0 ? SeaWind.speedAt(u10, height) : 0).add(air.gust()).subtract(new Vec3d(moving.x(), 0, moving.z()));
         double along = relative.dot(f), across = relative.dot(r);
         return f.scale(0.5 * air.density() * endArea * along * Math.abs(along)).add(r.scale(0.5 * air.density() * sideArea * across * Math.abs(across)));
     }

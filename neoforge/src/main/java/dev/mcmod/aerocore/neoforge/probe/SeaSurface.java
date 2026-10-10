@@ -161,7 +161,7 @@ public final class SeaSurface {
      * Water velocity at a point of a governed column whose surface is at surfaceY: the orbital velocity plus the
      * wind-driven drift at the point's depth below that surface, m/s.
      */
-    public static Vec3d waterVelocity(WaveRegion region, double x, double y, double z, double surfaceY, double t) {
-        return region.orbitalVelocity(x, y, z, t).add(region.windDrift(x, z, surfaceY - y));
+    public static Vec3d waterVelocity(Level level, WaveRegion region, double x, double y, double z, double surfaceY, double t) {
+        return region.orbitalVelocity(x, y, z, t).add(region.windDrift(level, x, z, surfaceY - y));
     }
 }

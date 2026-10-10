@@ -26,6 +26,15 @@ import java.util.Arrays;
  * dissipation; the cap is applied while marching, so energy lost on a bar stays lost behind it. The fraction of energy
  * removed at each cell is kept for surf foam.</li>
  * </ul>
+ * A wind sea (WindSea: waves raised by a wind blowing over the region) is not a sea arriving from offshore: wind
+ * keeps generating it over every stretch of open water, so behind land it regrows with distance instead of staying in
+ * shadow. Its envelope is the growth of each point's own fetch, the straight-line distance over water upwind to land
+ * (Coastal Engineering Manual II-2-3: straight-line fetch, fetch width not used, after Resio and Vincent 1979), plus the
+ * open water beyond the grid: Hs(U10, fetch) / Hs of the sea as given (SeaWind's JONSWAP growth, deep-water growth in
+ * all depths as the CEM recommends), averaged over 3 x 3 nodes; all components alike, so the spectral shape is the
+ * given one everywhere. The phase follows the free field (refraction over the bed, no shadows), and the breaking caps
+ * apply as for any sea.
+ * <p>
  * The result is an envelope per component, the phasor M = g e^{i delta} of its gain g and phase shift
  * delta = psi - k_ref . x, so the coastal component is Re(M a e^{i(k_ref . x - omega t + phi)}): offshore M = 1 and
  * the plane wave is unchanged. M is stored per grid node and interpolated bilinearly; on land and in water no wave
@@ -54,6 +63,8 @@ public final class CoastalWaves {
     final float[] depth, breaking;
     /** Envelope phasors per component and node: re[c][i nz + j], im[c][i nz + j]. */
     final float[][] re, im;
+    /** Local wavenumber (rad/m) and coth(k h) per component and node, for the second-order kernels near the shore. */
+    final float[][] kLocal, cothLocal;
     /** Nodes where some component's envelope differs from 1 by more than CHANGED. */
     private final boolean[] changed;
     private final boolean uniform;
@@ -61,9 +72,10 @@ public final class CoastalWaves {
     /** Envelope change below which a node counts as open sea (1 % in amplitude or 0.01 rad in phase). */
     public static final double CHANGED = 0.01;
 
-    private CoastalWaves(double x0, double z0, double spacing, int nx, int nz, float[] depth, float[][] re, float[][] im, float[] breaking) {
+    private CoastalWaves(double x0, double z0, double spacing, int nx, int nz, float[] depth, float[][] re, float[][] im, float[] breaking,
+                         float[][] kLocal, float[][] cothLocal) {
         this.x0 = x0; this.z0 = z0; this.spacing = spacing; this.nx = nx; this.nz = nz;
-        this.depth = depth; this.re = re; this.im = im; this.breaking = breaking;
+        this.depth = depth; this.re = re; this.im = im; this.breaking = breaking; this.kLocal = kLocal; this.cothLocal = cothLocal;
         changed = new boolean[nx * nz];
         boolean same = true;
         double largest = 0;
@@ -88,10 +100,52 @@ public final class CoastalWaves {
     public int nz() { return nz; }
 
     /**
+     * A sea raised by a wind over the region: 10 m wind speed (m/s), the direction it blows toward (rad), the open
+     * water upwind of the grid (m; infinite for an open sea) and the peak period the sea was synthesised with (s; NaN:
+     * the period of its largest component, which is coarse with few components).
+     */
+    public record WindSea(double windMps, double directionRadians, double fetchBeyondM, double peakPeriodS) {
+        public WindSea {
+            if (!(windMps > 0 && windMps <= SeaWind.MAX_WIND) || !Double.isFinite(directionRadians) || !(fetchBeyondM >= 0)
+                    || !(Double.isNaN(peakPeriodS) || peakPeriodS > 0)) {
+                throw new IllegalArgumentException("Invalid wind sea");
+            }
+        }
+        public WindSea(double windMps, double directionRadians, double fetchBeyondM) { this(windMps, directionRadians, fetchBeyondM, Double.NaN); }
+    }
+
+    /**
      * Builds the envelopes of a sea over a depth grid: cell (i, j) at (x0 + i spacing, z0 + j spacing), index
      * i * nz + j, depth in m (0 or less is land).
      */
     public static CoastalWaves build(double x0, double z0, double spacing, int nx, int nz, float[] depth, WaveField waves) {
+        return build(x0, z0, spacing, nx, nz, depth, waves, null);
+    }
+
+    /**
+     * Straight-line fetch of every water node (NaN on land), m: the distance upwind (against directionRadians) over
+     * water to the first land node, or to the grid's edge plus fetchBeyond.
+     */
+    public static double[] fetches(double spacing, int nx, int nz, float[] depth, double directionRadians, double fetchBeyond) {
+        double[] out = new double[nx * nz];
+        double ex = Math.cos(directionRadians), ez = Math.sin(directionRadians), step = 0.5;
+        for (int i = 0; i < nx; i++) for (int j = 0; j < nz; j++) {
+            int cell = i * nz + j;
+            if (depth[cell] <= 0) { out[cell] = Double.NaN; continue; }
+            double t = 0;
+            while (true) {
+                double next = t + step;
+                int a = (int) Math.round(i - next * ex), b = (int) Math.round(j - next * ez);
+                if (a < 0 || a >= nx || b < 0 || b >= nz) { out[cell] = next * spacing + fetchBeyond; break; }
+                if (depth[a * nz + b] <= 0) { out[cell] = next * spacing; break; }
+                t = next;
+            }
+        }
+        return out;
+    }
+
+    /** Envelopes over a depth grid; with wind, the sea is a wind sea that grows with each node's fetch (see the class notes). */
+    public static CoastalWaves build(double x0, double z0, double spacing, int nx, int nz, float[] depth, WaveField waves, WindSea wind) {
         Checks.positive(spacing, "Spacing");
         if (nx < 2 || nz < 2 || depth.length != nx * nz) { throw new IllegalArgumentException("Invalid depth grid"); }
         int n = waves.components().size(), cells = nx * nz;
@@ -101,7 +155,21 @@ public final class CoastalWaves {
         float[][] re = new float[n][cells], im = new float[n][cells];
         double[] removed = new double[cells], before = new double[cells];
         float[] smooth = smoothed(depth, nx, nz), extended = extended(smooth, nx, nz);
-        if (extended == null) { return new CoastalWaves(x0, z0, spacing, nx, nz, smooth, new float[n][cells], new float[n][cells], new float[cells]); }
+        float[][] kLocal = new float[n][cells], cothLocal = new float[n][cells];
+        for (int c = 0; c < n; c++) {
+            LinearWave w = waves.components().get(c);
+            double omega = w.angularFrequency(), reference = Double.isFinite(w.depthM()) ? w.depthM() : Double.POSITIVE_INFINITY;
+            for (int cell = 0; cell < cells; cell++) {
+                double h = smooth[cell] > 0 ? Math.max(smooth[cell], MIN_DEPTH) : reference;
+                if (h > 1e3) { h = reference; }
+                double k = wavenumber(omega, h);
+                kLocal[c][cell] = (float) k;
+                cothLocal[c][cell] = (float) (Double.isFinite(h) ? 1 / Math.tanh(k * h) : 1);
+            }
+        }
+        if (extended == null) { return new CoastalWaves(x0, z0, spacing, nx, nz, smooth, new float[n][cells], new float[n][cells], new float[cells], kLocal, cothLocal); }
+        double[] growth = wind == null || hs0 <= 0 ? null
+                : growth(spacing, nx, nz, depth, wind, hs0, Double.isNaN(wind.peakPeriodS()) ? peakPeriod(waves) : wind.peakPeriodS());
         for (int c = 0; c < n; c++) {
             LinearWave w = waves.components().get(c);
             double k0 = w.wavenumber(), ex = Math.cos(w.directionRadians()), ez = Math.sin(w.directionRadians());
@@ -109,6 +177,10 @@ public final class CoastalWaves {
             // Without obstacles (refraction and shoaling without shelter), then with land as obstacles (the phase);
             // their difference is the path excess around headlands and islands.
             Field free = march(x0, z0, spacing, nx, nz, extended, omega, k0, ex, ez, null);
+            if (growth != null) {
+                windComponent(free, growth, smooth, depth, x0, z0, spacing, nz, k0, ex, ez, w.amplitudeM(), hs0, re[c], im[c], removed, before);
+                continue;
+            }
             Field blocked = march(x0, z0, spacing, nx, nz, smooth, omega, k0, ex, ez, free.psi);
             double[] g = new double[cells];
             transport(free, spacing, nx, nz, smooth, extended, omega, w.amplitudeM(), hs0, g, groupVelocity(omega, k0, reference), ex, ez, removed, before);
@@ -128,7 +200,55 @@ public final class CoastalWaves {
         }
         float[] breaking = new float[cells];
         for (int cell = 0; cell < cells; cell++) { breaking[cell] = before[cell] > 0 ? (float) (removed[cell] / before[cell]) : 0; }
-        return new CoastalWaves(x0, z0, spacing, nx, nz, smooth, re, im, breaking);
+        return new CoastalWaves(x0, z0, spacing, nx, nz, smooth, re, im, breaking, kLocal, cothLocal);
+    }
+
+    /** Period of the component with the largest amplitude, s: the spectral peak of a single-summation sea. */
+    private static double peakPeriod(WaveField waves) {
+        LinearWave peak = waves.components().getFirst();
+        for (LinearWave w : waves.components()) { if (w.amplitudeM() > peak.amplitudeM()) { peak = w; } }
+        return 2 * Math.PI / peak.angularFrequency();
+    }
+
+    /**
+     * Growth factor of a wind sea per water node: Hs(U10, fetch) over the sea's Hs, averaged over the water of 3 x 3
+     * nodes. The components keep their frequencies, so a longer fetch can only raise their amplitudes: the growth stops
+     * where the sea would pass DNV's steepness limit 2 pi Hs / (g Tp^2) = 1/15 at the spectrum's own peak period
+     * (SeaWind.MAX_STEEPNESS; the real sea there would also have lengthened its period, which this field cannot).
+     */
+    private static double[] growth(double spacing, int nx, int nz, float[] depth, WindSea wind, double hs0, double peakPeriodS) {
+        double[] fetch = fetches(spacing, nx, nz, depth, wind.directionRadians(), wind.fetchBeyondM()), raw = new double[nx * nz], out = new double[nx * nz];
+        double steepest = Math.max(hs0, (1 - 1e-9) * SeaWind.MAX_STEEPNESS * Atmosphere.GRAVITY_MPS2 * peakPeriodS * peakPeriodS / (2 * Math.PI));
+        for (int cell = 0; cell < raw.length; cell++) {
+            if (depth[cell] <= 0) { continue; }
+            raw[cell] = Math.min(SeaWind.sea(wind.windMps(), Math.max(fetch[cell], 0.5 * spacing), Double.POSITIVE_INFINITY)[0], steepest) / hs0;
+        }
+        for (int i = 0; i < nx; i++) for (int j = 0; j < nz; j++) {
+            int cell = i * nz + j;
+            if (depth[cell] <= 0) { continue; }
+            double sum = 0;
+            int count = 0;
+            for (int a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) for (int b = Math.max(0, j - 1); b <= Math.min(nz - 1, j + 1); b++) {
+                int m = a * nz + b;
+                if (depth[m] > 0) { sum += raw[m]; count++; }
+            }
+            out[cell] = sum / count;
+        }
+        return out;
+    }
+
+    /** One component of a wind sea: amplitude by the fetch growth with the breaking caps, phase from the free field. */
+    private static void windComponent(Field free, double[] growth, float[] smooth, float[] depth, double x0, double z0, double spacing, int nz,
+                                      double k0, double ex, double ez, double amplitude, double hs0, float[] re, float[] im, double[] removed, double[] before) {
+        for (int cell = 0; cell < depth.length; cell++) {
+            if (depth[cell] <= 0 || !Double.isFinite(free.psi[cell])) { continue; }
+            double x = x0 + (cell / nz) * spacing, z = z0 + (cell % nz) * spacing, hc = Math.max(smooth[cell], MIN_DEPTH), k = free.k[cell];
+            double g = growth[cell], cap = Math.min(SATURATED_HS_PER_DEPTH * hc / hs0, MAX_STEEPNESS * Math.PI / (k * Math.max(amplitude, 1e-12)));
+            before[cell] += amplitude * amplitude * g * g;
+            if (g > cap) { removed[cell] += amplitude * amplitude * (g * g - cap * cap); g = cap; }
+            double delta = free.psi[cell] - k0 * (ex * x + ez * z);
+            re[cell] = (float) (g * Math.cos(delta)); im[cell] = (float) (g * Math.sin(delta));
+        }
     }
 
     /**
@@ -485,6 +605,25 @@ public final class CoastalWaves {
                 reZ[c] = ((r[p01] - r[p00]) * (1 - fx) + (r[p11] - r[p10]) * fx) / spacing;
                 imZ[c] = ((m[p01] - m[p00]) * (1 - fx) + (m[p11] - m[p10]) * fx) / spacing;
             }
+        }
+        return true;
+    }
+
+    /**
+     * Local wavenumber (rad/m) and coth(k h) of every component at (x, z), bilinear on the grid, into k[c], coth[c]:
+     * the second-order kernels near the shore. False outside the grid or for a uniform field (then nothing is written).
+     */
+    public boolean kernels(double x, double z, double[] k, double[] coth) {
+        double gx = (x - x0) / spacing, gz = (z - z0) / spacing;
+        if (uniform || !(gx >= 0) || gx > nx - 1 || !(gz >= 0) || gz > nz - 1) { return false; }
+        int i = Math.min((int) gx, nx - 2), j = Math.min((int) gz, nz - 2);
+        double fx = gx - i, fz = gz - j;
+        int p00 = i * nz + j, p01 = p00 + 1, p10 = p00 + nz, p11 = p10 + 1;
+        double w00 = (1 - fx) * (1 - fz), w01 = (1 - fx) * fz, w10 = fx * (1 - fz), w11 = fx * fz;
+        for (int c = 0; c < re.length; c++) {
+            float[] kc = kLocal[c], cc = cothLocal[c];
+            k[c] = w00 * kc[p00] + w01 * kc[p01] + w10 * kc[p10] + w11 * kc[p11];
+            coth[c] = w00 * cc[p00] + w01 * cc[p01] + w10 * cc[p10] + w11 * cc[p11];
         }
         return true;
     }

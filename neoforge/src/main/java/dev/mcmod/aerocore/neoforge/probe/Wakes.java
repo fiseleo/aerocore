@@ -266,6 +266,27 @@ public final class Wakes {
         return wakes == null ? 0 : wakes.maxElevation;
     }
 
+    /**
+     * The finest grid spacing (m) of the wakes on this still level whose grids overlap the box, or infinity: the
+     * renderer keeps its mesh that fine there.
+     */
+    public static double finestSpacing(Level level, double stillY, double minX, double minZ, double maxX, double maxZ) {
+        LevelWakes wakes = LEVELS.get(level);
+        if (wakes == null || wakes.maxElevation == 0) { return Double.POSITIVE_INFINITY; }
+        double finest = Double.POSITIVE_INFINITY;
+        synchronized (wakes) {
+            for (Tracked tr : wakes.sources.values()) {
+                if (tr.solver == null || Math.abs(tr.stillY - stillY) > WaveRegion.LEVEL_TOLERANCE) { continue; }
+                UnsteadyWake.Snapshot snap = tr.solver.snapshot();
+                double h = snap.halfSize();
+                if (snap.maxElevation() > 0 && minX < snap.centreX() + h && maxX > snap.centreX() - h && minZ < snap.centreZ() + h && maxZ > snap.centreZ() - h) {
+                    finest = Math.min(finest, tr.design.spacing());
+                }
+            }
+        }
+        return finest;
+    }
+
     /** Calm zones covering wakes outside persistent regions (recomputed every tick). */
     public static List<WaveRegion> zones(Level level) {
         LevelWakes wakes = LEVELS.get(level);

@@ -102,6 +102,31 @@ class SeaSpectrumTest {
             }
         }
     }
+    @Test void centimetreRipplesStayFiniteDownToTheBed() {
+        // A pond's wind sea (10 m/s over 87 m, 2.89 m deep, at the steepness cap; a player's 0.14.0 crash): its shortest components (2 cm)
+        // decay as exp(kz) below double range near the bed, where the compiled image term was 0/0.
+        for (double depth : new double[]{2.8888893, Double.POSITIVE_INFINITY}) {
+            WaveField field = SeaSpectrum.synthesize(0.036354523816339336, 0.5910911491441727, 5, 0.349, 4, depth, 32, 7);
+            CompiledWaves c = new CompiledWaves(field);
+            int n = c.size();
+            double[] cos = new double[n], sin = new double[n], out = new double[6], seg = new double[8];
+            for (double y : new double[]{-0.5, -1.5, -2.7, -2.85, -2.8888893, -3.5, -12}) {
+                Vec3d point = new Vec3d(-147.5, 62.888889 + y, 202.5);
+                c.phases(point.x(), point.z(), 4321.05, cos, sin);
+                c.kinematics(cos, sin, y, out);
+                Vec3d u = field.velocity(point, 62.888889, 4321.05), a = field.acceleration(point, 62.888889, 4321.05);
+                for (double v : out) { assertTrue(Double.isFinite(v), "Finite kinematics at " + y + " m"); }
+                assertEquals(u.x(), out[0], 1e-12); assertEquals(u.y(), out[1], 1e-12); assertEquals(u.z(), out[2], 1e-12);
+                assertEquals(a.x(), out[3], 1e-12); assertEquals(a.y(), out[4], 1e-12); assertEquals(a.z(), out[5], 1e-12);
+                assertEquals(field.dynamicPressureHead(point, 62.888889, 4321.05), c.pressureHead(cos, y), 1e-12);
+                assertEquals(u.y(), c.velocity(point, 62.888889, 4321.05).y(), 1e-12);
+                c.segment(cos, sin, 0, y - 0.6, y, seg);
+                for (double v : seg) { assertTrue(Double.isFinite(v), "Finite segment at " + y + " m"); }
+                assertEquals(field.dynamicPressureHead(new Vec3d(point.x(), point.y() - 0.6, point.z()), 62.888889, 4321.05), seg[0], 1e-12);
+            }
+        }
+    }
+
     @Test void rejectsBreakingSeas() {
         assertThrows(IllegalArgumentException.class, () -> SeaSpectrum.synthesize(4, 4, 3.3, 0, 4, Double.POSITIVE_INFINITY, 32, 1));
         assertThrows(IllegalArgumentException.class, () -> SeaSpectrum.synthesize(1, 6, 3.3, 0, 4, 2, 32, 1));

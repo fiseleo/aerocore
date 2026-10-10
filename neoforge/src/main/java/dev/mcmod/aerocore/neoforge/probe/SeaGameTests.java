@@ -271,6 +271,214 @@ public final class SeaGameTests {
         });
     }
 
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 40, batch = "aerocore_sea_wind_sea")
+    public static void windSeaGrowsWithFetchAcrossThePool(GameTestHelper h) {
+        double still = pool(h);
+        BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8)), o = h.absolutePos(BlockPos.ZERO);
+        double cx = centre.getX() + 0.5, cz = centre.getZ() + 0.5, u = 12;
+        // A wind toward +x over the walled pool: the sea for a 10 m fetch, growing with each spot's own fetch.
+        double[] hsTp = dev.mcmod.aerocore.api.SeaWind.sea(u, 10, Double.POSITIVE_INFINITY);
+        WaveField sea = dev.mcmod.aerocore.api.SeaSpectrum.synthesize(hsTp[0], hsTp[1], dev.mcmod.aerocore.api.SeaSpectrum.recommendedGamma(hsTp[0], hsTp[1]), 0, 4, 3.89, 16, 3);
+        WaveRegion region = new WaveRegion(cx, cz, 12, still, sea, new WaveRegion.Sea(hsTp[0], hsTp[1], 1, 0, 4, u, 0, 10),
+                WaveRegions.survey(h.getLevel(), cx, cz, 12, still), new WaveRegion.Wind(u, 0));
+        WaveRegions.of(h.getLevel()).add(h.getLevel(), region);
+        try {
+            dev.mcmod.aerocore.api.CoastalWaves coast = region.awaitCoast();
+            h.assertTrue(coast != null, "The wind sea must be built over the survey");
+            double[] re = new double[sea.components().size()], im = new double[re.length];
+            double[] gain = new double[3];
+            double[] xs = {o.getX() + 3.0, o.getX() + 10.0, o.getX() + 19.0};
+            for (int i = 0; i < 3; i++) {
+                coast.envelopes(xs[i], o.getZ() + 8.0, re, im, null, null, null, null);
+                gain[i] = Math.hypot(re[0], im[0]);
+            }
+            System.out.printf("[AeroCore] wind sea across the pool (Hs at 10 m fetch %.3f m): gain %.2f, %.2f, %.2f downwind%n", hsTp[0], gain[0], gain[1], gain[2]);
+            h.assertTrue(gain[0] < gain[1] && gain[1] < gain[2], "A wind sea grows downwind from the shore: " + java.util.Arrays.toString(gain));
+            h.assertTrue(gain[1] > 0.5 && gain[1] < 1.5, "About the design sea at about its fetch: " + gain[1]);
+        } finally {
+            remove(h, region);
+        }
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 20, batch = "aerocore_sea_weather")
+    public static void windFollowsTheWeatherWithGusts(GameTestHelper h) {
+        double still = pool(h);
+        BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8));
+        double cx = centre.getX() + 0.5, cz = centre.getZ() + 0.5;
+        WaveRegion region = new WaveRegion(cx, cz, 12, still, WaveField.NONE, null, null, new WaveRegion.Wind(5, 0, 10, 15));
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        float rain = level.getRainLevel(1), thunder = level.getThunderLevel(1);
+        try {
+            level.setRainLevel(0); level.setThunderLevel(0);
+            double clear = region.wind().mean(level);
+            level.setRainLevel(1);
+            double raining = region.wind().mean(level);
+            level.setThunderLevel(1);
+            double storm = region.wind().mean(level);
+            level.setThunderLevel(0.5f);
+            double half = region.wind().mean(level);
+            System.out.printf("[AeroCore] wind by weather: clear %.1f, rain %.1f, thunder %.1f, half thunder %.1f m/s%n", clear, raining, storm, half);
+            h.assertTrue(clear == 5 && raining == 10 && storm == 15 && Math.abs(half - 12.5) < 1e-9, "The mean wind follows rain and thunder levels");
+            // Gusts: the wind at a point changes from moment to moment around the mean, and readers agree.
+            double t = SeaSurface.time(level), min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
+            for (int i = 0; i < 200; i++) {
+                double speed = region.windAt(level, cx, still + 10, cz, t + i * 0.5).length();
+                min = Math.min(min, speed); max = Math.max(max, speed);
+            }
+            System.out.printf("[AeroCore] storm wind at 10 m over 100 s: %.1f to %.1f m/s%n", min, max);
+            h.assertTrue(max - min > 2 && min > 8 && max < 22, "Gusts around a 12.5 m/s mean: " + min + " to " + max);
+            WaveRegions.Local local = new WaveRegions.Local(WaveField.NONE, dev.mcmod.aerocore.api.CompiledWaves.NONE, still, region,
+                    region.meanWind(level, cx, cz), region.gust(level, cx, cz, t));
+            Vec3d body = local.windAt(cx, still + 2, cz), direct = region.windAt(level, cx, still + 2, cz, t);
+            h.assertTrue(body.subtract(direct).length() < 1e-9, "Bodies and boats read the same wind: " + body + " vs " + direct);
+        } finally {
+            level.setRainLevel(rain); level.setThunderLevel(thunder);
+        }
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 20, batch = "aerocore_world_wind")
+    public static void worldWindFollowsHeightShelterAndReachesEveryReader(GameTestHelper h) {
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        // Stone floor; a 4 m thick, 6 m high wall across the wind over the low half of the floor.
+        for (int x = 0; x < 24; x++) for (int z = 0; z < 16; z++) {
+            h.setBlock(new BlockPos(x, 0, z), Blocks.STONE);
+            for (int y = 1; y <= 9; y++) { h.setBlock(new BlockPos(x, y, z), x >= 4 && x <= 7 && z <= 5 && y <= 6 ? Blocks.STONE : Blocks.AIR); }
+        }
+        WorldWind.forget(level);
+        try {
+            WorldWind.setOverride(level, new WorldWind.Reference(10, 0));
+            BlockPos lee = h.absolutePos(new BlockPos(13, 1, 2)), open = h.absolutePos(new BlockPos(13, 1, 13));
+            double ground = lee.getY(), behind = WorldWind.mean(level, lee.getX() + 0.5, ground + 1.5, lee.getZ() + 0.5).length();
+            double clear = WorldWind.mean(level, open.getX() + 0.5, ground + 1.5, open.getZ() + 0.5).length();
+            double high = WorldWind.mean(level, open.getX() + 0.5, ground + 30, open.getZ() + 0.5).length();
+            System.out.printf("[AeroCore] world wind 10 m/s: 1.5 m above stone %.2f m/s, behind a 6 m wall %.2f m/s, at 30 m %.2f m/s%n", clear, behind, high);
+            System.out.println("[AeroCore] open point " + WorldWind.describe(level, open.getX() + 0.5, ground + 1.5, open.getZ() + 0.5)
+                    + ", lee point " + WorldWind.describe(level, lee.getX() + 0.5, ground + 1.5, lee.getZ() + 0.5));
+            // Other tests' structures may stand upwind too (the wind feels all terrain), so compare the shelter shares.
+            WorldWind.Details leeDetails = WorldWind.describe(level, lee.getX() + 0.5, ground + 1.5, lee.getZ() + 0.5);
+            WorldWind.Details openDetails = WorldWind.describe(level, open.getX() + 0.5, ground + 1.5, open.getZ() + 0.5);
+            h.assertTrue(clear > 0 && leeDetails.shelter() <= 0.26 && leeDetails.shelter() < openDetails.shelter() && behind < clear,
+                    "A wall shelters its lee (Brandle: a quarter within 5 heights): " + leeDetails + " vs " + openDetails);
+            h.assertTrue(high > 1.4 * clear, "The wind grows with height (log profile): " + high + " vs " + clear);
+            Vec3d direction = WorldWind.mean(level, open.getX() + 0.5, ground + 5, open.getZ() + 0.5);
+            h.assertTrue(direction.x() > 0 && Math.abs(direction.z()) < 1e-9, "Blowing toward +x: " + direction);
+            // A region without its own wind and a body outside any region read the level's wind.
+            double cx = open.getX() + 0.5, cz = open.getZ() + 0.5;
+            WaveRegion region = new WaveRegion(cx, cz, 6, ground, WaveField.NONE);
+            Vec3d regionWind = region.meanWind(level, cx, cz), level10 = WorldWind.mean(level, cx, ground + 10, cz);
+            h.assertTrue(regionWind.subtract(level10).length() < 1e-9, "Region without wind: " + regionWind + " vs " + level10);
+            double t = SeaSurface.time(level);
+            WaveRegions.Local local = WaveRegions.of(level).at(level, cx + 200, cz + 200);
+            Vec3d body = local.windAt(cx + 200, ground + 3, cz + 200), direct = WorldWind.at(level, cx + 200, ground + 3, cz + 200, t);
+            h.assertTrue(body.subtract(direct).length() < 1e-9, "Bodies outside regions feel the level's wind: " + body + " vs " + direct);
+        } finally {
+            WorldWind.setOverride(level, null);
+        }
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 20, batch = "aerocore_ridge_lift")
+    public static void windRisesUpWindwardSlopesAndSinksDownLeeSlopes(GameTestHelper h) {
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        // A ramp rising 1 block every 3 m toward +x.
+        for (int x = 0; x < 24; x++) for (int z = 0; z < 16; z++) {
+            int top = Math.min(1 + x / 3, 8);
+            for (int y = 0; y <= 9; y++) { h.setBlock(new BlockPos(x, y, z), y < top ? Blocks.STONE : Blocks.AIR); }
+        }
+        WorldWind.forget(level);
+        BlockPos slope = h.absolutePos(new BlockPos(12, 0, 8));
+        double ground = slope.getY() + 1 + 12 / 3, px = slope.getX() + 0.5, pz = slope.getZ() + 0.5, t = SeaSurface.time(level);
+        try {
+            WorldWind.setOverride(level, new WorldWind.Reference(10, 0));
+            double up = WorldWind.vertical(level, px, ground + 1.5, pz, t), upHigh = WorldWind.vertical(level, px, ground + 40, pz, t);
+            WorldWind.forget(level);
+            WorldWind.setOverride(level, new WorldWind.Reference(10, Math.PI));
+            double down = WorldWind.vertical(level, px, ground + 1.5, pz, t);
+            System.out.printf("[AeroCore] ridge lift on a 1:3 ramp at 1.5 m: wind up the slope %.2f m/s (at 40 m %.2f), down it %.2f m/s%n", up, upHigh, down);
+            h.assertTrue(up > 0.3 && down < -0.3, "Rising up the windward slope, sinking down the lee: " + up + ", " + down);
+            h.assertTrue(Math.abs(upHigh) < Math.abs(up), "Fading aloft: " + upHigh);
+            Vec3d full = WorldWind.at(level, px, ground + 1.5, pz, t);
+            h.assertTrue(Math.abs(full.y() - down) < 1e-9, "The wind's vertical part is the lift: " + full);
+        } finally {
+            WorldWind.setOverride(level, null);
+        }
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 20, batch = "aerocore_ground")
+    public static void blocksMapToWheelSurfaces(GameTestHelper h) {
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        BlockPos sand = new BlockPos(2, 1, 2), ice = new BlockPos(4, 1, 2), stone = new BlockPos(6, 1, 2), grass = new BlockPos(8, 1, 2), snow = new BlockPos(10, 1, 2);
+        h.setBlock(sand, Blocks.SAND); h.setBlock(ice, Blocks.ICE); h.setBlock(stone, Blocks.STONE); h.setBlock(grass, Blocks.GRASS_BLOCK); h.setBlock(snow, Blocks.SNOW_BLOCK);
+        h.assertTrue(GroundSurfaces.of(level, h.absolutePos(sand)) == dev.mcmod.aerocore.api.GroundContact.Surface.SAND, "Sand");
+        h.assertTrue(GroundSurfaces.of(level, h.absolutePos(ice)) == dev.mcmod.aerocore.api.GroundContact.Surface.ICE, "Ice");
+        h.assertTrue(GroundSurfaces.of(level, h.absolutePos(grass)) == dev.mcmod.aerocore.api.GroundContact.Surface.SOIL, "Grass on soil");
+        h.assertTrue(GroundSurfaces.of(level, h.absolutePos(snow)) == dev.mcmod.aerocore.api.GroundContact.Surface.SNOW, "Snow");
+        dev.mcmod.aerocore.api.GroundContact.Surface hard = GroundSurfaces.of(level, h.absolutePos(stone));
+        h.assertTrue(hard == dev.mcmod.aerocore.api.GroundContact.Surface.TARMAC || hard == dev.mcmod.aerocore.api.GroundContact.Surface.WET_TARMAC, "Stone is hard");
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 20, batch = "aerocore_natural_sea")
+    public static void naturalSeaGrowsFromTheWorldWindAndKeepsItsWaves(GameTestHelper h) {
+        double still = pool(h);
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8));
+        double cx = centre.getX() + 0.5, cz = centre.getZ() + 0.5;
+        try {
+            WorldWind.setOverride(level, new WorldWind.Reference(10, 0));
+            WaveRegion a = NaturalSeas.buildAt(level, cx, cz, still), b = NaturalSeas.buildAt(level, cx + 4, cz, still);
+            h.assertTrue(a != null && b != null, "A natural sea on the pool");
+            WaveRegion.Sea sea = a.sea();
+            System.out.printf("[AeroCore] natural sea on a 22 m pool: fetch class %.0f m, Hs %.3f m, Tp %.2f s (design), scale %.2f at 10 m/s%n",
+                    sea.fetchM(), sea.significantHeightM(), sea.peakPeriodS(), a.scale());
+            h.assertTrue(a.natural() && sea.windSea() && a.wind().calm(), "Natural, a wind sea, the level's wind");
+            h.assertTrue(sea.fetchM() <= 32 && sea.peakPeriodS() < 1.5, "A pool's fetch gives short chop: " + sea.fetchM() + " m, " + sea.peakPeriodS() + " s");
+            h.assertTrue(a.waves() == b.waves(), "The same water class keeps the same waves as the player moves");
+            h.assertTrue(a.scale() > 0 && a.scale() < 1, "Height for the present 10 m/s wind below the 15 m/s design: " + a.scale());
+            // Natural seas are not saved.
+            WaveRegions saved = WaveRegions.of(level);
+            saved.setNatural(level, List.of(a));
+            net.minecraft.nbt.CompoundTag tag = saved.save(new net.minecraft.nbt.CompoundTag(), level.registryAccess());
+            long commanded = saved.regions().stream().filter(r -> !r.natural()).count();
+            h.assertTrue(saved.regions().contains(a) && tag.getList("Regions", 10).size() == commanded, "Natural regions are not saved");
+            saved.setNatural(level, List.of());
+        } finally {
+            WorldWind.setOverride(level, null);
+        }
+        h.succeed();
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 140, batch = "aerocore_sea_state")
+    public static void windSeaCalmsWhenTheWindDrops(GameTestHelper h) {
+        double still = pool(h);
+        BlockPos centre = h.absolutePos(new BlockPos(11, 4, 8));
+        double cx = centre.getX() + 0.5, cz = centre.getZ() + 0.5, u = 12;
+        double[] hsTp = dev.mcmod.aerocore.api.SeaWind.sea(u, 10, Double.POSITIVE_INFINITY);
+        WaveField sea = dev.mcmod.aerocore.api.SeaSpectrum.synthesize(hsTp[0], hsTp[1], 1, 0, 4, 3.89, 16, 3);
+        // Raised by 12 m/s; the wind now follows clear weather at 5 m/s.
+        WaveRegion region = new WaveRegion(cx, cz, 12, still, sea, new WaveRegion.Sea(hsTp[0], hsTp[1], 1, 0, 4, u, 0, 10), null, new WaveRegion.Wind(5, 0, 10, 15));
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        float rain = level.getRainLevel(1), thunder = level.getThunderLevel(1);
+        level.setRainLevel(0); level.setThunderLevel(0);
+        WaveRegions.of(level).add(level, region);
+        // The relaxation law itself: after one e-folding time the gap to the target shrinks by e.
+        double target = dev.mcmod.aerocore.api.SeaWind.sea(5, 10, 3.89)[0] / dev.mcmod.aerocore.api.SeaWind.sea(u, 10, 3.89)[0];
+        double tau = dev.mcmod.aerocore.api.SeaWind.growthTime(u, 10) / 3;
+        double once = SeaState.step(region.sea(), 5, 1, 3.89, tau);
+        h.assertTrue(Math.abs(once - (target + (1 - target) / Math.E)) < 1e-9, "Exponential relaxation toward the present wind's sea: " + once);
+        h.runAfterDelay(120, () -> {
+            double s = region.scale();
+            System.out.printf("[AeroCore] wind sea after the wind dropped from 12 to 5 m/s for 6 s: %.3f of its height (target %.3f, e-folding %.0f s)%n", s, target, tau);
+            level.setRainLevel(rain); level.setThunderLevel(thunder);
+            remove(h, region);
+            h.assertTrue(s < 1 - 0.5 * (1 - Math.exp(-6 / tau)) * (1 - target) && s > target, "The sea calms toward the new wind: " + s);
+            h.succeed();
+        });
+    }
+
     /** Half the range of the surface at (x, z) over one period. */
     private static double amplitude(GameTestHelper h, WaveRegion region, double x, double z, double t0, double period) {
         double low = Double.MAX_VALUE, high = -Double.MAX_VALUE;

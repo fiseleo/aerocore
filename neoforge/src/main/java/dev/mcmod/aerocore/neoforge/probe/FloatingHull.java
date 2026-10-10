@@ -150,7 +150,7 @@ public final class FloatingHull extends Entity implements DebugBody, CoupledBody
         collision = new FloatingBodyDynamics.Collision(shape, WorldObstacles.collect(this, region), TestHull.CONTACT_MATERIAL);
         startTime = server.getGameTime() * MinecraftUnits.TICK_SECONDS;
         Vec3d origin = modelOrigin();
-        waves = WaveRegions.of(server).at(origin.x(), origin.z());
+        waves = WaveRegions.of(server).at(server, origin.x(), origin.z());
         environment.setSea(waves);
         sampler.drifting(waves.region());
         thrustSum = torqueSum = resistanceSum = surgeSum = wetSum = rudderSum = powerSum = 0;

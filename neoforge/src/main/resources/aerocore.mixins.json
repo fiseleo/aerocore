@@ -16,8 +16,11 @@
     "BoatClientMixin",
     "BoatRendererMixin",
     "CameraFogMixin",
+    "CloudWindMixin",
     "LiquidBlockRendererMixin",
-    "RiderTiltMixin"
+    "RiderTiltMixin",
+    "SkyDomeMixin",
+    "WeatherWindMixin"
   ],
   "injectors": {
     "defaultRequire": 1

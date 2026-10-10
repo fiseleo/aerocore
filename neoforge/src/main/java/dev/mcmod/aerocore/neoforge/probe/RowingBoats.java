@@ -144,7 +144,7 @@ public final class RowingBoats {
                 WaveRegion region = SeaSurface.governing(level, x, z, bottom - 1, bottom + Rowboat.DEPTH);
                 // Vanilla flowing water pushes boats itself (Entity fluid pushing), so vanilla water counts as still here.
                 if (region == null) { return Vec3d.ZERO; }
-                return SeaSurface.waterVelocity(region, x, bottom, z, SeaSurface.surfaceY(level, region, x, z, t, id), t);
+                return SeaSurface.waterVelocity(level, region, x, bottom, z, SeaSurface.surfaceY(level, region, x, z, t, id), t);
             }
         };
     }
@@ -161,11 +161,21 @@ public final class RowingBoats {
         return Double.NaN;
     }
 
-    /** The wind of the sea region the boat is in (tapered like its waves), at standard sea-level air density; calm elsewhere. */
+    /**
+     * The wind over the boat at 10 m: its sea region's (own wind, or the level's over it), else the level's (WorldWind)
+     * 10 m above the boat's waterline; its mean now (weather included) and the gust at the boat, at standard sea-level
+     * air density.
+     */
     private static Rowboat.Air air(Boat boat) {
-        WaveRegion region = SeaSurface.governing(boat.level(), boat.getX(), boat.getZ(), boat.getY() - 1, boat.getY() + Rowboat.DEPTH);
-        if (region == null || region.wind().calm()) { return Rowboat.Air.CALM; }
-        return new Rowboat.Air(region.wind().vector().scale(region.weight(boat.getX(), boat.getZ())), Rowboat.Air.CALM.density());
+        Level level = boat.level();
+        double t = SeaSurface.time(level);
+        WaveRegion region = SeaSurface.governing(level, boat.getX(), boat.getZ(), boat.getY() - 1, boat.getY() + Rowboat.DEPTH);
+        if (region != null) {
+            return new Rowboat.Air(region.meanWind(level, boat.getX(), boat.getZ()), region.gust(level, boat.getX(), boat.getZ(), t), Rowboat.Air.CALM.density());
+        }
+        double waterline = boat.getY() + draft(boat);
+        return new Rowboat.Air(WorldWind.mean(level, boat.getX(), waterline + 10, boat.getZ()), WorldWind.gust(level, boat.getX(), waterline + 10, boat.getZ(), t),
+                Rowboat.Air.CALM.density());
     }
 
     private static Rowboat.Water ownWake(Boat boat) {
@@ -186,12 +196,22 @@ public final class RowingBoats {
         BoatAccessor in = (BoatAccessor) boat;
         boolean up = in.aerocore$inputUp(), down = in.aerocore$inputDown(), left = in.aerocore$inputLeft(), right = in.aerocore$inputRight();
         double turn = (left ? 1 : 0) - (right ? 1 : 0), drive = up && !down ? 1 : down && !up ? -1 : 0;
-        if (drive == 0) { return turn > 0 ? new Rowboat.Oars(0, 0.5) : turn < 0 ? new Rowboat.Oars(0.5, 0) : Rowboat.Oars.NONE; }
+        if (drive == 0) { return turn > 0 ? phased(boat, new Rowboat.Oars(0, 0.5)) : turn < 0 ? phased(boat, new Rowboat.Oars(0.5, 0)) : Rowboat.Oars.NONE; }
         double l = 0.5, r = 0.5;
         // Forward + left eases the left oar; back + left eases the right one (the boat's bow swings left either way).
         if (turn > 0) { if (drive > 0) { l = 0.2; } else { r = 0.2; } }
         if (turn < 0) { if (drive > 0) { r = 0.2; } else { l = 0.2; } }
-        return new Rowboat.Oars(drive * l, drive * r);
+        return phased(boat, new Rowboat.Oars(drive * l, drive * r));
+    }
+
+    /**
+     * The oars with their stroke phases from vanilla's paddle angles, so the modelled drive coincides with the drawn
+     * stroke: the blade is down for paddle angles 0 to pi (the splash plays at pi/4), the drive fraction of the turn.
+     */
+    private static Rowboat.Oars phased(Boat boat, Rowboat.Oars oars) {
+        float[] paddles = ((BoatAccessor) boat).aerocore$paddlePositions();
+        double left = paddles[0] / (2 * Math.PI), right = paddles[1] / (2 * Math.PI);
+        return new Rowboat.Oars(oars.left(), oars.right(), oars.left() != 0 ? left : Double.NaN, oars.right() != 0 ? right : Double.NaN);
     }
 
     /**
@@ -278,10 +298,19 @@ public final class RowingBoats {
      * End of a boat's tick on a client that does not move it: integrate pitch and roll on the local surface, with the
      * position and heading the server sends.
      */
+    /**
+     * Boats another client moves are tilted only within this distance (m) of a player in the client's level: a display
+     * budget (each costs a full Rowboat step per tick); farther ones level out, their tilt a pixel or less on screen.
+     */
+    private static final double TILT_RANGE = 64;
+
     public static void afterTick(Boat boat) {
         if (!boat.level().isClientSide || boat.isControlledByLocalInstance()) { return; }
         Physics p = physics(boat);
         p.prevPitch = p.pitch; p.prevRoll = p.roll;
+        boolean near = false;
+        for (Player player : boat.level().players()) { near |= player.distanceToSqr(boat) < TILT_RANGE * TILT_RANGE; }
+        if (!near) { p.pitch *= 0.8; p.roll *= 0.8; p.pitchRate = 0; p.rollRate = 0; return; }
         Rowboat.Water water = water(boat);
         double[] probe = new double[3];
         water.sample(boat.getX(), boat.getZ(), probe);

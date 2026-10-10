@@ -138,7 +138,7 @@ public final class WorldWaterSampler {
                         double middleY = (segmentLow + segmentHigh) / 2;
                         Vec3d offset = new Vec3d(x, middleY - center.y(), z);
                         Vec3d flow = cell(blockX, cellY, blockZ).flow();
-                        if (drifts) { flow = flow.add(drift.windDrift(columnX, columnZ, surface - (segmentLow + segmentHigh) / 2)); }
+                        if (drifts) { flow = flow.add(drift.windDrift(level, columnX, columnZ, surface - (segmentLow + segmentHigh) / 2)); }
                         // Linear pressure head relative to still water, zero on the instantaneous surface.
                         double drop = length;
                         if (free) {
@@ -203,7 +203,7 @@ public final class WorldWaterSampler {
             Vec3d flow = cell(x, flowY, z).water() ? cell(x, flowY, z).flow() : cell(x, y, z).flow();
             if (above.open()) { wakeAt(still, point.x(), point.z()); } else { wake[0] = 0; wake[1] = 0; wake[2] = 0; }
             Vec3d wakeSlope = new Vec3d(wake[1], 0, wake[2]);
-            if (above.open() && drift != null && drift.ownsSurface(still)) { flow = flow.add(drift.windDrift(point.x(), point.z(), still - point.y())); }
+            if (above.open() && drift != null && drift.ownsSurface(still)) { flow = flow.add(drift.windDrift(level, point.x(), point.z(), still - point.y())); }
             if (!moving) { return new Column(still + wake[0], wakeSlope, Double.NaN, 0, flow, Vec3d.ZERO); }
             ensurePhases(fast.size());
             fast.phases(point.x(), point.z(), timeSeconds, cos, sin);

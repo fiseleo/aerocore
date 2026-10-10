@@ -1,6 +1,9 @@
 package dev.mcmod.aerocore.api;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Linear heave wave radiation of surface-piercing floats in deep, open water, in the time domain (Cummins 1962):
@@ -191,10 +194,46 @@ public final class WaveRadiation {
         return HULME[HULME.length - 1][column];
     }
 
+    /** Kernel arguments, radii in order (the kernel is symmetric in them). */
+    private record KernelKey(double a, double b, double distanceM, double dt, int count) {}
+    /**
+     * Kernels already computed, shared by every Memory (each costs FREQUENCIES x count operations, about 1.3 million at
+     * a 5 ms step: recomputing them whenever a boat's waterline changed stalled frames). Read-only once made.
+     */
+    private static final Map<KernelKey, double[]> KERNELS = Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<KernelKey, double[]> eldest) { return size() > 512; }
+    });
+
+    /** kernel, from the shared cache (the array must not be modified). */
+    static double[] sharedKernel(double ai, double aj, double distanceM, double dt, int count) {
+        KernelKey key = new KernelKey(Math.min(ai, aj), Math.max(ai, aj), distanceM, dt, count);
+        double[] k = KERNELS.get(key);
+        if (k == null) {
+            k = kernel(key.a(), key.b(), distanceM, dt, count);
+            KERNELS.put(key, k);
+        }
+        return k;
+    }
+
+    /** Below this radius (m) the snapping grid is linear, SNAP_STEP apart; above, SNAP_RATIO apart. */
+    private static final double SNAP_LINEAR = 0.25, SNAP_STEP = 0.005, SNAP_RATIO = 1.02;
+
+    /**
+     * A waterplane radius on the grid kernels are made for when radii drift (record): within 1 % (2.5 mm below
+     * 0.25 m, so a float wetted less than that radiates nothing), well inside the 3 % / 1 cm drift a kernel already
+     * stands for, so drifting bodies reuse cached kernels.
+     */
+    static double snapRadius(double radius) {
+        if (!(radius > 0)) { return 0; }
+        if (radius < SNAP_LINEAR) { return Math.round(radius / SNAP_STEP) * SNAP_STEP; }
+        return SNAP_LINEAR * Math.pow(SNAP_RATIO, Math.round(Math.log(radius / SNAP_LINEAR) / Math.log(SNAP_RATIO)));
+    }
+
     /**
      * Velocity history and kernels for one body's floats. Horizontal float positions are model-local and fixed (small
-     * tilt). Waterplane radii follow an exponential average (0.5 s) of the sampled immersion; kernels are recomputed
-     * when a radius drifts by more than 1 cm or 3 %. Mutable and not thread-safe; one instance per body.
+     * tilt). Waterplane radii follow an exponential average (0.5 s) of the sampled immersion; kernels are remade (for
+     * the radius snapped to a 2 % grid, from a shared cache) when a radius drifts by more than 1 cm or 3 %. Mutable and
+     * not thread-safe; one instance per body.
      */
     public static final class Memory {
         private static final double RADIUS_TIME_CONSTANT = 0.5, RECOMPUTE_TOLERANCE = 0.01, RECOMPUTE_FRACTION = 0.03;
@@ -220,7 +259,7 @@ public final class WaveRadiation {
             reference = new double[floats];
             instant = new double[floats];
             kernels = new double[floats][floats][];
-            rebuild();
+            rebuild(true);
         }
         public double timeStep() { return dt; }
         public double[] effectiveRadii() { return radii.clone(); }
@@ -262,7 +301,7 @@ public final class WaveRadiation {
                 radii[i] += (waterplaneRadii[i] - radii[i]) * blend;
                 stale |= Math.abs(radii[i] - reference[i]) > Math.max(RECOMPUTE_TOLERANCE, RECOMPUTE_FRACTION * reference[i]);
             }
-            if (stale) { rebuild(); }
+            if (stale) { rebuild(true); }
         }
 
         /** Radiation loads at model-local points (for example HullDynamics.radiationPoints), as external loads. */
@@ -324,15 +363,15 @@ public final class WaveRadiation {
             record(w, a);
         }
 
-        /** Sets radii immediately (for example a float already in equilibrium) and rebuilds the kernels. */
+        /** Sets radii immediately (for example a float already in equilibrium) and rebuilds the kernels for exactly these radii. */
         public void setRadii(double[] waterplaneRadii) {
             System.arraycopy(waterplaneRadii, 0, radii, 0, floats);
             System.arraycopy(waterplaneRadii, 0, instant, 0, floats);
-            rebuild();
+            rebuild(false);
         }
 
-        private void rebuild() {
-            System.arraycopy(radii, 0, reference, 0, floats);
+        private void rebuild(boolean snap) {
+            for (int i = 0; i < floats; i++) { reference[i] = snap ? snapRadius(radii[i]) : radii[i]; }
             double[][][] next = new double[floats][floats][];
             for (int i = 0; i < floats; i++) {
                 for (int j = 0; j <= i; j++) {
@@ -344,7 +383,7 @@ public final class WaveRadiation {
                                     && distance[p][q] == distance[i][j]) { k = next[p][q]; }
                         }
                     }
-                    if (k == null) { k = kernel(reference[i], reference[j], distance[i][j], dt, count); }
+                    if (k == null) { k = sharedKernel(reference[i], reference[j], distance[i][j], dt, count); }
                     next[i][j] = k; next[j][i] = k;
                 }
             }

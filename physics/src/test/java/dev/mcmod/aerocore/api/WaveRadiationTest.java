@@ -7,6 +7,18 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WaveRadiationTest {
+    @Test void snappedRadiiStayWithinOnePercentAndShareKernels() {
+        for (double a = 0.001; a < 5; a *= 1.013) {
+            double s = WaveRadiation.snapRadius(a);
+            assertTrue(Math.abs(s - a) <= Math.max(0.0025 + 1e-12, 0.01 * a), "snap " + a + " -> " + s);
+            assertEquals(s, WaveRadiation.snapRadius(s), 1e-12, "a snapped radius is on the grid");
+        }
+        assertEquals(0, WaveRadiation.snapRadius(0));
+        double[] first = WaveRadiation.sharedKernel(0.4, 0.3, 1.2, 0.005, 1601);
+        assertSame(first, WaveRadiation.sharedKernel(0.3, 0.4, 1.2, 0.005, 1601), "symmetric arguments share one kernel");
+        assertArrayEquals(WaveRadiation.kernel(0.3, 0.4, 1.2, 0.005, 1601), first, 1e-12);
+    }
+
     private static final double G = Atmosphere.GRAVITY_MPS2, DT = 0.005;
 
     @Test void hulmeTableIsKramersKroenigConsistent() {

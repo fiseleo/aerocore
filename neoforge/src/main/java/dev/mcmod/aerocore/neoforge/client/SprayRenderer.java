@@ -36,7 +36,7 @@ import java.util.List;
 /**
  * Bow spray of moving wake sources (Wakes.moving): where BowSpray says the bow wave breaks, droplets leave both
  * sides of the bow with the BowSpray velocity (plus the source's own) and fly under real gravity and quadratic air drag
- * toward the local wind (the sea region's log profile; still air elsewhere), g |w - v| (w - v) / v_t^2, which makes a
+ * toward the local wind (the sea region's mean-wind log profile plus its gust; still air elsewhere), g |w - v| (w - v) / v_t^2, which makes a
  * drop's fall speed in still air tend to its terminal speed v_t, until they fall back through the still surface. The
  * drops are taken as about 1 mm across (v_t = 3.9 m/s, Gunn and Kinzer 1949), scattered between 0.5 and 2 mm
  * (2.1-6.5 m/s) for display: bow-spray drop sizes are not modelled. How many droplets are drawn (a few per side per
@@ -68,7 +68,8 @@ public final class SprayRenderer {
             Droplet d = it.next();
             d.px = d.x; d.py = d.y; d.pz = d.z;
             WaveRegion region = SeaSurface.regionAt(regions, d.x, d.z);
-            Vec3d wind = region == null ? Vec3d.ZERO : region.wind().at(d.y - region.stillWaterY()).scale(region.weight(d.x, d.z));
+            Vec3d wind = region == null ? dev.mcmod.aerocore.neoforge.probe.WorldWind.at(level, d.x, d.y, d.z, SeaSurface.time(level))
+                    : region.windAt(level, d.x, d.y, d.z, SeaSurface.time(level));
             // Gravity and quadratic drag toward the wind, semi-implicit in the drag (stable at any relative speed).
             double h = DT / SUBSTEPS;
             for (int k = 0; k < SUBSTEPS; k++) {

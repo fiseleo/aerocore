@@ -105,6 +105,32 @@ class RowboatTest {
         assertTrue(rate > Math.toRadians(15), "One oar still turns a pram briskly: " + Math.toDegrees(rate));
     }
 
+    @Test void surgesWithEveryStrokeAtAboutTheAveragedSpeed() {
+        List<Rowboat.Passenger> crew = List.of(PERSON);
+        double draft = Rowboat.draft(Rowboat.mass(crew).massKg(), RHO);
+        assertEquals(1, java.util.stream.IntStream.range(0, 100000).mapToDouble(i -> Rowboat.strokeFactor(i / 100000.0)).average().orElseThrow(), 1e-4, "Mean thrust factor over a stroke");
+        WaveRadiation.Memory memory = memory();
+        Rowboat.State s = at(-draft);
+        double phase = 0, min = Double.MAX_VALUE, max = 0, sum = 0;
+        int samples = 0;
+        for (int i = 0; i < 1600; i++) {
+            s = Rowboat.step(s, crew, new Rowboat.Oars(0.5, 0.5, phase, phase), calm(0), null, RHO, DT, memory).state();
+            phase += Rowboat.STROKE_RATE * DT;
+            if (i >= 1200) { double v = s.velocity().dot(Rowboat.forward(s.yaw())); min = Math.min(min, v); max = Math.max(max, v); sum += v; samples++; }
+        }
+        double mean = sum / samples;
+        WaveRadiation.Memory averaged = memory();
+        Rowboat.State a = at(-draft);
+        for (int i = 0; i < 1200; i++) { a = Rowboat.step(a, crew, new Rowboat.Oars(0.5, 0.5), calm(0), null, RHO, DT, averaged).state(); }
+        double steady = a.velocity().dot(Rowboat.forward(a.yaw()));
+        System.out.printf("Stroke by stroke: %.2f to %.2f m/s, mean %.2f (stroke-averaged model %.2f), fluctuation %.0f %% of the mean%n",
+                min, max, mean, steady, 100 * (max - min) / mean);
+        // The drive's impulse over the boat's mass sets the swing (no measurement for a pram was found; 10-60 % of the
+        // mean is the plausible range); the quadratic drag makes pulsed rowing a little slower for the same mean thrust.
+        assertTrue((max - min) / mean > 0.1 && (max - min) / mean < 0.6, "Surge per stroke");
+        assertTrue(mean < steady && mean > 0.9 * steady, "About the averaged speed, a little slower");
+    }
+
     @Test void driftsDownwindLikeASmallOpenBoat() {
         List<Rowboat.Passenger> crew = List.of(PERSON);
         double draft = Rowboat.draft(Rowboat.mass(crew).massKg(), RHO), wind = 10;

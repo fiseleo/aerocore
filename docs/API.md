@@ -630,3 +630,61 @@ Rowboat.Result r = Rowboat.step(state, crew, oars, water, ownWake, new Rowboat.A
 ```
 
 係數來源與驗證見 [海況](SEA.md)〈風〉與 [原版船](ROWBOAT.md)。
+
+## 0.13 相容性變更
+
+- `SeaWind.sea` 另以 DNV 的海況陡度上限（2πHs/(gTp²) ≤ 1/15；短風域的年輕海浪會碎浪）與 1.86 Hs ≤ 0.78 d 限制 Hs，結果都能由 `SeaSpectrum` 合成。
+- `CoastalWaves.build(..., waves, WindSea)`：風浪模式，各點依自己的直線風域成長；`CoastalWaves.fetches` 回傳每個水格點的風域。
+- `CompiledWaves.withoutShorterThan(minWavelength)`：畫面用，去掉網格畫不出的短波分量（分量數不變，振幅為 0）。
+- `CompiledWaves.gridCorrection` 改為逐點內積（不再每次配置陣列），結果不變。
+- `Rowboat.Air` 多 `gust`（舊的兩參數建構式等於無陣風）。
+- 新的 `WindGusts`：Kaimal 頻譜合成的陣風（見下）。
+- Minecraft 端：`WaveRegion.Sea` 多 `windMps`、`fetchBeyondM`（風浪才有）；`WaveRegion.Wind` 多 `rainMps`、`thunderMps`（隨天氣）與 `mean(level)`；
+  `WaveRegion.meanWind`／`gust`／`windAt`／`windDrift(level, ...)`／`drawnWaves`；`WaveRegions.at(level, x, z)` 回傳含該點風的 `Local`（`wind10`、`gust`）；
+  `SeaSurface.waterVelocity` 多 `level` 參數；`WaveSurfaceRenderer.surfaceMask`。
+
+## 0.16 相容性變更
+
+- 新的 `SurfaceWind`：粗糙度分級、對數風剖面（60 m 混合高度、樹冠位移與冠層內衰減）、`overWater`、亂流強度、Taylor–Lee 山丘加速、有效粗糙度、`Synoptic`（緩慢變化的綜觀風）。
+- 新的 `FlightAtmosphere`：MIL-F-8785C 低空 Dryden（`lowAltitude`、頻譜、`Gusts` 時域產生器）、Wieselsberger 地面效應、Allen／Gedeon 熱氣流、坡面上升氣流。
+- 新的 `SkyModel`：Preetham 晴空（`clear(T, θs)`、`xyY`、`meanLuminance`）、CIE 陰天、xyY → sRGB。
+- 新的 `GroundContact`：Magic Formula（`MagicFormula`、`tyreForces`）、滾動阻力、Bekker–Wong 軟地面（`Soil`、`rigidWheel`、`shear`）、`Surface` 預設。
+- Minecraft 端：
+  - `WorldWind`：`reference`、`mean`、`gust`、`vertical`、`at`、`describe`，以及 `setOverride`／`override`（存檔）。
+  - `WaveRegions.Local` 多 `level` 與 `time`，有了它們，`windAt` 讀全世界的風。
+  - 沒有自己風的 `WaveRegion` 的 `meanWind`／`gust`／`windAt` 改回傳全世界的風。
+  - `NaturalSeas`、`WaveRegion.natural()`、`WaveRegions.setNatural`／`naturalSeas()`。
+  - `GroundSurfaces.of(level, pos)`。
+  - 客戶端 `SkyRenderer`，以及 mixin `SkyDomeMixin`、`CloudWindMixin`、`WeatherWindMixin`。
+- 新指令：`/aerocore wind`、`/aerocore wind set <m/s> <°>`、`/aerocore wind natural`、`/aerocore waves natural on|off`、`/aerocore ground`。
+- `Whitecaps.thresholdAtWind` 在碎浪比例小於 10⁻¹² 時回傳無限大（0.15 開發中邊緣無風時會拋例外）。
+
+## 0.15 相容性變更
+
+- `WaterOptics.ripples(風速, 風向, 波譜已有的斜率變異量, 起始波數, 數量, 種子)`：網格以下的風小波紋（每列 {kx, kz, 振幅, ω, 相位}），只用於畫面；
+  `rippleFrequency(k)`（毛細重力波色散）、`slopeVariances(u)`（Cox-Munk 上風／側風）、`smithLambda(cos, 變異量)`；`glitter` 多乘 Smith 遮蔽。
+- `CoastalWaves.WindSea` 多 `peakPeriodS`（合成時的 Tp；三參數建構子為 NaN，改用最大分量的週期）：風浪成長在該 Tp 的陡度上限 1/15 停止。
+- `Whitecaps.thresholdAtWind` 不再壓在 0.388 g 以下；碎浪比例低於 10⁻¹² 時回傳無限大。
+- `CompiledWaves.grid`／`gridSecondOrder`／`gridCoastal` 跳過振幅為 0 的分量（結果不變）。
+- Minecraft 端：`WaveSurfaceRenderer` 改用 shader `aerocore:rendertype_aerocore_sea`（`RegisterShadersEvent` 註冊，頂點格式 `NEW_ENTITY`，屬性打包見 `.vsh`）；
+  開發用 `AutoShot`（遊戲目錄有 `aerocore-autoshot.txt` 且非正式環境時，開啟名稱以 AeroCore 開頭的世界依步驟截圖後存檔離開）。
+
+## 0.14 相容性變更
+
+- 新的 `WaterOptics`（Fresnel、水下 Fresnel、Cox-Munk 閃爍、水體透射）。
+- `SeaWind.growthTime(u10, fetch)`（CEM II-2-35）、`SeaWind.shelter(下風倍數, 是否樹林)`（Brandle 等 2002）。
+- `CoastalWaves.kernels(x, z, k, coth)`：當地波數與 coth(kh)；`CompiledWaves` 在海岸上的 Choppy Wave Model 部分改用它們（`surfaceTerms`、`gridCoastal`、`at`）。
+- `Rowboat.Oars` 多兩個相位（0～1，NaN 為推力平均）；`Rowboat.strokeFactor(phase)`。
+- Minecraft 端：`WaveRegion.Sea` 多 `fetchM`；`WaveRegion.scale()`／`setScale`（`SeaState` 每 tick 更新、`WaveNetwork.ScalesPayload` 同步）；
+  `WaveRegion.Survey` 多地面與樹冠高度（`barriers()`）；`WaveRegion.shelter(x, z)`。
+
+## 陣風（0.13）
+
+```java
+WindGusts gusts = new WindGusts(seed);                 // 同一個 seed 在伺服器與客戶端得到同一陣風
+double[] g = new double[2];
+gusts.sample(u10, t, alongWindDistance, g);            // g[0] 順風、g[1] 側風的陣風速度，m/s（凍結紊流隨平均風漂移）
+double[] sigma = gusts.deviations(u10);                // 合成陣風的標準差
+```
+
+模型與驗證見 [海況](SEA.md)〈陣風〉。

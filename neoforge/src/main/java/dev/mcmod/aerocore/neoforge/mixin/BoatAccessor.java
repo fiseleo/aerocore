@@ -13,4 +13,6 @@ public interface BoatAccessor {
     @Accessor("inputDown") boolean aerocore$inputDown();
     @Accessor("status") Boat.Status aerocore$status();
     @Accessor("deltaRotation") void aerocore$setDeltaRotation(float degreesPerTick);
+    /** Vanilla's paddle angles (rad), advanced while each paddle rows; the splash (catch) plays at pi/4. */
+    @Accessor("paddlePositions") float[] aerocore$paddlePositions();
 }

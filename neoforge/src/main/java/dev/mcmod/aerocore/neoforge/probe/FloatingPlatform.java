@@ -192,7 +192,7 @@ public final class FloatingPlatform extends Entity implements DebugBody, Coupled
         collision=new FloatingBodyDynamics.Collision(shape,WorldObstacles.collect(this,region),TestPlatform.CONTACT_MATERIAL);
         startTime=server.getGameTime()*MinecraftUnits.TICK_SECONDS;
         Vec3d origin=modelOrigin();
-        waves=WaveRegions.of(server).at(origin.x(),origin.z());
+        waves=WaveRegions.of(server).at(server,origin.x(),origin.z());
         environment.setSea(waves);
         sampler.drifting(waves.region());
         fluidSum=Wrench.ZERO; contactSum=Wrench.ZERO;
@@ -412,7 +412,7 @@ public final class FloatingPlatform extends Entity implements DebugBody, Coupled
     }
     /** Re-reads the wave region at the current position, for commands issued between ticks. */
     public void refreshWaves() {
-        if(level() instanceof ServerLevel server) {Vec3d o=modelOrigin();waves=WaveRegions.of(server).at(o.x(),o.z());}
+        if(level() instanceof ServerLevel server) {Vec3d o=modelOrigin();waves=WaveRegions.of(server).at(server,o.x(),o.z());environment.setSea(waves);}
     }
     public Component thermalDiagnostics() {
         int seaLevel=level() instanceof ServerLevel server?server.getChunkSource().getGenerator().getSeaLevel():63;

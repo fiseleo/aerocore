@@ -152,7 +152,7 @@ public final class PhysicsProbe extends Entity implements CoupledBody, SolidBody
         }
         collision = new FloatingBodyDynamics.Collision(SHAPE, WorldObstacles.collect(this, region), MATERIAL);
         // The same world wave regions as the platform; the taper factor is taken at the sphere centre.
-        waves = WaveRegions.of(server).at(state.position().x(), state.position().z());
+        waves = WaveRegions.of(server).at(server, state.position().x(), state.position().z());
         sampler.drifting(waves.region());
         startTime = server.getGameTime() * MinecraftUnits.TICK_SECONDS;
         dragSum = Vec3d.ZERO; buoyancySum = Vec3d.ZERO; contactSum = Vec3d.ZERO; steps = 0; moving = true;

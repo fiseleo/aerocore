@@ -5,9 +5,11 @@ package dev.mcmod.aerocore.api;
  * <ul>
  * <li>Breaking: a surface particle accelerating downward faster than a threshold (Snyder and Kennedy 1983; the
  * smooth-crested limit is 0.388 g, Longuet-Higgins and Fox 1977), the linear vertical acceleration at the point
- * standing in for the particle's. The resolved spectrum stops at 5 omega_p, so its accelerations are too small to
- * reach that limit; the threshold is instead set so the Gaussian fraction of surface beyond it equals the actively
- * breaking whitecap fraction W_A, never above 0.388 g.</li>
+ * standing in for the particle's. Linear accelerations of a spectrum cut at 5 omega_p are no measure of that limit
+ * (an open-ocean sea's rarely reach it; a short-fetch sea at the steepness limit has deviations near a quarter of g,
+ * carried by centimetre waves that micro-break without whitecaps), so the threshold is set so the Gaussian fraction of
+ * surface beyond it equals the actively breaking whitecap fraction W_A, whatever acceleration that takes. Until 0.14
+ * it was capped at 0.388 g, which made such a pond foam over tens of times Monahan's coverage.</li>
  * <li>W_A is a tenth of the whitecap coverage W (stage A crests against stage B foam, Monahan and Lu 1990), and
  * W = 3.84e-6 U10^3.41 (Monahan and O'Muircheartaigh 1980, data to 16.6 m/s). The wind is the one that raises the
  * sea's Hs when fully developed (Pierson-Moskowitz: Hs = 0.2092 U19.5^2 / g, U19.5 = 1.05 U10, the middle of
@@ -40,8 +42,8 @@ public final class Whitecaps {
 
     /**
      * Downward surface acceleration (m/s^2, positive) beyond which the sea breaks: the level exceeded by the active
-     * fraction of a Gaussian acceleration field with this deviation (CompiledWaves.accelerationDeviation), capped at
-     * LIMIT g. Infinite when nothing breaks.
+     * fraction of a Gaussian acceleration field with this deviation (CompiledWaves.accelerationDeviation). Infinite
+     * when nothing breaks.
      */
     public static double threshold(double accelerationDeviation, double significantHeightM) {
         return thresholdAtWind(accelerationDeviation, equivalentWind(significantHeightM));
@@ -49,9 +51,10 @@ public final class Whitecaps {
 
     /** threshold for a sea under a known 10 m wind (m/s), whose whitecap coverage it sets. */
     public static double thresholdAtWind(double accelerationDeviation, double windMps) {
-        double active = 0.1 * coverage(windMps), limit = LIMIT * Atmosphere.GRAVITY_MPS2;
-        if (!(active > 0) || !(accelerationDeviation > 0)) { return Double.POSITIVE_INFINITY; }
-        return Math.min(limit, accelerationDeviation * inverseNormal(1 - active));
+        double active = 0.1 * coverage(windMps);
+        // Below 1e-12 the breaking share is nil (and 1 - active would round to 1).
+        if (!(active > 1e-12) || !(accelerationDeviation > 0)) { return Double.POSITIVE_INFINITY; }
+        return accelerationDeviation * inverseNormal(1 - active);
     }
 
     /** Inverse standard normal CDF (Acklam 2003 rational approximation, relative error below 1.2e-9). */
