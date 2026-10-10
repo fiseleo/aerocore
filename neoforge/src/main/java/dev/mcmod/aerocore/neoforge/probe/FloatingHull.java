@@ -156,9 +156,10 @@ public final class FloatingHull extends Entity implements DebugBody, CoupledBody
         entityLoads.beginTick();
         return true;
     }
-    // ---- Wakes.Source: Michell thin-ship wake of the design hull, along the direction of motion ----
+    // ---- Wakes.Source: the design hull's thin-ship (Michell) double-body pressure, in its own frame ----
     @Override public Wakes.Design wakeDesign() { return Wakes.TEST_HULL; }
     @Override public Vec3d wakeOrigin() { return toWorld(Vec3d.ZERO); }
+    @Override public Vec3d wakeForward() { return poseOrientation().rotate(Vec3d.X); }
     @Override public Vec3d wakeVelocity() {
         return level().isClientSide ? new Vec3d(getX() - xo, getY() - yo, getZ() - zo).scale(1 / MinecraftUnits.TICK_SECONDS) : state.velocity();
     }

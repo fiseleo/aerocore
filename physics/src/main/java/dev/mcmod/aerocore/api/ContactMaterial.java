@@ -61,4 +61,66 @@ public record ContactMaterial(double friction, double restitution, double yieldV
     /** Two steel bodies: kinetic friction 0.57 of mild steel on mild steel (NASA RP-1228, Table IV; oxide films vary it 0.15-0.8) and steel-on-steel V_y. */
     public static final ContactMaterial STEEL_ON_STEEL = new ContactMaterial(0.57, 1,
             yieldVelocity(STEEL_YIELD_PA, STEEL_DENSITY, contactModulus(STEEL_MODULUS_PA, STEEL_POISSON, STEEL_MODULUS_PA, STEEL_POISSON)));
+
+    /**
+     * Velocity at first yield for a given limiting contact pressure p_y of the softer body (Pa), when it is known as a
+     * hardness rather than a yield stress: V_y = 1.56 sqrt(p_y^5 / (E*^4 rho)), rho the steel body's density. With bulk
+     * yield strength instead, Thornton's law gives restitutions far below measurements for ice, wood and concrete;
+     * indentation hardness reproduces them (for example ice on ice: 0.77 at 1 m/s against 0.68-0.79 measured,
+     * Deckers and Teiser 2016).
+     */
+    public static double yieldVelocityFromPressure(double pressurePa, double densityKgM3, double contactModulusPa) {
+        return 1.56 * Math.sqrt(Math.pow(pressurePa, 5) / (Math.pow(contactModulusPa, 4) * densityKgM3));
+    }
+
+    /**
+     * Steel on wood: friction 0.3, the middle of measured steel-on-dry-wood sliding (spruce 0.16-0.26, Lemoine 1970;
+     * balsa about 0.5, Atack and Tabor 1958; reviewed by Zheng, Cabboi and van de Kuilen 2024, Tribol. Int. 200:110193).
+     * Restitution: Thornton with oak's side-grain hardness about 35 MPa as p_y (Brinell 30-40 N/mm^2) and its
+     * tangential modulus 0.9 GPa (white oak, E_L 12.3 GPa x E_T/E_L 0.072, Wood Handbook FPL-GTR-190 table 5-1),
+     * Poisson 0.30 (its nu_TR). No measured steel-on-wood restitution was found to check it.
+     */
+    public static final ContactMaterial STEEL_ON_WOOD = new ContactMaterial(0.3, 1,
+            yieldVelocityFromPressure(35e6, STEEL_DENSITY, contactModulus(STEEL_MODULUS_PA, STEEL_POISSON, 0.9e9, 0.30)));
+    /**
+     * Steel on ice: friction 0.01, measured near -10 C (Weber et al. 2018, J. Phys. Chem. Lett. 9:2838; it rises
+     * steeply in colder ice, toward 0.5 at -100 C; temperature is not modelled here). Restitution: Thornton with ice's
+     * indentation hardness 100 MPa at -10 C (Butkovich 1954, via Tusima 1977) and E 9.33 GPa, nu 0.325 (Gammon et al.
+     * 1983); ice cracks above about 2-3 m/s, which is not modelled.
+     */
+    public static final ContactMaterial STEEL_ON_ICE = new ContactMaterial(0.01, 1,
+            yieldVelocityFromPressure(100e6, STEEL_DENSITY, contactModulus(STEEL_MODULUS_PA, STEEL_POISSON, 9.33e9, 0.325)));
+    /**
+     * Steel on loose sand: friction 0.30 (steel sheet piles on clean sand, NAVFAC DM-7.02 table 1); no rebound, a body
+     * much larger than the grains embeds (Brisset et al. 2018: no rebound at all above 1e-2 g).
+     */
+    public static final ContactMaterial STEEL_ON_SAND = new ContactMaterial(0.30, 0);
+    /**
+     * Steel on gravel: friction 0.40 (steel sheet piles on clean gravel, NAVFAC DM-7.02 table 1); restitution 0.31, the
+     * middle of rockfall field values on talus (0.30-0.33, RocFall coefficient table).
+     */
+    public static final ContactMaterial STEEL_ON_GRAVEL = new ContactMaterial(0.40, 0.31);
+    /**
+     * Steel on soil: friction 0.30, the middle of steel on reconstituted clay (tan delta 0.28-0.33, Chulalongkorn
+     * thesis); restitution 0.30, the middle of rockfall field values on soft soil with vegetation (0.28-0.32, RocFall).
+     */
+    public static final ContactMaterial STEEL_ON_SOIL = new ContactMaterial(0.30, 0.30);
+    /**
+     * Steel on mud: friction 0.25, wet soil past its plastic limit lubricating a steel blade (0.2-0.3; Birch, Ekwue and
+     * Phillip 2016, West Indian J. Eng. 38(2)); its adhesion (0.2-7.6 kPa) is not modelled; no rebound.
+     */
+    public static final ContactMaterial STEEL_ON_MUD = new ContactMaterial(0.25, 0);
+    /** Steel on snow: friction 0.113, wet dense snow on a steel-floored chute (Aggarwal, Das and Gusain 2024, Open Geosci.); snow compacts: no rebound. */
+    public static final ContactMaterial STEEL_ON_SNOW = new ContactMaterial(0.113, 0);
+    /**
+     * Steel on wool: no measured steel-on-fabric value was found; friction 0.3 is a rule between leather fibre on
+     * aluminium (0.30) and leather on cast iron (0.56), and the soft fabric is given no rebound (a rule).
+     */
+    public static final ContactMaterial STEEL_ON_WOOL = new ContactMaterial(0.3, 0);
+    /**
+     * Steel on glass: glass stays elastic until it cracks, so Thornton's plastic law does not apply; restitution 0.9
+     * (glass impacts at up to about 1.4 m/s, 0.85-0.95), friction 0.5 (glass on metal in handbooks, 0.5-0.7, the low
+     * end). Breaking is not modelled.
+     */
+    public static final ContactMaterial STEEL_ON_GLASS = new ContactMaterial(0.5, 0.9);
 }

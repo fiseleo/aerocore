@@ -108,6 +108,7 @@ public final class PlaningDynamics {
         double[][] addedBody = new double[6][6];
         double[] dx = new double[n], momentumY = new double[n], momentumZ = new double[n], surge = new double[n], girth = new double[n], density = new double[n];
         double[] breadth = new double[n];
+        boolean[] keelWet = new boolean[n], chinesWet = new boolean[n];
         Vec3d[] keelOffset = new Vec3d[n], relative = new Vec3d[n];
         HullSection.Wet[] wets = new HullSection.Wet[n];
         double wetVolume = 0, wettedLength = 0, kinematicViscosity = 0;
@@ -153,6 +154,7 @@ public final class PlaningDynamics {
             wettedLength += dx[i];
             double chine = planing.chineHalfBeam(i), wagner = 0.5 * Math.PI * h * cotBeta;
             boolean chineWet = wagner >= chine;
+            keelWet[i] = true; chinesWet[i] = chineWet;
             double b = Math.min(wagner, chine), ma = 0.5 * Math.PI * rho * b * b;
             double m22 = wet.areaM2() > 0 ? HullModel.sectionAddedMass(section, wet, rho)[0] : 0;
             Vec3d rBody = q.inverse().rotate(keelOffset[i]);
@@ -215,6 +217,29 @@ public final class PlaningDynamics {
                 dragPower += magnitude * Math.abs(surge[i]);
             }
             forces.add(new AppliedForce(AppliedForce.Kind.DRAG, Vec3d.ZERO, friction.force()));
+        }
+        // Whisker spray drag (Savitsky, DeLorme and Datla 2007, Marine Technology 44(1)): the thin sheet thrown forward
+        // of the stagnation line rubs on the bottom between the stagnation line (angle a to the keel in plan,
+        // tan a = pi tan(trim) / (2 tan beta)) and the spray edge (2a), out to the chines: both sides together
+        // D = rho V^2 C_f b^2 cos(2a) / (8 sin(2a) cos(beta)), C_f by ITTC-1957 on the sheet's path b / (2 cos(beta) sin(2a)).
+        // It exists where the keel is wet ahead of the chines (planing); faded in with the ventilation like the rest.
+        int front = -1, chineFront = -1;
+        for (int i = 0; i < n; i++) { if (keelWet[i]) { front = i; } if (chinesWet[i]) { chineFront = i; } }
+        double trimAngle = Math.asin(Math.clamp(ex.dot(up), -1, 1));
+        if (front > chineFront && chineFront >= 0 && trimAngle > 0 && ventilation > 0) {
+            int m = (front + chineFront + 1) / 2;
+            double alpha = Math.atan(Math.PI * Math.tan(trimAngle) / (2 * Math.tan(beta))), edge = 2 * alpha;
+            double b = 2 * planing.chineHalfBeam(m), speed = Math.abs(surge[m]);
+            if (edge < Math.PI / 2 && speed > 0) {
+                double path = b / (2 * cosBeta * Math.sin(edge));
+                double cf = HullResistance.ittc1957(speed * path / Math.max(kinematicViscosity, 1e-12));
+                double spray = ventilation * 0.5 * density[m] * speed * speed * cf * b * b * Math.cos(edge) / (4 * Math.sin(edge) * cosBeta);
+                Vec3d f = ex.scale(-Math.signum(surge[m]) * spray);
+                friction = friction.add(Wrench.atOffset(f, keelOffset[m]));
+                forces.add(new AppliedForce(AppliedForce.Kind.DRAG, keelOffset[m], f));
+                frictionTotal += spray;
+                dragPower += spray * speed;
+            }
         }
         double surgeSpeed = s.velocity().subtract(transomWater.velocity()).dot(ex);
         return new Loads(hydro, dynamic, friction, excitation, addedBody, forces,

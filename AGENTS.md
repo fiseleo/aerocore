@@ -7,16 +7,18 @@
 
 - 為 Minecraft Java 載具 Mod 建立通用的空氣／水動力前置；載具形式尚未決定。
 - 先維持可驗證的物理核心，再逐步接入載具玩法。不要把近似模型描述成工程級 CFD。
-- 截至 2026-10-10，版本為 **0.10.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
+- 截至 2026-10-10，版本為 **0.11.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
   0.6 加入球形元件接觸反力（摩擦／反彈）、指定的線性 Airy 波浪、BEMT 螺旋槳推力（平台艉部示範槳）與阻力摩擦生熱；
   0.7 加入接觸摩擦生熱、波壓深度衰減（垂直 Froude–Krylov）、水平 Froude–Krylov 力與附加質量，測試球改用六自由度剛體與 `ContactSolver`；
   0.8 加入浮筒垂直方向的波浪輻射阻尼（Hulme 半球資料、Cummins 記憶力）與浮筒間點吸收體干擾；
   0.9（2026-10-10）加入世界波浪區域與客戶端波面、與輻射一致的浮筒垂直繞射表、Wageningen B 系列螺旋槳、
   細長船體（阻力與操縱）與指令操作的測試船／舵、物體之間的雙向接觸（`BodyWorld`），以及原版實體站上甲板（mixin）；
   0.10（2026-10-10）加入 JONSWAP 不規則海況、所有讀取者共用的移動水面（原版實體／原版船／鏡頭霧 mixin）、Kelvin 尾浪與水花、
-  Zarnick 2D+t 滑行艇（對 Fridsma 1969 驗證）與指令操作的滑行測試艇，並把示範係數換成文獻值（見 docs/PHYSICS.md〈0.10 係數來源〉）。
-- 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是給定的線性 Kelvin 波型，不是流場求解。
-- 尚無可駕駛載具、方塊組裝、引擎模型、旋翼、三維 CFD、波浪傳播求解（碎浪、反射）、相變或完整熱流耦合。
+  Zarnick 2D+t 滑行艇（對 Fridsma 1969 驗證）與指令操作的滑行測試艇，並把示範係數換成文獻值（見 docs/PHYSICS.md〈0.10 係數來源〉）；
+  0.11（2026-10-10）把水面改成二階（Choppy Wave Model）、尾浪改成每個來源一個 FFT 網格的線性非定常解、加入碎浪白沫（Monahan 白冠覆蓋率），
+  原版船改成真實划船物理（`Rowboat`／`RowingBoats`，使用者選擇；可駕駛的新載具使用者決定先不做），方塊依材質分類給摩擦與恢復係數，滑行艇加鬚狀水花阻力。
+- 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是線性自由面的非定常解（勢流），不是黏性流場求解。
+- 尚無可駕駛的新載具、方塊組裝、引擎模型、旋翼、三維 CFD、碎浪動力、波浪反射與地形折射、相變或完整熱流耦合。
 - 載具形式仍未決定；船體模型刻意做成水面船與潛航體都能用的細長體，不要擅自改成特定載具玩法。
 
 ## 固定開發基底
@@ -40,7 +42,9 @@
 - Windows Shell 操作優先使用 `Z:\MCMod`，避免 CMD 的 UNC 工作目錄限制。
 - 原始碼及 JAR 在專案內；遊戲世界、設定、記錄與截圖必須留在本機。
 - 本機執行根目錄：`%USERPROFILE%\.mcmod\runs\aerocore`，每台電腦各自一份：原開發機（`DESKTOP-AH3A4MO`）為 `C:\Users\ZHU YU TA\.mcmod\runs\aerocore`，`DESKTOP-KLLC9QQ` 為 `C:\Users\CHU YU TA\.mcmod\runs\aerocore`。
-- 專案不是 git 倉庫；大改前把原始碼備份到 `%USERPROFILE%\.mcmod\backups\`（0.9 開工前的備份為 `aerocore-src-0.8.0-20261010-002942`）。
+- 2026-10-10 起專案是 git 倉庫，依使用者要求上傳到公開的 GitHub `fiseleo/aerocore`；網路磁碟上的 git 指令要加
+  `-c safe.directory=%(prefix)///100.96.25.71/share/MCMod`（不改全域設定）。推送是對外公開的動作，每次先經使用者同意。
+  大改前仍把原始碼備份到 `%USERPROFILE%\.mcmod\backups\`（0.9 開工前 `aerocore-src-0.8.0-20261010-002942`，0.11 開工前 `aerocore-src-0.10.0-20261010-130423`）。
 - `client` 放開發客戶端資料，`server` 放開發伺服器資料，`gametest` 放自動測試世界。
 - `aerocore_runtime_id=aerocore` 保持磁碟代號與 UNC 啟動結果一致。只有獨立實驗專案才使用不同 ID。
 - JDK 位於 `%USERPROFILE%\.mcmod\java\jdk-21.0.12.1+1`，Java 暫存位於 `%USERPROFILE%\.mcmod\tmp`。優先使用啟動腳本偵測 JDK，不依賴舊的 AppData 路徑。
@@ -98,17 +102,18 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | `neoforge/src/main/java/dev/mcmod/aerocore/neoforge/` | Mod 註冊、指令、Minecraft 整合 |
 | 上述目錄的 `probe/` | 測試球、平台、環境取樣、粒子顯示與 GameTest |
 | 上述目錄的 `client/` | 客戶端模型與渲染（含波面），避免專用伺服器載入客戶端類別 |
-| neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船）、`LivingEntityAccessor`；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）；只能放 mixin 類別 |
+| neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船水面）、`BoatPhysicsMixin`（原版船改由 `RowingBoats` 移動、槳速）、`BoatAccessor`、`LivingEntityAccessor`；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）、`BoatRendererMixin`（船的俯仰橫搖）、`BoatClientMixin`（槳動畫內插）；只能放 mixin 類別 |
 | `scripts/` | JDK／IDE／本機資料與離線 CFD 繪圖工具 |
 | `docs/` | API、模型假設、操作和驗證說明 |
 
 主要類別：`AeroSolver`、`RigidBodyDynamics`、`FloatingBodyDynamics`、`ContactSolver`、`LinearWave`／`WaveField`、
 `PropellerSolver`／`BladeElementPropeller`／`WageningenB`、`WaveRadiation`、`SlenderHull`／`HullSection`／`HullModel`／`HullDynamics`／`HullResistance`／`HullManoeuvring`、
 `Rudder`、`Thermodynamics`、`HeatTransfer`；0.10：`SeaSpectrum`／`CompiledWaves`、`KelvinWake`、`BowSpray`、`PlaningHull`／`PlaningDynamics`／`TestPlaningBoat`、
-`SphereDrag`、`BSeriesFourQuadrant`、`ContactMaterial`（Thornton）；
+`SphereDrag`、`BSeriesFourQuadrant`、`ContactMaterial`（Thornton）；0.11：`UnsteadyWake`／`Fft2D`、`Rowboat`、`Whitecaps`；
 遊戲端入口為 `FloatingPlatform`、`FloatingHull`、`PhysicsProbe`（都實作 `CoupledBody`、`SolidBody`）、`BodyWorld`（每 tick 聯合推進）、
 `BodyCollisions`（原版實體）、`WaveRegions`／`WaveNetwork`／`WaveCommands`、`PlatformCommands`、`HullCommands`、`PlatformDebug`、`WorldWaterSampler`；
-0.10：`SeaSurface`（共用水面）、`VanillaWater`（原版實體）、`Wakes`（尾浪與靜水區）、`EntityMasses`、`PlaningBoat`／`PlaningCommands`，客戶端 `WaveSurfaceRenderer`、`SprayRenderer`。
+0.10：`SeaSurface`（共用水面）、`VanillaWater`（原版實體）、`Wakes`（尾浪與靜水區）、`EntityMasses`、`PlaningBoat`／`PlaningCommands`，客戶端 `WaveSurfaceRenderer`、`SprayRenderer`；
+0.11：`RowingBoats`（原版船）、`BlockMaterials`，客戶端 `SeaFoam`。
 修改來源檔，不直接修改 `build/`、Gradle 快取或生成的 Mod 中繼資料。
 
 ## 物理與顯示約定
@@ -146,12 +151,19 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 - 0.10 海面：海域（常駐，或尾浪自動帶出的臨時靜水區）內所有讀取者都經 `SeaSurface` 讀同一個水面（靜水面＋漸弱環境波＋尾浪），
   時間為遊戲刻 × 0.05 s；擁有判定是靜水面高度的水源方塊、上方開放。不要讓某個讀取者自行改用水方塊頂面或另算波高。
   不規則海用 32 個單一求和分量（`SeaSpectrum`），物理取樣用 `CompiledWaves`（結果與逐點公式相同，不要改回逐分量呼叫 `LinearWave`，太慢）。
-  尾浪是隨速度分格的定常 Kelvin 波型（直線等速近似），只以水面高低作用（靜水壓），物體排除自己的尾浪；原版實體的波浪漂移用其原版水中阻尼 f。
+  原版實體的波浪漂移用其原版水中阻尼 f（原版船除外）。
+- 0.11 水面與尾浪：水面形狀是 CWM 二階（`CompiledWaves.surfaceTerms`／`gridSecondOrder`，漸弱 w 對二階乘 w²），水下速度與壓力仍線性；
+  所有讀取者都要用二階水面。尾浪由 `Wakes` 為每個來源維持一個 `UnsteadyWake`（背景執行緒每 tick 一步、讀快照），
+  只以水面高低作用在其他物體上，物體排除自己的尾浪；原版船例外，以自身尾浪坡度計算興波阻力。GameTest 要設 `Wakes.synchronous = true`。
+  `KelvinWake` 只作為驗證的定常解。碎浪門檻由 `Whitecaps` 對準 Monahan 覆蓋率，白沫是客戶端視覺（`SeaFoam`）。
+- 0.11 原版船：`RowingBoats` 在移動船的那一端取代 floatBoat／controlBoat，位移交給原版 `move()`；其他客戶端只算俯仰橫搖。
+  船底壓力（尾浪與波阻）用有翹度的拋物線分布，不要改回方形銳邊（會產生假的阻力起伏）；按鍵到槳的對應是操作規則。
+  已知不確定：單槳轉向比文獻估計快。
 - 0.10 滑行：`PlaningDynamics` 用 Zarnick 2D+t（Wagner 堆水、C_Dc = cosβ、轉動座標項），靜水壓用完整 Archimedes，通氣後垂直於龍骨；
   Zarnick 的浮力減半與 Garme 艉板修正都試過、會讓 Fridsma B 組態縱搖不穩，不要再加回。低速垂直輻射由呼叫者提供、隨通氣淡出。
-  驗證基準：Fridsma 表 1（阻力 −15%～0%、俯仰低 0.5～1.1°、重載低 2.4°），縱搖不穩起始比水槽晚。
-- 0.10 係數：浮筒阻力用 `FloatingBodyDynamics.STANDARD_DRAG`（Clift 標準曲線）；物體為鋼、方塊當岩石（`ContactMaterial.STEEL_ON_ROCK`，Thornton 恢復係數）；
-  方塊材質尚未分類。沒有資料的值（虛構生物質量、原版水流速度、顯示用水滴數量）要在註解寫明是規則或顯示預算，不可寫成量測值。
+  驗證基準：Fridsma 表 1（0.11 加鬚狀水花阻力後阻力 −10%～+8%、俯仰低 0.5～1.1°、重載低 2.4°），縱搖不穩起始比水槽晚。
+- 0.10 係數：浮筒阻力用 `FloatingBodyDynamics.STANDARD_DRAG`（Clift 標準曲線）；物體為鋼；0.11 起方塊由 `BlockMaterials`（標籤＋音效類型）
+  分成冰、木、沙、礫石、泥土、泥巴、雪、羊毛、玻璃、金屬、岩石，材質放在 `WorldBox` 上；Thornton 的 p_y 用硬度而非降伏強度；實體碰撞箱仍用物體預設。沒有資料的值（虛構生物質量、原版水流速度、顯示用水滴數量）要在註解寫明是規則或顯示預算，不可寫成量測值。
 - 熱力學 API 使用 K，指令使用 °C。空氣支援 180～500 K、1～300 kPa；純水支援 273.15～353.15 K、80～300 kPa，超界拒絕。
 - 熱交換是固定熱容量的均溫模型；環境為固定溫度熱庫。阻力耗散只有回復溫度模型算出的部分（且不超過耗散功率）進入本體，
   其餘留在流體；接觸摩擦熱（Σ−f_t·u_t）依熱滲透率比分給本體與地面（示範：類碳鋼對類花崗岩），法向撞擊損失與軸功率不生熱；
@@ -176,13 +188,15 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | 0.8.0 | 2026-10-09，DESKTOP-KLLC9QQ | 119＋5 | 24 | 修正暫存目錄後可建立、載入、存檔世界，記錄無錯誤；功能畫面未實測 |
 | 0.9.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 147＋5 | 29 | 見下方待實測清單 |
 | 0.10.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 168＋5 | 36 | 只確認開發客戶端能啟動到標題畫面、客戶端 mixin 套用無錯誤；功能畫面未實測 |
+| 0.11.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 189＋5 | 38 | 只確認開發客戶端能啟動到標題畫面、客戶端 mixin（含船的渲染）無錯誤；功能畫面未實測 |
 
 **客戶端仍待實測**（0.6～0.9）：螺旋槳模型與轉動、洋紅接觸／橙推力／淡紫慣性／墨綠輻射／藍升力箭頭、淺藍波面粒子、
 測試球反彈與滾動及其旋轉顯示、平台在靜水中幾秒內停止起伏、新的中英文指令訊息；
 0.9：客戶端波面（mixin 是否套用、波形、漸弱接縫、效能、Fabulous 模式）、測試船網格／舵／槳的外觀、
 玩家站在平台與測試船甲板上的碰撞、被載運與伺服器回拉，以及平台壓斜；
 0.10：不規則海面與分級細節接縫、整片海域的效能、尾浪與臨時靜水區的出現／移動（區塊重建）、水花、鏡頭水下霧切換、
-原版船與生物隨浪起伏、玩家游泳與溺水判定、滑行艇外觀與操作、多人連線。
+原版船與生物隨浪起伏、玩家游泳與溺水判定、滑行艇外觀與操作、多人連線；
+0.11：二階波形外觀、非定常尾浪（轉彎、停船）、白沫與白水、划船手感與轉向、船的俯仰橫搖畫面與乘客位置、各方塊材質的手感、尾浪背景執行緒的負載。
 JUnit 報告在各模組 `build/reports/tests/test/` 與 `build/test-results/test/`；網路磁碟偶爾寫入 HTML 報告失敗，以 XML 結果為準後重跑即可。
 
 JAR 在 `neoforge/build/libs/aerocore-neoforge-1.21.1-<版本>.jar`，已包含 physics API。測試安裝只保留一個 AeroCore 版本，不把 sources JAR 放入 mods。
@@ -193,7 +207,8 @@ CFD CSV／圖在 `cfd/build/experiments/water/` 或 `air/`；`scripts/plot-cfd.p
 - [README](README.md)：啟動、IDE、產物與功能入口。
 - [API](docs/API.md)：接入載具的資料型別與呼叫方式。
 - [物理模型](docs/PHYSICS.md)、[六自由度平台](docs/PLATFORM.md)、[測試船](docs/HULL.md)、[測試球](docs/PROBE.md)。
-- [海況與尾浪](docs/SEA.md)：不規則海、共用水面、尾浪、水花；[滑行艇](docs/PLANING.md)：2D+t 模型與 Fridsma 驗證。
+- [海況與尾浪](docs/SEA.md)：不規則海、二階水面、共用水面、非定常尾浪、白沫、水花；[滑行艇](docs/PLANING.md)：2D+t 模型與 Fridsma 驗證。
+- [原版船](docs/ROWBOAT.md)：划船物理、參數來源與驗證。
 - [熱力學與視覺化](docs/THERMAL_DEBUG.md)：指令、比例尺、熱模型及實測圖。
 - [本機執行資料](docs/LOCAL_RUNTIME.md)：世界遷移、備份與暫存目錄造成的建立世界崩潰。
 - [CFD](docs/CFD.md)：獨立流道求解與離線圖，不等同於遊戲環境流場。

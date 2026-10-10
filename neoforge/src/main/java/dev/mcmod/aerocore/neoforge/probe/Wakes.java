@@ -1,14 +1,15 @@
 package dev.mcmod.aerocore.neoforge.probe;
 
+import dev.mcmod.aerocore.api.Atmosphere;
 import dev.mcmod.aerocore.api.BowSpray;
 import dev.mcmod.aerocore.api.FluidState;
-import dev.mcmod.aerocore.api.KelvinWake;
 import dev.mcmod.aerocore.api.SlenderHull;
 import dev.mcmod.aerocore.api.TestHull;
+import dev.mcmod.aerocore.api.UnsteadyWake;
 import dev.mcmod.aerocore.api.Vec3d;
 import dev.mcmod.aerocore.api.WaveField;
-import dev.mcmod.aerocore.api.Atmosphere;
 import dev.mcmod.aerocore.neoforge.AeroCore;
+import dev.mcmod.aerocore.neoforge.MinecraftUnits;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.vehicle.Boat;
@@ -22,41 +23,49 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Ship wakes on the sea surface. Each moving source (AeroCore hulls, vanilla boats) carries the steady Kelvin pattern
- * (KelvinWake) for its current speed, rigidly attached to its position and direction of motion: a steady-state, straight
- * course approximation, so wakes behind accelerating or turning boats are not their true history. Patterns are
- * computed off-thread per speed bin (3 % steps, one computation in flight per design) and cross-fade over a second when
- * the bin changes; a stopped source fades out. Wakes add to the surface every consumer reads (SeaSurface, the water
- * sampler of AeroCore bodies, the renderer); their orbital velocity and dynamic pressure are not modelled (the wake acts
- * hydrostatically through the raised or lowered surface), and a body never feels its own wake (that is in its
- * resistance). Outside persistent sea regions, a calm zone (not saved) follows each wake so it can be drawn and felt.
+ * Ship wakes on the sea surface. Every wake-making source (AeroCore hulls, vanilla boats) drives its own UnsteadyWake:
+ * the linear free-surface response to its pressure, integrated in time on a 128 x 128 grid that follows it, so wakes
+ * keep the true track (turns curve them, a stopped boat leaves its wake running on, a starting boat sends out starting
+ * waves). Each level tick the sources' states are handed to one background thread, which advances every solver by one
+ * tick and publishes immutable snapshots; readers on any thread see the snapshot of the previous tick's end. Wakes add
+ * to the surface every consumer reads (SeaSurface, the water sampler of AeroCore bodies, the renderer); their orbital
+ * velocity and dynamic pressure are not passed on (the wake acts hydrostatically through the raised or lowered
+ * surface), and a body never feels its own wake (that is in its resistance). Deep water is assumed. Outside persistent
+ * sea regions, a calm zone (not saved) covers each wake grid so it can be drawn and felt.
  */
 @EventBusSubscriber(modid = AeroCore.MOD_ID)
 public final class Wakes {
-    /** Pattern grid spacing, m, and the shortest wave kept (four grid points per wavelength). */
-    public static final double SPACING = 0.5, SHORTEST_WAVELENGTH = 4 * SPACING;
-    /** Below this speed the resolvable waves are negligible; a slower source fades its last pattern out. */
+    /** Grid points per side of every wake solver. */
+    public static final int GRID = 128;
+    /** Below this speed the bow throws no spray worth emitting (Wakes.moving). */
     public static final double MIN_SPEED = 1.0;
-    private static final double BIN_RATIO = 1.03, MIN_LENGTH = 24, MAX_LENGTH = 96;
-    private static final int FADE_TICKS = 20, UNSEEN_TICKS = 2, MAX_CACHED = 48;
+    /** A source at rest sleeps once its waves fall below this, m; a source that stopped reporting is dropped. */
+    private static final double QUIET_ELEVATION = 2e-4;
+    private static final int UNSEEN_TICKS = 2, MAX_PENDING = 4;
+    /** Wake grids lead their source by up to a quarter of their width along its motion, reached in about 3 s. */
+    private static final double LEAD_FRACTION = 0.25, LEAD_RATE = 1 - Math.exp(-MinecraftUnits.TICK_SECONDS / 3);
     /** Zones are snapped to 16 m and their radius to 32 m steps, so moving boats remesh chunks rarely. */
     private static final int ZONE_GRID = 16, ZONE_STEP = 32;
+    private static final double RHO = FluidState.FRESH_WATER_20C.densityKgPerM3(), G = Atmosphere.GRAVITY_MPS2;
 
-    /** What raises the wake and how its amplitude function is built; key() identifies cached patterns. */
+    /** What raises the wake: its body-frame pressure, the solver grid spacing it needs, and its bow spray. */
     public interface Design {
-        String key();
-        KelvinWake wake(double speed, double patternLength);
+        /** Pressure transform in the body frame (x forward from the source's wake origin). */
+        UnsteadyWake.Forcing forcing();
+        /** Grid spacing, m: fine enough for the waves the source makes (the grid is GRID points wide). */
+        double spacing();
         /** Bow position in the body frame (forward of the origin, half-width) and its spray at this speed. */
         Bow bow(double speed);
+        /** Width of the white, aerated water the hull leaves behind its origin (a dry transom), m; 0 for none. */
+        default double whiteWaterWidth(double speed) { return 0; }
     }
 
     /** Where spray leaves the bow (body frame, m) and how. */
@@ -68,93 +77,86 @@ public final class Wakes {
     /** A wake-making AeroCore body. */
     public interface Source {
         Design wakeDesign();
-        /** World point the design's body frame is measured from (x forward along the motion). */
+        /** World point the design's body frame is measured from. */
         Vec3d wakeOrigin();
+        /** World direction of the design's forward (x) axis; only its horizontal part is used. */
+        Vec3d wakeForward();
         /** World velocity, m/s. */
         Vec3d wakeVelocity();
     }
 
-    /** The slender test hull at its design waterline: Michell thin-ship sources. */
+    private static final class ThinShip {
+        /** The test hull's waves are a few metres long at its speeds: 0.5 m spacing, a 64 m grid. */
+        static final double SPACING = 0.5;
+        static final UnsteadyWake.Forcing FORCING;
+        static {
+            SlenderHull hull = TestHull.HULL;
+            SlenderHull.Particulars d = TestHull.model().design();
+            FORCING = UnsteadyWake.thinShip((x, depth) -> hull.halfBreadth(x, depth, d.waterlineY()), d.xAftM(), d.xForwardM(), d.draftM(),
+                    60, 12, RHO, 1.2 * Math.PI / SPACING);
+        }
+    }
+
+    /** The slender test hull at its design waterline: Michell's thin-ship sources as their double-body pressure. */
     public static final Design TEST_HULL = new Design() {
-        @Override public String key() { return "aerocore:test_hull"; }
+        @Override public UnsteadyWake.Forcing forcing() { return ThinShip.FORCING; }
+        @Override public double spacing() { return ThinShip.SPACING; }
         /** Entrance half-angle from the design waterline over the forward 0.3 m. */
         @Override public Bow bow(double speed) {
             SlenderHull.Particulars d = TestHull.model().design();
             double step = 0.3, tip = TestHull.HULL.halfBreadth(d.xForwardM(), 0, d.waterlineY()), back = TestHull.HULL.halfBreadth(d.xForwardM() - step, 0, d.waterlineY());
             double angle = Math.atan((back - tip) / step);
-            return new Bow(d.xForwardM(), tip, BowSpray.displacementBow(speed, angle, d.draftM(), Atmosphere.GRAVITY_MPS2));
-        }
-        @Override public KelvinWake wake(double speed, double length) {
-            SlenderHull hull = TestHull.HULL;
-            SlenderHull.Particulars d = TestHull.model().design();
-            return KelvinWake.thinShip((x, depth) -> hull.halfBreadth(x, depth, d.waterlineY()), d.xAftM(), d.xForwardM(), d.draftM(),
-                    60, 12, speed, Atmosphere.GRAVITY_MPS2, SHORTEST_WAVELENGTH, length);
+            return new Bow(d.xForwardM(), tip, BowSpray.displacementBow(speed, angle, d.draftM(), G));
         }
     };
 
     /**
-     * A vanilla boat as a uniform surface pressure over its square footprint, equal to the hydrostatic pressure at the
-     * draft vanilla floats it at: its buoyancy (waterLevel - y) / height * g_boat / 0.65 balances g_boat at 0.65 of
-     * the box height, so p = rho g 0.65 h. Vanilla's floating rule, not a measured boat.
-     */
-    public static Design vanillaBoat(double width, double height) {
-        double draft = 0.65 * height, pressure = FluidState.FRESH_WATER_20C.densityKgPerM3() * Atmosphere.GRAVITY_MPS2 * draft;
-        return new Design() {
-            @Override public String key() { return "minecraft:boat:" + width + ":" + height; }
-            /** A square box bow: blunt (90 degree entrance), at vanilla's floating draft. */
-            @Override public Bow bow(double speed) {
-                return new Bow(width / 2, width / 2, BowSpray.displacementBow(speed, Math.PI / 2, draft, Atmosphere.GRAVITY_MPS2));
-            }
-            @Override public KelvinWake wake(double speed, double length) {
-                return KelvinWake.pressure(KelvinWake.rectangle(pressure, -width / 2, width / 2, width / 2), -width / 2, width / 2, width / 2,
-                        FluidState.FRESH_WATER_20C.densityKgPerM3(), speed, Atmosphere.GRAVITY_MPS2, SHORTEST_WAVELENGTH, length);
-            }
-        };
-    }
-
-    /**
      * A planing hull as a uniform pressure over its wetted bottom (chine beam by the wetted keel length from the transom)
      * carrying its weight, the usual far-field representation of a planing boat; spray is Savitsky's whisker spray at
-     * the chines where they first wet, L_C = L_K - b tan(beta) / (pi tan(trim)) from the transom. The key quantises the
-     * wetted length to 0.25 m and the trim to 0.5 deg so patterns can be cached.
+     * the chines where they first wet, L_C = L_K - b tan(beta) / (pi tan(trim)) from the transom.
      */
     public static Design planingBoat(double beam, double deadrise, double wettedLength, double weightN, double trim) {
-        double length = Math.max(0.25, Math.round(wettedLength / 0.25) * 0.25), angle = Math.toRadians(Math.round(Math.toDegrees(trim) * 2) / 2.0);
-        double pressure = weightN / (length * beam);
+        double length = Math.max(0.25, wettedLength), pressure = weightN / (length * beam);
+        UnsteadyWake.Forcing forcing = UnsteadyWake.rectangle(pressure, 0, length, beam / 2);
         return new Design() {
-            @Override public String key() { return "aerocore:planing:" + beam + ":" + length; }
-            @Override public KelvinWake wake(double speed, double patternLength) {
-                return KelvinWake.pressure(KelvinWake.rectangle(pressure, 0, length, beam / 2), 0, length, beam / 2,
-                        FluidState.FRESH_WATER_20C.densityKgPerM3(), speed, Atmosphere.GRAVITY_MPS2, SHORTEST_WAVELENGTH, patternLength);
+            @Override public UnsteadyWake.Forcing forcing() { return forcing; }
+            /** Planing speeds make long waves: 0.75 m spacing, a 96 m grid. */
+            @Override public double spacing() { return 0.75; }
+            /** A ventilated transom (C_vT = U / sqrt(g B) past PlaningDynamics.PLANING) sheds white water across the beam. */
+            @Override public double whiteWaterWidth(double speed) {
+                return speed / Math.sqrt(G * beam) >= dev.mcmod.aerocore.api.PlaningDynamics.PLANING ? beam : 0;
             }
             @Override public Bow bow(double speed) {
-                if (!(angle > 0)) { return new Bow(length, beam / 2, BowSpray.NONE); }
-                double chine = Math.max(0, length - beam * Math.tan(deadrise) / (Math.PI * Math.tan(angle)));
-                return new Bow(chine, beam / 2, BowSpray.planing(speed, angle, deadrise, Atmosphere.GRAVITY_MPS2));
+                if (!(trim > 0)) { return new Bow(length, beam / 2, BowSpray.NONE); }
+                double chine = Math.max(0, length - beam * Math.tan(deadrise) / (Math.PI * Math.tan(trim)));
+                return new Bow(chine, beam / 2, BowSpray.planing(speed, trim, deadrise, G));
             }
         };
     }
 
     private static final class Tracked {
         Design design;
-        double originX, originZ, dirX = 1, dirZ, stillY, velocityX, velocityZ;
-        KelvinWake.Pattern current, previous;
-        long switched, seen = Long.MIN_VALUE;
+        UnsteadyWake solver;
+        double originX, originZ, dirX = 1, dirZ, stillY = Double.NaN, velocityX, velocityZ, leadX, leadZ, centreX, centreZ;
+        long seen = Long.MIN_VALUE;
+        boolean asleep = true, reported;
     }
     private static final class LevelWakes {
         final Map<Integer, Tracked> sources = new HashMap<>();
         volatile List<WaveRegion> zones = List.of();
         volatile double maxElevation;
     }
+    /** One solver step: where its grid centre goes and the load at the step's end (null when the source is gone). */
+    private record Job(UnsteadyWake solver, double centreX, double centreZ, UnsteadyWake.Load load, boolean reset) {}
 
-    private static final ThreadLocal<double[]> LOCAL = ThreadLocal.withInitial(() -> new double[3]);
     private static final Map<Level, LevelWakes> LEVELS = Collections.synchronizedMap(new WeakHashMap<>());
-    private static final Map<String, CompletableFuture<KelvinWake.Pattern>> CACHE = new LinkedHashMap<>(64, 0.75f, true);
-    private static final Map<String, CompletableFuture<KelvinWake.Pattern>> IN_FLIGHT = new HashMap<>();
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
+    private static final AtomicInteger PENDING = new AtomicInteger();
+    /** Tests: step the solvers on the ticking thread (a GameTest server ticks faster than real time). */
+    public static volatile boolean synchronous;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "AeroCore wake patterns");
+        Thread thread = new Thread(runnable, "AeroCore wakes");
         thread.setDaemon(true);
-        thread.setPriority(Thread.MIN_PRIORITY);
         return thread;
     });
 
@@ -164,53 +166,16 @@ public final class Wakes {
         synchronized (LEVELS) { return LEVELS.computeIfAbsent(level, l -> new LevelWakes()); }
     }
 
-    /** Speed of a bin, m/s. */
-    public static double binSpeed(int bin) { return MIN_SPEED * Math.pow(BIN_RATIO, bin); }
-    public static int bin(double speed) { return (int) Math.round(Math.log(speed / MIN_SPEED) / Math.log(BIN_RATIO)); }
-    /** Pattern length: eight transverse wavelengths, kept between 24 and 96 m. */
-    public static double patternLength(double speed) {
-        return Math.clamp(8 * 2 * Math.PI * speed * speed / Atmosphere.GRAVITY_MPS2, MIN_LENGTH, MAX_LENGTH);
-    }
-
-    /** Computes a pattern on the calling thread (tests and tools). */
-    public static KelvinWake.Pattern computeNow(Design design, int bin) {
-        double speed = binSpeed(bin), length = patternLength(speed);
-        return design.wake(speed, length).pattern(length, SPACING);
-    }
-
-    /** Computes and caches a pattern on the calling thread, so the next update finds it ready (tests). */
-    public static void prefetch(Design design, int bin) {
-        KelvinWake.Pattern pattern = computeNow(design, bin);
-        synchronized (CACHE) { CACHE.put(design.key() + "#" + bin, CompletableFuture.completedFuture(pattern)); }
-    }
-
-    /** The pattern if ready; otherwise starts it when nothing else of this design is being computed, and returns null. */
-    private static KelvinWake.Pattern request(Design design, int bin) {
-        String key = design.key() + "#" + bin;
-        synchronized (CACHE) {
-            CompletableFuture<KelvinWake.Pattern> cached = CACHE.get(key);
-            if (cached != null) { return cached.isDone() && !cached.isCompletedExceptionally() ? cached.join() : null; }
-            CompletableFuture<KelvinWake.Pattern> busy = IN_FLIGHT.get(design.key());
-            if (busy != null && !busy.isDone()) { return null; }
-            CompletableFuture<KelvinWake.Pattern> future = CompletableFuture.supplyAsync(() -> computeNow(design, bin), WORKER);
-            CACHE.put(key, future);
-            IN_FLIGHT.put(design.key(), future);
-            if (CACHE.size() > MAX_CACHED) {
-                Iterator<Map.Entry<String, CompletableFuture<KelvinWake.Pattern>>> it = CACHE.entrySet().iterator();
-                while (CACHE.size() > MAX_CACHED && it.hasNext()) { if (it.next().getValue().isDone()) { it.remove(); } }
-            }
-            return null;
-        }
-    }
-
     /**
-     * Records a source's state for this tick: origin is the design's frame origin in world space, velocity in m/s,
-     * or null to derive it from the origin's motion since the last report (vanilla boats moved by player packets have
-     * no server-side velocity). Derived velocities are smoothed over a few ticks so the speed bin does not flicker; this
-     * filter is a display choice.
+     * Records a source's state for this tick: origin is the design's frame origin, forward its x axis and velocity in
+     * world units (m, m/s), or velocity null to derive it from the origin's motion since the last report (vanilla boats
+     * moved by player packets have no server-side velocity). Derived velocities are smoothed over a few ticks; that
+     * filter only steers the grid's lead and the bow spray.
      */
-    public static void update(Level level, int id, Design design, Vec3d origin, Vec3d velocity) {
-        if (!finite(origin) || (velocity != null && !finite(velocity))) { return; }
+    public static void update(Level level, int id, Design design, Vec3d origin, Vec3d forward, Vec3d velocity) {
+        if (!finite(origin) || !finite(forward) || (velocity != null && !finite(velocity))) { return; }
+        double fx = forward.x(), fz = forward.z(), length = Math.hypot(fx, fz);
+        if (!(length > 1e-6)) { return; }
         LevelWakes wakes = of(level);
         long tick = level.getGameTime();
         double still = SeaSurface.stillSurface(level, origin.x(), origin.y(), origin.z());
@@ -219,30 +184,24 @@ public final class Wakes {
             if (t == null) {
                 if (Double.isNaN(still)) { return; }
                 t = new Tracked();
-                t.originX = origin.x(); t.originZ = origin.z(); t.switched = tick;
+                t.originX = origin.x(); t.originZ = origin.z();
                 wakes.sources.put(id, t);
             }
             double vx, vz;
             if (velocity != null) { vx = velocity.x(); vz = velocity.z(); }
             else {
                 long dt = t.seen == Long.MIN_VALUE ? 0 : tick - t.seen;
-                double rawX = dt > 0 ? (origin.x() - t.originX) / (dt * 0.05) : t.velocityX, rawZ = dt > 0 ? (origin.z() - t.originZ) / (dt * 0.05) : t.velocityZ;
+                double rawX = dt > 0 ? (origin.x() - t.originX) / (dt * MinecraftUnits.TICK_SECONDS) : t.velocityX;
+                double rawZ = dt > 0 ? (origin.z() - t.originZ) / (dt * MinecraftUnits.TICK_SECONDS) : t.velocityZ;
                 vx = t.velocityX + 0.3 * (rawX - t.velocityX); vz = t.velocityZ + 0.3 * (rawZ - t.velocityZ);
             }
             t.velocityX = vx; t.velocityZ = vz;
-            double speed = Math.hypot(vx, vz);
             t.design = design;
             t.originX = origin.x(); t.originZ = origin.z();
-            if (speed > 0.2) { t.dirX = vx / speed; t.dirZ = vz / speed; }
-            t.seen = tick;
-            boolean stopping = Double.isNaN(still) || speed < MIN_SPEED;
-            KelvinWake.Pattern next = stopping ? null : request(design, bin(speed));
+            t.dirX = fx / length; t.dirZ = fz / length;
             if (!Double.isNaN(still)) { t.stillY = still; }
-            if (stopping ? t.current != null : next != null && next != t.current) {
-                t.previous = fade(t, tick) > 0.5 ? t.current : t.previous;
-                t.current = stopping ? null : next;
-                t.switched = tick;
-            }
+            t.seen = tick;
+            t.reported = !Double.isNaN(still);
         }
     }
 
@@ -265,33 +224,33 @@ public final class Wakes {
         return result;
     }
 
-    /** Weight of the current pattern (the previous one gets 1 - weight). */
-    private static double fade(Tracked t, long tick) { return Math.clamp((tick - t.switched) / (double) FADE_TICKS, 0, 1); }
-    /** Overall weight: sources that stopped reporting fade out. */
-    private static double presence(Tracked t, long tick) {
-        long unseen = tick - t.seen - UNSEEN_TICKS;
-        return unseen <= 0 ? 1 : Math.max(0, 1 - unseen / (double) FADE_TICKS);
-    }
-
     /**
      * Adds the wakes at (x, z) of sources riding the free surface at stillY (excluding entity id exclude, -1 for none)
      * into out[0] (elevation, m), out[1] and out[2] (slopes d/dx, d/dz).
      */
     public static void sample(Level level, double stillY, double x, double z, int exclude, double[] out) {
         LevelWakes wakes = LEVELS.get(level);
-        if (wakes == null) { return; }
-        long tick = level.getGameTime();
-        double[] local = LOCAL.get();
+        if (wakes == null || wakes.maxElevation == 0) { return; }
+        double[] local = new double[3];
         synchronized (wakes) {
             for (Map.Entry<Integer, Tracked> entry : wakes.sources.entrySet()) {
                 Tracked t = entry.getValue();
-                if (entry.getKey() == exclude || Math.abs(t.stillY - stillY) > WaveRegion.LEVEL_TOLERANCE) { continue; }
-                double w = presence(t, tick);
-                if (w == 0) { continue; }
-                double f = fade(t, tick);
-                add(t, t.current, w * f, x, z, local, out);
-                add(t, t.previous, w * (1 - f), x, z, local, out);
+                if (entry.getKey() == exclude || t.solver == null || Math.abs(t.stillY - stillY) > WaveRegion.LEVEL_TOLERANCE) { continue; }
+                UnsteadyWake.Snapshot s = t.solver.snapshot();
+                if (s.maxElevation() == 0) { continue; }
+                s.sample(x, z, local);
+                out[0] += local[0]; out[1] += local[1]; out[2] += local[2];
             }
+        }
+    }
+
+    /** The latest wake snapshot of source id (null when it has no live wake), for the source's own wave resistance. */
+    public static UnsteadyWake.Snapshot snapshot(Level level, int id) {
+        LevelWakes wakes = LEVELS.get(level);
+        if (wakes == null) { return null; }
+        synchronized (wakes) {
+            Tracked t = wakes.sources.get(id);
+            return t == null || t.solver == null ? null : t.solver.snapshot();
         }
     }
 
@@ -301,25 +260,13 @@ public final class Wakes {
         return out[0];
     }
 
-    private static void add(Tracked t, KelvinWake.Pattern p, double weight, double x, double z, double[] local, double[] out) {
-        if (p == null || weight == 0) { return; }
-        double dx = x - t.originX, dz = z - t.originZ;
-        // Body frame: forward along the motion, lateral to its left; the patterns are port-starboard symmetric.
-        double forward = dx * t.dirX + dz * t.dirZ, lateral = -dx * t.dirZ + dz * t.dirX;
-        p.sample(forward, lateral, local);
-        if (local[0] == 0 && local[1] == 0 && local[2] == 0) { return; }
-        out[0] += weight * local[0];
-        out[1] += weight * (local[1] * t.dirX - local[2] * t.dirZ);
-        out[2] += weight * (local[1] * t.dirZ + local[2] * t.dirX);
-    }
-
     /** Largest wake elevation present in the level, m (for the band the surface can move through). */
     public static double maxElevation(Level level) {
         LevelWakes wakes = LEVELS.get(level);
         return wakes == null ? 0 : wakes.maxElevation;
     }
 
-    /** Calm zones following wakes outside persistent regions (recomputed every tick). */
+    /** Calm zones covering wakes outside persistent regions (recomputed every tick). */
     public static List<WaveRegion> zones(Level level) {
         LevelWakes wakes = LEVELS.get(level);
         return wakes == null ? List.of() : wakes.zones;
@@ -333,67 +280,132 @@ public final class Wakes {
                                  double[] height, double[] slopeX, double[] slopeZ) {
         LevelWakes wakes = LEVELS.get(level);
         if (wakes == null || wakes.maxElevation == 0) { return; }
-        double span = (points - 1) * s, cx = x0 + span / 2, cz = z0 + span / 2;
-        boolean near = false;
+        double span = (points - 1) * s;
+        List<UnsteadyWake.Snapshot> near = new ArrayList<>();
         synchronized (wakes) {
             for (Tracked tr : wakes.sources.values()) {
-                if (Math.abs(tr.stillY - region.stillWaterY()) > WaveRegion.LEVEL_TOLERANCE) { continue; }
-                double reach = reach(tr) + span;
-                if (Math.hypot(cx - tr.originX, cz - tr.originZ) < reach) { near = true; break; }
+                if (tr.solver == null || Math.abs(tr.stillY - region.stillWaterY()) > WaveRegion.LEVEL_TOLERANCE) { continue; }
+                UnsteadyWake.Snapshot snap = tr.solver.snapshot();
+                double h = snap.halfSize();
+                if (snap.maxElevation() > 0 && x0 < snap.centreX() + h && x0 + span > snap.centreX() - h
+                        && z0 < snap.centreZ() + h && z0 + span > snap.centreZ() - h) { near.add(snap); }
             }
         }
-        if (!near) { return; }
+        if (near.isEmpty()) { return; }
         double[] out = new double[3];
-        for (int i = 0; i < points; i++) for (int k = 0; k < points; k++) {
-            out[0] = 0; out[1] = 0; out[2] = 0;
-            sample(level, region.stillWaterY(), x0 + i * s, z0 + k * s, -1, out);
-            int p = i * points + k;
-            height[p] += out[0]; slopeX[p] += out[1]; slopeZ[p] += out[2];
+        for (UnsteadyWake.Snapshot snap : near) {
+            for (int i = 0; i < points; i++) for (int k = 0; k < points; k++) {
+                snap.sample(x0 + i * s, z0 + k * s, out);
+                if (out[0] == 0 && out[1] == 0 && out[2] == 0) { continue; }
+                int p = i * points + k;
+                height[p] += out[0]; slopeX[p] += out[1]; slopeZ[p] += out[2];
+            }
         }
     }
 
-    private static double reach(Tracked t) {
-        double r = 0;
-        for (KelvinWake.Pattern p : new KelvinWake.Pattern[]{t.current, t.previous}) {
-            if (p != null) { r = Math.max(r, Math.hypot(p.length() + Math.abs(p.bowX()), p.halfWidth()) + 2); }
-        }
-        return r;
-    }
-
-    /** End of tick: drop faded sources, refresh the elevation bound and the calm zones. */
+    /**
+     * End of tick: hands every live solver its step to the background thread, drops sources gone quiet, and refreshes
+     * the elevation bound and the calm zones from the published snapshots.
+     */
     private static void endTick(Level level) {
         LevelWakes wakes = LEVELS.get(level);
         if (wakes == null) { return; }
         long tick = level.getGameTime();
         List<WaveRegion> persistent = SeaSurface.persistentRegions(level), zones = new ArrayList<>();
+        List<Job> jobs = new ArrayList<>();
         double max = 0;
         synchronized (wakes) {
             for (Iterator<Tracked> it = wakes.sources.values().iterator(); it.hasNext(); ) {
                 Tracked t = it.next();
-                boolean idle = t.current == null && (t.previous == null || fade(t, tick) >= 1);
-                if (presence(t, tick) == 0 || (idle && tick - t.seen > UNSEEN_TICKS)) { it.remove(); continue; }
-                double length = 0;
-                for (KelvinWake.Pattern p : new KelvinWake.Pattern[]{t.current, t.previous}) {
-                    if (p != null) { max = Math.max(max, p.maxElevation()); length = Math.max(length, reach(t)); }
+                boolean present = tick - t.seen <= UNSEEN_TICKS && t.reported;
+                UnsteadyWake.Snapshot snap = t.solver == null ? null : t.solver.snapshot();
+                double waves = snap == null ? 0 : snap.maxElevation();
+                if (!present && waves < QUIET_ELEVATION) { it.remove(); continue; }
+                max = Math.max(max, waves);
+                job(t, present, waves, jobs);
+                if (snap != null && waves > 0) {
+                    double reach = snap.halfSize() * Math.sqrt(2);
+                    if (SeaSurface.regionAt(persistent, snap.centreX(), snap.centreZ()) == null) {
+                        double radius = Math.min(WaveRegion.MAX_RADIUS, Math.ceil((reach + ZONE_GRID) / ZONE_STEP) * ZONE_STEP);
+                        double x = Math.floorDiv(Mth.floor(snap.centreX()), ZONE_GRID) * ZONE_GRID + ZONE_GRID / 2.0;
+                        double z = Math.floorDiv(Mth.floor(snap.centreZ()), ZONE_GRID) * ZONE_GRID + ZONE_GRID / 2.0;
+                        WaveRegion zone = new WaveRegion(x, z, radius, t.stillY, WaveField.NONE);
+                        if (!zones.contains(zone)) { zones.add(zone); }
+                    }
                 }
-                if (length == 0 || SeaSurface.regionAt(persistent, t.originX, t.originZ) != null) { continue; }
-                double radius = Math.min(WaveRegion.MAX_RADIUS, Math.ceil((length + ZONE_GRID) / ZONE_STEP) * ZONE_STEP);
-                double x = Math.floorDiv(Mth.floor(t.originX), ZONE_GRID) * ZONE_GRID + ZONE_GRID / 2.0;
-                double z = Math.floorDiv(Mth.floor(t.originZ), ZONE_GRID) * ZONE_GRID + ZONE_GRID / 2.0;
-                WaveRegion zone = new WaveRegion(x, z, radius, t.stillY, WaveField.NONE);
-                if (!zones.contains(zone)) { zones.add(zone); }
             }
         }
         wakes.maxElevation = max;
         wakes.zones = List.copyOf(zones);
+        if (jobs.isEmpty()) { return; }
+        if (synchronous) { run(jobs); return; }
+        // A worker more than a few ticks behind skips ticks (the wakes then run slow) rather than queueing without bound.
+        if (PENDING.get() >= MAX_PENDING) { return; }
+        PENDING.incrementAndGet();
+        WORKER.execute(() -> {
+            try { run(jobs); } finally { PENDING.decrementAndGet(); }
+        });
+    }
+
+    private static void run(List<Job> jobs) {
+        try {
+            for (Job job : jobs) {
+                if (job.reset()) { job.solver().reset(job.centreX(), job.centreZ(), job.load()); }
+                else { job.solver().step(job.centreX(), job.centreZ(), job.load()); }
+            }
+        } catch (RuntimeException e) {
+            LOGGER.error("Wake step failed", e);
+        }
+    }
+
+    /**
+     * Plans one source's step. Its grid centre leads the source along its velocity by up to a quarter of the grid
+     * (reached over about 3 s, scaled down below 1 m/s) so most of the grid lies behind it. A source at rest on quiet
+     * water sleeps; it restarts in hydrostatic balance when it moves.
+     */
+    private static void job(Tracked t, boolean present, double waves, List<Job> jobs) {
+        Design design = t.design;
+        if (design == null) { return; }
+        double speed = Math.hypot(t.velocityX, t.velocityZ);
+        boolean moving = present && speed > 0.05;
+        if (t.solver == null || present && t.solver.spacing() != design.spacing()) {
+            // Solvers (1.6 MB each) exist only while their source moves or its waves last.
+            if (!moving) { t.solver = null; return; }
+            t.solver = new UnsteadyWake(GRID, design.spacing(), Double.POSITIVE_INFINITY, RHO, G, MinecraftUnits.TICK_SECONDS);
+            t.asleep = true;
+        }
+        if (!moving && !t.asleep && waves < QUIET_ELEVATION) {
+            if (present) { t.solver = null; return; }
+        }
+        double size = GRID * design.spacing(), scale = Math.min(1, speed);
+        double targetX = speed > 1e-6 ? t.velocityX / speed * LEAD_FRACTION * size * scale : 0;
+        double targetZ = speed > 1e-6 ? t.velocityZ / speed * LEAD_FRACTION * size * scale : 0;
+        UnsteadyWake.Load load = present ? new UnsteadyWake.Load(design.forcing(), t.originX, t.originZ, t.dirX, t.dirZ,
+                t.velocityX * t.dirX + t.velocityZ * t.dirZ) : null;
+        if (t.asleep) {
+            t.leadX = 0; t.leadZ = 0; t.asleep = false;
+            t.centreX = t.originX; t.centreZ = t.originZ;
+            jobs.add(new Job(t.solver, t.centreX, t.centreZ, load, true));
+            return;
+        }
+        if (present) {
+            t.leadX += (targetX - t.leadX) * LEAD_RATE; t.leadZ += (targetZ - t.leadZ) * LEAD_RATE;
+            t.centreX = t.originX + t.leadX; t.centreZ = t.originZ + t.leadZ;
+            jobs.add(new Job(t.solver, t.centreX, t.centreZ, load, false));
+        } else {
+            // A vanished source: its grid stays where it was and its waves run out.
+            jobs.add(new Job(t.solver, t.centreX, t.centreZ, null, false));
+        }
     }
 
     @SubscribeEvent public static void entityTick(EntityTickEvent.Post event) {
         Entity entity = event.getEntity();
         if (entity instanceof Source source) {
-            update(entity.level(), entity.getId(), source.wakeDesign(), source.wakeOrigin(), source.wakeVelocity());
+            update(entity.level(), entity.getId(), source.wakeDesign(), source.wakeOrigin(), source.wakeForward(), source.wakeVelocity());
         } else if (entity instanceof Boat boat) {
-            update(boat.level(), boat.getId(), vanillaBoat(boat.getBbWidth(), boat.getBbHeight()), new Vec3d(boat.getX(), boat.getY(), boat.getZ()), null);
+            double yaw = Math.toRadians(boat.getYRot());
+            update(boat.level(), boat.getId(), RowingBoats.wakeDesign(boat), new Vec3d(boat.getX(), boat.getY(), boat.getZ()),
+                    new Vec3d(-Math.sin(yaw), 0, Math.cos(yaw)), null);
         }
     }
 

@@ -50,6 +50,28 @@ public final class ProbeGameTests {
         });
     }
 
+    @GameTest(templateNamespace = "aerocore", template = "probe_empty", timeoutTicks = 80)
+    public static void probeBouncesOffStoneButNotOffSand(GameTestHelper helper) {
+        // Block materials (BlockMaterials): granite-like stone returns a dropped steel ball, loose sand swallows the impact.
+        floor(helper);
+        for (int z = 0; z < 9; z++) for (int x = 0; x < 4; x++) { helper.setBlock(new BlockPos(x, 1, z), Blocks.SAND); }
+        for (int z = 0; z < 9; z++) for (int x = 5; x < 9; x++) { helper.setBlock(new BlockPos(x, 1, z), Blocks.STONE); }
+        PhysicsProbe onSand = spawn(helper, 250, 1.5, 5, 4), onStone = spawn(helper, 250, 6.5, 5, 4);
+        final double[] rebound = {0, 0};
+        for (int tick = 1; tick <= 60; tick++) {
+            helper.runAfterDelay(tick, () -> {
+                rebound[0] = Math.max(rebound[0], onSand.velocityMps().y());
+                rebound[1] = Math.max(rebound[1], onStone.velocityMps().y());
+            });
+        }
+        helper.runAfterDelay(61, () -> {
+            // About 7.7 m/s at impact: Thornton's e for steel on granite is about 0.3 there, sand gives none.
+            helper.assertTrue(rebound[1] > 1.0, "Stone must return the ball: " + rebound[1]);
+            helper.assertTrue(rebound[0] < 0.2, "Sand must not: " + rebound[0]);
+            helper.succeed();
+        });
+    }
+
     @GameTest(templateNamespace = "aerocore", template = "probe_empty", timeoutTicks = 60)
     public static void launchedProbeRollsWithoutSlipping(GameTestHelper helper) {
         // Solid sphere sliding on level ground: friction spins it up until v = 5/7 v0, then it rolls (v = omega R).

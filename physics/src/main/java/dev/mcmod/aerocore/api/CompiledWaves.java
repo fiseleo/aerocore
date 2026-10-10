@@ -4,22 +4,31 @@ package dev.mcmod.aerocore.api;
  * Fast evaluation of a WaveField: each component's wave vector, frequency, phase, amplitude and depth terms are
  * computed once and held in arrays, so a query costs one sin/cos (and one or two exp below the still level) per
  * component instead of re-deriving the dispersion relation. grid() fills a regular grid by phasor recurrence (one
- * complex multiply per component per point) for drawing the surface every frame. Every result equals the
+ * complex multiply per component per point) for drawing the surface every frame. Every linear result equals the
  * corresponding WaveField / LinearWave method to rounding, including the depth clamping of the linear kinematics.
+ * <p>
+ * Second-order surface (secondOrder, surfaceTerms, gridSecondOrder): the Choppy Wave Model (Nouguier, Guerin and
+ * Chapron 2009, JGR 114 C09012) moves each surface particle horizontally by D = -sum a k^ coth(kh) sin(theta), the
+ * linear particle excursion; expanded to second order at a fixed point the surface is eta - D . grad(eta), plus the
+ * mean level M = sum a^2 k coth(kh) / 2 that keeps the still level (the model's Eulerian mean is -M, Pierson 1961).
+ * For one deep-water wave this is exactly Stokes' second order, a cos(theta) + (k a^2 / 2) cos(2 theta): sharper crests,
+ * flatter troughs. Sum-frequency pairs match Longuet-Higgins (1963); difference-frequency pairs give
+ * -(k_i + k_j) / 4 instead of -|k_i - k_j| / 4, so there is no set-down under groups; in finite depth the bound
+ * harmonic is 1 / (1 + 3 / (2 sinh^2 kh)) of Stokes'. Velocities, accelerations and pressure heads stay linear.
  */
 public final class CompiledWaves {
     public static final CompiledWaves NONE = new CompiledWaves(WaveField.NONE);
-    private final double[] kx, kz, k, omega, phase, amplitude, depth, cosineDenominator, sineDenominator, imageFactor;
+    private final double[] kx, kz, k, omega, phase, amplitude, depth, cosineDenominator, sineDenominator, imageFactor, coth;
     private final WaveField field;
-    private final double maxAmplitude;
+    private final double maxAmplitude, meanLevel;
 
     public CompiledWaves(WaveField field) {
         this.field = field;
         int n = field.components().size();
         kx = new double[n]; kz = new double[n]; k = new double[n]; omega = new double[n]; phase = new double[n];
         amplitude = new double[n]; depth = new double[n]; cosineDenominator = new double[n]; sineDenominator = new double[n];
-        imageFactor = new double[n];
-        double sum = 0;
+        imageFactor = new double[n]; coth = new double[n];
+        double sum = 0, mean = 0;
         for (int i = 0; i < n; i++) {
             LinearWave w = field.components().get(i);
             k[i] = w.wavenumber();
@@ -30,15 +39,88 @@ public final class CompiledWaves {
             sineDenominator[i] = finite ? -Math.expm1(-2 * k[i] * depth[i]) : 1;
             // exp(-k (z + 2h)) = exp(-2kh) / exp(kz): the bottom image term costs a division, not a second exp.
             imageFactor[i] = finite ? Math.exp(-2 * k[i] * depth[i]) : 0;
+            coth[i] = finite ? cosineDenominator[i] / sineDenominator[i] : 1;
             sum += amplitude[i];
+            mean += 0.5 * amplitude[i] * amplitude[i] * k[i] * coth[i];
         }
-        maxAmplitude = sum;
+        // |eta2| <= M + |D| |grad eta| <= M + (sum a coth)(sum a k).
+        double excursion = 0, slope = 0;
+        for (int i = 0; i < n; i++) { excursion += amplitude[i] * coth[i]; slope += amplitude[i] * k[i]; }
+        maxAmplitude = sum + mean + excursion * slope;
+        meanLevel = mean;
+    }
+
+    /** Mean-level correction M = sum a^2 k coth(kh) / 2 of the second-order surface, m. */
+    public double meanLevel() { return meanLevel; }
+
+    /**
+     * Second-order surface correction eta2 = M - D . grad(eta) and its slopes from phases at offset, into
+     * out[0..2] = {eta2, d eta2/dx, d eta2/dz}.
+     */
+    public void secondOrder(double[] cos, double[] sin, int offset, double[] out) {
+        double dx = 0, dz = 0, gx = 0, gz = 0, axx = 0, axz = 0, azz = 0, hxx = 0, hxz = 0, hzz = 0;
+        for (int i = 0; i < amplitude.length; i++) {
+            double c = cos[offset + i], s = sin[offset + i], a = amplitude[i], ex = kx[i] / k[i], ez = kz[i] / k[i], ac = a * coth[i];
+            dx -= ac * ex * s; dz -= ac * ez * s;
+            gx -= a * kx[i] * s; gz -= a * kz[i] * s;
+            axx += ac * ex * kx[i] * c; axz += ac * ex * kz[i] * c; azz += ac * ez * kz[i] * c;
+            hxx += a * kx[i] * kx[i] * c; hxz += a * kx[i] * kz[i] * c; hzz += a * kz[i] * kz[i] * c;
+        }
+        out[0] = meanLevel - (dx * gx + dz * gz);
+        // d/dx of -(D . G): dDx/dx = -axx, dDz/dx = -axz, dGx/dx = -hxx, dGz/dx = -hxz (and likewise in z).
+        out[1] = axx * gx + dx * hxx + axz * gz + dz * hxz;
+        out[2] = axz * gx + dx * hxz + azz * gz + dz * hzz;
+    }
+
+    /**
+     * Linear and second-order surface terms at a point: out[0..5] = {eta1, d eta1/dx, d eta1/dz, eta2, d eta2/dx,
+     * d eta2/dz}. A taper w on the amplitudes scales the first three by w and the last three by w^2.
+     */
+    public void surfaceTerms(double x, double z, double t, double[] out) {
+        double eta = 0, dx = 0, dz = 0, gx = 0, gz = 0, axx = 0, axz = 0, azz = 0, hxx = 0, hxz = 0, hzz = 0;
+        for (int i = 0; i < amplitude.length; i++) {
+            double theta = kx[i] * x + kz[i] * z - omega[i] * t + phase[i], c = Math.cos(theta), s = Math.sin(theta);
+            double a = amplitude[i], ex = kx[i] / k[i], ez = kz[i] / k[i], ac = a * coth[i];
+            eta += a * c;
+            dx -= ac * ex * s; dz -= ac * ez * s;
+            gx -= a * kx[i] * s; gz -= a * kz[i] * s;
+            axx += ac * ex * kx[i] * c; axz += ac * ex * kz[i] * c; azz += ac * ez * kz[i] * c;
+            hxx += a * kx[i] * kx[i] * c; hxz += a * kx[i] * kz[i] * c; hzz += a * kz[i] * kz[i] * c;
+        }
+        out[0] = eta; out[1] = gx; out[2] = gz;
+        out[3] = meanLevel - (dx * gx + dz * gz);
+        out[4] = axx * gx + dx * hxx + axz * gz + dz * hxz;
+        out[5] = axz * gx + dx * hxz + azz * gz + dz * hzz;
+    }
+
+    /** Surface elevation to second order (linear plus secondOrder) at a point, m above the still level. */
+    public double surface(double x, double z, double t) {
+        double[] out = new double[6];
+        surfaceTerms(x, z, t, out);
+        return out[0] + out[3];
+    }
+
+    /**
+     * Linear vertical acceleration of the surface, m/s^2: -sum a omega^2 cos(theta), the acceleration of a surface particle
+     * at its label to first order (used for the breaking criterion).
+     */
+    public double verticalAcceleration(double[] cos, int offset) {
+        double sum = 0;
+        for (int i = 0; i < amplitude.length; i++) { sum -= amplitude[i] * omega[i] * omega[i] * cos[offset + i]; }
+        return sum;
+    }
+
+    /** Standard deviation of the surface's vertical acceleration, sqrt(m4) = sqrt(sum a^2 omega^4 / 2), m/s^2. */
+    public double accelerationDeviation() {
+        double sum = 0;
+        for (int i = 0; i < amplitude.length; i++) { sum += 0.5 * Math.pow(amplitude[i] * omega[i] * omega[i], 2); }
+        return Math.sqrt(sum);
     }
 
     public WaveField field() { return field; }
     public boolean isEmpty() { return amplitude.length == 0; }
     public int size() { return amplitude.length; }
-    /** Upper bound of |eta| (sum of amplitudes). */
+    /** Upper bound of the second-order surface elevation above or below still water, m (the linear bound is WaveField.maxAmplitude). */
     public double maxAmplitude() { return maxAmplitude; }
 
     public double elevation(double x, double z, double t) {
@@ -157,6 +239,43 @@ public final class CompiledWaves {
         phases(point.x(), point.z(), t, cos, sin);
         kinematics(cos, sin, point.y() - stillWaterY, out);
         return new Vec3d(out[0], out[1], out[2]);
+    }
+
+    private static final ThreadLocal<double[][]> SECOND_ORDER_SCRATCH = ThreadLocal.withInitial(() -> new double[10][0]);
+
+    /**
+     * Second-order corrections (secondOrder) on the same grid as grid(): eta2 and its slopes into height2, slope2X,
+     * slope2Z (overwritten), by the same phasor recurrence.
+     */
+    public void gridSecondOrder(double x0, double z0, double dx, double dz, int nx, int nz, double t, double[] height2, double[] slope2X, double[] slope2Z) {
+        int points = nx * nz;
+        double[][] s = SECOND_ORDER_SCRATCH.get();
+        if (s[0].length < points) { for (int i = 0; i < s.length; i++) { s[i] = new double[points]; } }
+        for (double[] row : s) { java.util.Arrays.fill(row, 0, points, 0); }
+        double[] ddx = s[0], ddz = s[1], gx = s[2], gz = s[3], axx = s[4], axz = s[5], azz = s[6], hxx = s[7], hxz = s[8], hzz = s[9];
+        for (int c = 0; c < amplitude.length; c++) {
+            double stepRe = Math.cos(kz[c] * dz), stepIm = Math.sin(kz[c] * dz), a = amplitude[c], ex = kx[c] / k[c], ez = kz[c] / k[c], ac = a * coth[c];
+            double cdx = ac * ex, cdz = ac * ez, cgx = a * kx[c], cgz = a * kz[c];
+            double cxx = ac * ex * kx[c], cxz = ac * ex * kz[c], czz = ac * ez * kz[c], qxx = a * kx[c] * kx[c], qxz = a * kx[c] * kz[c], qzz = a * kz[c] * kz[c];
+            for (int i = 0; i < nx; i++) {
+                double theta = kx[c] * (x0 + i * dx) + kz[c] * z0 - omega[c] * t + phase[c], re = Math.cos(theta), im = Math.sin(theta);
+                int row = i * nz;
+                for (int j = 0; j < nz; j++) {
+                    int p = row + j;
+                    ddx[p] -= cdx * im; ddz[p] -= cdz * im; gx[p] -= cgx * im; gz[p] -= cgz * im;
+                    axx[p] += cxx * re; axz[p] += cxz * re; azz[p] += czz * re;
+                    hxx[p] += qxx * re; hxz[p] += qxz * re; hzz[p] += qzz * re;
+                    double next = re * stepRe - im * stepIm;
+                    im = re * stepIm + im * stepRe;
+                    re = next;
+                }
+            }
+        }
+        for (int p = 0; p < points; p++) {
+            height2[p] = meanLevel - (ddx[p] * gx[p] + ddz[p] * gz[p]);
+            slope2X[p] = axx[p] * gx[p] + ddx[p] * hxx[p] + axz[p] * gz[p] + ddz[p] * hxz[p];
+            slope2Z[p] = axz[p] * gx[p] + ddx[p] * hxz[p] + azz[p] * gz[p] + ddz[p] * hzz[p];
+        }
     }
 
     /**

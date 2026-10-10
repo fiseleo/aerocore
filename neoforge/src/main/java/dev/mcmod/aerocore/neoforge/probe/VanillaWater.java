@@ -84,10 +84,11 @@ public final class VanillaWater {
      * Horizontal velocity factor per tick that the entity's vanilla movement applies in water, or NaN when it has none
      * that this coupling knows. LivingEntity.travel: sprinting 0.9 else getWaterSlowDown(), blended toward 0.546 by
      * water movement efficiency (halved off ground), 0.96 with Dolphin's Grace. Fish, guardians, turtles and axolotls
-     * swim with their own travel() scaling by 0.9. ItemEntity (water height above 0.1): 0.99 x 0.98. Boat in water: 0.9.
+     * swim with their own travel() scaling by 0.9. ItemEntity (water height above 0.1): 0.99 x 0.98. Boats get
+     * none: RowingBoats moves them against the water's velocity itself.
      */
     static double waterDamping(Entity entity, double height) {
-        if (entity instanceof Boat) { return 0.9; }
+        if (entity instanceof Boat) { return Double.NaN; }
         if (entity instanceof ItemEntity) { return height > 0.1 ? 0.99 * 0.98 : Double.NaN; }
         if (entity instanceof WaterAnimal || entity instanceof Guardian || entity instanceof Turtle || entity instanceof Axolotl) { return 0.9; }
         if (entity instanceof LivingEntity living) {

@@ -24,7 +24,8 @@ public final class ContactSolver {
      * Offset is a world vector from the COM to the body's point nearest the obstacle. Normal is a unit
      * world vector from the obstacle toward the body. Negative separation is penetration depth.
      */
-    public record Contact(Vec3d offset, Vec3d normal, double separationM) {
+    public record Contact(Vec3d offset, Vec3d normal, double separationM, ContactMaterial material) {
+        public Contact(Vec3d offset, Vec3d normal, double separationM) { this(offset, normal, separationM, null); }
         public Contact {
             Objects.requireNonNull(offset, "offset");
             Objects.requireNonNull(normal, "normal");
@@ -92,7 +93,7 @@ public final class ContactSolver {
             normal = FACES[best];
             separation = -(exits[best] + radius);
         }
-        return new Contact(r.subtract(normal.scale(radius)), normal, separation);
+        return new Contact(r.subtract(normal.scale(radius)), normal, separation, box.material());
     }
 
     private static boolean insideOther(Vec3d point, WorldBox self, List<WorldBox> all) {
@@ -132,11 +133,12 @@ public final class ContactSolver {
             approach[i] = n.dot(body.velocityAt(c.offset()));
             bias[i] = Math.max(c.separationM(), 0) / dt;
         }
-        double mu = material.friction();
         for (int iteration = 0; iteration < VELOCITY_ITERATIONS; iteration++) {
             for (int i = 0; i < count; i++) {
                 Contact c = contacts.get(i);
                 Vec3d r = c.offset();
+                // Each obstacle may carry its own material (a block class); otherwise the body's.
+                double mu = (c.material() != null ? c.material() : material).friction();
                 if (mu > 0) {
                     Vec3d v = body.velocityAt(r);
                     double candidate1 = tangentImpulse1[i] - tangent1[i].dot(v) * tangentMass1[i];
@@ -158,12 +160,13 @@ public final class ContactSolver {
                 normalImpulse[i] = candidate;
             }
         }
-        if (material.restitution() > 0) {
-            for (int i = 0; i < count; i++) {
+        for (int i = 0; i < count; i++) {
+            Contact c = contacts.get(i);
+            ContactMaterial m = c.material() != null ? c.material() : material;
+            if (m.restitution() > 0) {
                 if (normalImpulse[i] <= 0 || approach[i] >= -RESTITUTION_THRESHOLD) { continue; }
-                Contact c = contacts.get(i);
                 double vn = c.normal().dot(body.velocityAt(c.offset()));
-                double candidate = Math.max(normalImpulse[i] - (vn + material.restitutionAt(approach[i]) * approach[i]) * normalMass[i], 0);
+                double candidate = Math.max(normalImpulse[i] - (vn + m.restitutionAt(approach[i]) * approach[i]) * normalMass[i], 0);
                 body.applyImpulse(c.offset(), c.normal().scale(candidate - normalImpulse[i]));
                 normalImpulse[i] = candidate;
             }
@@ -252,7 +255,7 @@ public final class ContactSolver {
     /** Static contacts of body index a, from generate(), tagged for solveAll(). */
     public static List<PairContact> tag(int a, List<Contact> contacts, ContactMaterial material) {
         List<PairContact> tagged = new ArrayList<>();
-        for (Contact c : contacts) { tagged.add(new PairContact(a, -1, c.offset(), Vec3d.ZERO, c.normal(), c.separationM(), material)); }
+        for (Contact c : contacts) { tagged.add(new PairContact(a, -1, c.offset(), Vec3d.ZERO, c.normal(), c.separationM(), c.material() != null ? c.material() : material)); }
         return tagged;
     }
 

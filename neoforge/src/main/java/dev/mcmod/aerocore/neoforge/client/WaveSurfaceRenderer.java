@@ -33,7 +33,8 @@ import java.util.Map;
 
 /**
  * Draws each sea region's surface in place of the vanilla water top faces that ClientWaveRegions hides, from the same
- * field, still level, wakes and time base as the server physics (game time x 0.05 s). The whole region is drawn out to
+ * second-order field (CompiledWaves), still level, wakes and time base as the server physics (game time x 0.05 s),
+ * whitened by SeaFoam's foam. The whole region is drawn out to
  * the render distance in 16 x 16 tiles. Vertex spacing grows with distance from the camera (0.25 / 0.5 m near, 1 m to
  * 48 m, 2 m beyond, where full 2 x 2 cells merge into one quad); heights are always the exact field at the vertices,
  * and a finer tile's edge vertices are moved onto its coarser neighbour's edge so the levels meet without cracks.
@@ -55,7 +56,10 @@ public final class WaveSurfaceRenderer {
     private static final Map<TileKey, Tile> TILES = new HashMap<>();
     private static volatile boolean invalidated;
     private static double[] height = new double[0], slopeX = new double[0], slopeZ = new double[0];
-    private static float[] shade = new float[0];
+    private static double[] height2 = new double[0], slope2X = new double[0], slope2Z = new double[0];
+    private static float[] shade = new float[0], foam = new float[0];
+    /** How white full foam draws: a presentation choice. */
+    private static final float FOAM_WHITE = 0.85f;
 
     private WaveSurfaceRenderer() {}
 
@@ -140,24 +144,31 @@ public final class WaveSurfaceRenderer {
     private static void draw(VertexConsumer out, ClientLevel level, WaveRegion region, Tile tile, TextureAtlasSprite sprite, Vec3 eye,
                              double time, int tx, int tz, double s, double[] neighbours, boolean back) {
         int points = (int) Math.round(TILE / s) + 1, count = points * points;
-        if (height.length < count) { height = new double[count]; slopeX = new double[count]; slopeZ = new double[count]; shade = new float[count]; }
+        if (height.length < count) {
+            height = new double[count]; slopeX = new double[count]; slopeZ = new double[count]; shade = new float[count]; foam = new float[count];
+            height2 = new double[count]; slope2X = new double[count]; slope2Z = new double[count];
+        }
+        // The second-order surface the physics reads (CompiledWaves): the linear part times the taper w, the bound part w^2.
         region.compiled().grid(tx, tz, s, s, points, points, time, height, slopeX, slopeZ);
+        region.compiled().gridSecondOrder(tx, tz, s, s, points, points, time, height2, slope2X, slope2Z);
         double still = region.stillWaterY();
         boolean core = Math.hypot(Math.max(Math.abs(tx - region.centerX()), Math.abs(tx + TILE - region.centerX())),
                 Math.max(Math.abs(tz - region.centerZ()), Math.abs(tz + TILE - region.centerZ()))) <= region.radiusM() - region.taperM();
-        if (!core) {
-            for (int i = 0; i < points; i++) for (int k = 0; k < points; k++) {
-                int p = i * points + k;
-                double w = region.weight(tx + i * s, tz + k * s);
-                height[p] *= w; slopeX[p] *= w; slopeZ[p] *= w;
-            }
+        for (int i = 0; i < points; i++) for (int k = 0; k < points; k++) {
+            int p = i * points + k;
+            double w = core ? 1 : region.weight(tx + i * s, tz + k * s), w2 = w * w;
+            height[p] = w * height[p] + w2 * height2[p];
+            slopeX[p] = w * slopeX[p] + w2 * slope2X[p];
+            slopeZ[p] = w * slopeZ[p] + w2 * slope2Z[p];
         }
         // Wakes are not tapered: SeaSurface.surfaceY adds them to the tapered ambient sea in the same way.
         Wakes.addToGrid(level, region, tx, tz, s, points, time, height, slopeX, slopeZ);
+        float[] foamGrid = SeaFoam.patch(region, tx, tz);
         for (int p = 0; p < points * points; p++) {
             height[p] += still;
             Vec3d normal = new Vec3d(-slopeX[p], 1, -slopeZ[p]).normalized();
             shade[p] = (float) Math.clamp(normal.dot(LIGHT) / LIGHT.y(), 0.7, 1.0);
+            foam[p] = foamGrid == null ? 0 : foamAt(foamGrid, (p / points) * s, (p % points) * s);
         }
         // West, east, north, south edges onto coarser neighbours.
         snap(points, s, neighbours[0], 0, 0, 0, 1);
@@ -209,14 +220,24 @@ public final class WaveSurfaceRenderer {
             double f = (double) rest / ratio;
             height[p] = height[a] + (height[b] - height[a]) * f;
             shade[p] = (float) (shade[a] + (shade[b] - shade[a]) * f);
+            foam[p] = (float) (foam[a] + (foam[b] - foam[a]) * f);
         }
+    }
+
+    /** Foam (0 to 1) at a tile-local point, bilinear on SeaFoam's grid. */
+    private static float foamAt(float[] grid, double x, double z) {
+        double gx = x / SeaFoam.SPACING, gz = z / SeaFoam.SPACING;
+        int i = Math.min((int) gx, SeaFoam.POINTS - 2), k = Math.min((int) gz, SeaFoam.POINTS - 2);
+        double fx = gx - i, fz = gz - k;
+        int p = i * SeaFoam.POINTS + k;
+        return (float) ((grid[p] * (1 - fz) + grid[p + 1] * fz) * (1 - fx) + (grid[p + SeaFoam.POINTS] * (1 - fz) + grid[p + SeaFoam.POINTS + 1] * fz) * fx);
     }
 
     /** One block column on a 2 m grid: corner heights bilinear in the coarse cell, matching the merged neighbours. */
     private static void columnQuad(VertexConsumer out, Vec3 eye, int tint, int light, TextureAtlasSprite sprite, boolean back,
                                    int tx, int tz, int cx, int cz, int points) {
         double[] h = new double[4];
-        float[] sh = new float[4];
+        float[] sh = new float[4], fo = new float[4];
         int[][] corners = {{cx, cz}, {cx, cz + 1}, {cx + 1, cz + 1}, {cx + 1, cz}};
         for (int c = 0; c < 4; c++) {
             double gx = corners[c][0] / 2.0, gz = corners[c][1] / 2.0;
@@ -225,30 +246,32 @@ public final class WaveSurfaceRenderer {
             int p00 = i * points + k, p10 = p00 + points, p01 = p00 + 1, p11 = p00 + points + 1;
             h[c] = (height[p00] * (1 - fx) + height[p10] * fx) * (1 - fz) + (height[p01] * (1 - fx) + height[p11] * fx) * fz;
             sh[c] = (float) ((shade[p00] * (1 - fx) + shade[p10] * fx) * (1 - fz) + (shade[p01] * (1 - fx) + shade[p11] * fx) * fz);
+            fo[c] = (float) ((foam[p00] * (1 - fx) + foam[p10] * fx) * (1 - fz) + (foam[p01] * (1 - fx) + foam[p11] * fx) * fz);
         }
-        emit(out, eye, tint, light, sprite, back, tx + cx, tz + cz, 1, 1, 0, 0, 1, h, sh);
+        emit(out, eye, tint, light, sprite, back, tx + cx, tz + cz, 1, 1, 0, 0, 1, h, sh, fo);
     }
 
     private static void quad(VertexConsumer out, Vec3 eye, int tint, int light, TextureAtlasSprite sprite, boolean back,
                              double x, double z, double sx, double sz, float u, float v, float span, int p00, int p01, int p11, int p10) {
         emit(out, eye, tint, light, sprite, back, x, z, sx, sz, u, v, span,
-                new double[]{height[p00], height[p01], height[p11], height[p10]}, new float[]{shade[p00], shade[p01], shade[p11], shade[p10]});
+                new double[]{height[p00], height[p01], height[p11], height[p10]}, new float[]{shade[p00], shade[p01], shade[p11], shade[p10]},
+                new float[]{foam[p00], foam[p01], foam[p11], foam[p10]});
     }
 
     /** Corners in order (x, z), (x, z + sz), (x + sx, z + sz), (x + sx, z); the back face is the vanilla underside. */
     private static void emit(VertexConsumer out, Vec3 eye, int tint, int light, TextureAtlasSprite sprite, boolean back,
-                             double x, double z, double sx, double sz, float u, float v, float span, double[] h, float[] sh) {
+                             double x, double z, double sx, double sz, float u, float v, float span, double[] h, float[] sh, float[] fo) {
         float r = (tint >> 16 & 0xFF) / 255f, g = (tint >> 8 & 0xFF) / 255f, b = (tint & 0xFF) / 255f, a = (tint >>> 24) / 255f;
         float u0 = sprite.getU(u), u1 = sprite.getU(u + span), v0 = sprite.getV(v), v1 = sprite.getV(v + span);
-        vertex(out, eye, x, h[0], z, r, g, b, a, sh[0], u0, v0, light);
-        vertex(out, eye, x, h[1], z + sz, r, g, b, a, sh[1], u0, v1, light);
-        vertex(out, eye, x + sx, h[2], z + sz, r, g, b, a, sh[2], u1, v1, light);
-        vertex(out, eye, x + sx, h[3], z, r, g, b, a, sh[3], u1, v0, light);
+        vertex(out, eye, x, h[0], z, r, g, b, a, sh[0], fo[0], u0, v0, light);
+        vertex(out, eye, x, h[1], z + sz, r, g, b, a, sh[1], fo[1], u0, v1, light);
+        vertex(out, eye, x + sx, h[2], z + sz, r, g, b, a, sh[2], fo[2], u1, v1, light);
+        vertex(out, eye, x + sx, h[3], z, r, g, b, a, sh[3], fo[3], u1, v0, light);
         if (!back) { return; }
-        vertex(out, eye, x, h[0], z, r, g, b, a, sh[0], u0, v0, light);
-        vertex(out, eye, x + sx, h[3], z, r, g, b, a, sh[3], u1, v0, light);
-        vertex(out, eye, x + sx, h[2], z + sz, r, g, b, a, sh[2], u1, v1, light);
-        vertex(out, eye, x, h[1], z + sz, r, g, b, a, sh[1], u0, v1, light);
+        vertex(out, eye, x, h[0], z, r, g, b, a, sh[0], fo[0], u0, v0, light);
+        vertex(out, eye, x + sx, h[3], z, r, g, b, a, sh[3], fo[3], u1, v0, light);
+        vertex(out, eye, x + sx, h[2], z + sz, r, g, b, a, sh[2], fo[2], u1, v1, light);
+        vertex(out, eye, x, h[1], z + sz, r, g, b, a, sh[1], fo[1], u0, v1, light);
     }
 
     /** Vanilla's water top-face light: the brighter of the block and the block above, per channel. */
@@ -257,9 +280,11 @@ public final class WaveSurfaceRenderer {
         return Math.max(here & 0xFF, above & 0xFF) | Math.max(here >> 16 & 0xFF, above >> 16 & 0xFF) << 16;
     }
 
+    /** Shaded water colour blended toward opaque white by the foam. */
     private static void vertex(VertexConsumer out, Vec3 eye, double x, double y, double z, float r, float g, float b, float a,
-                               float shade, float u, float v, int light) {
+                               float shade, float foam, float u, float v, int light) {
+        float f = Math.clamp(foam, 0f, 1f) * FOAM_WHITE, keep = 1 - f;
         out.addVertex((float) (x - eye.x), (float) (y - eye.y), (float) (z - eye.z))
-                .setColor(r * shade, g * shade, b * shade, a).setUv(u, v).setLight(light).setNormal(0, 1, 0);
+                .setColor(r * shade * keep + f, g * shade * keep + f, b * shade * keep + f, a + (1 - a) * f).setUv(u, v).setLight(light).setNormal(0, 1, 0);
     }
 }

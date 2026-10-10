@@ -536,3 +536,58 @@ r.diagnostics().wettedLengthM(); r.diagnostics().ventilation(); r.diagnostics().
 - `ContactMaterial.thornton`、`yieldVelocity`、`contactModulus`、`STEEL_ON_ROCK`、`STEEL_ON_STEEL`。
 - `HullManoeuvring.roundedRectangleDrag(L/D, R/D)`：DNV-RP-C205 Table E-1 第 4 項。
 - `BSeriesFourQuadrant`：B3-65、B4-70（P/D 1.0、1.4）的 MARIN 四象限 Fourier 資料，可作為 `WageningenB.fourQuadrant` 的 `elsewhere`。
+
+## 0.11 相容性變更
+
+- `CompiledWaves.maxAmplitude()` 改為二階水面的上界（大於 `WaveField.maxAmplitude()`）；線性方法（`elevation`、`grid`、`segment` 等）不變，
+  另有二階的 `secondOrder`、`surfaceTerms`、`surface`、`gridSecondOrder`，以及 `verticalAcceleration`、`accelerationDeviation`、`meanLevel`。
+- `WorldBox` 多一個 `material` 欄位（可為 null，表示用物體自己的材質）；舊的兩參數建構式保留。
+  `ContactSolver.Contact` 也多一個 `material` 欄位，`generate` 會帶上障礙物的材質，`solve` 與 `tag` 優先使用它。
+- `PlaningDynamics` 的摩擦（`friction` 力矩與 `Diagnostics.frictionN`）包含鬚狀水花阻力。
+- Minecraft 端：`Wakes.Design` 改為 `forcing()`、`spacing()`、`bow()`（及可選的 `whiteWaterWidth()`）；`Wakes.Source` 多 `wakeForward()`；
+  `Wakes.update` 多一個前進方向參數；波型快取（`bin`、`prefetch`、`computeNow`）與 `vanillaBoat` 移除。原版船由 `RowingBoats` 處理。
+
+## 二階水面與碎浪（0.11）
+
+```java
+CompiledWaves fast = new CompiledWaves(sea);
+double eta = fast.surface(x, z, t);                    // 線性 + 二階（Choppy Wave Model）
+double[] terms = new double[6];
+fast.surfaceTerms(x, z, t, terms);                     // {η1, ∂η1/∂x, ∂η1/∂z, η2, ∂η2/∂x, ∂η2/∂z}；漸弱 w：η1 乘 w、η2 乘 w²
+fast.gridSecondOrder(x0, z0, dx, dz, nx, nz, t, h2, s2x, s2z);
+double threshold = Whitecaps.threshold(fast.accelerationDeviation(), hs);   // 碎浪的向下加速度門檻
+boolean breaking = fast.verticalAcceleration(cos, offset) < -threshold;
+double foam = Whitecaps.foam(previous, breaking, dt);  // 3.5 s 衰減
+```
+
+## 非定常尾浪（0.11）
+
+```java
+UnsteadyWake wake = new UnsteadyWake(128, 0.25, Double.POSITIVE_INFINITY, rho, g, 0.05);
+UnsteadyWake.Forcing boat = UnsteadyWake.rectangle(pressurePa, -1, 1, 0.5);        // 也有 parabolic、submerged、thinShip、of(KelvinWake 變換)
+wake.reset(centreX, centreZ, new UnsteadyWake.Load(boat, x, z, forwardX, forwardZ, speed));   // 從靜水平衡開始
+wake.step(newCentreX, newCentreZ, new UnsteadyWake.Load(boat, x, z, forwardX, forwardZ, speed)); // 推進 dt，網格中心移到新位置
+UnsteadyWake.Snapshot s = wake.snapshot();             // 可在任何執行緒讀取：s.sample(x, z, out) 得高度與坡度
+double r = wake.waveResistance();                      // ∫ p ∂η/∂ξ（Havelock 的定義）
+```
+
+壓力變換 `Forcing` 在物體座標（ξ 向前、ζ 向左）中給出 p̂(α, β) = ∫∫ p e^{−i(αξ+βζ)}；`thinShip` 以 Michell 源的雙體壓力表示細船。
+模型、數值選擇與驗證見 [海況](SEA.md)。
+
+## 划船（0.11）
+
+```java
+List<Rowboat.Passenger> crew = List.of(new Rowboat.Passenger(62, 0, Rowboat.FLOOR + Rowboat.SEATED_HEIGHT, 5.5));
+WaveRadiation.Memory memory = new WaveRadiation.Memory(points /* RADIATION_POINTS */, dt);
+Rowboat.Result r = Rowboat.step(state, crew, new Rowboat.Oars(0.5, 0.5), water, ownWake /* 可為 null */, rho, dt, memory);
+UnsteadyWake.Forcing f = Rowboat.wakeForcing(Rowboat.draft(Rowboat.mass(crew).massKg(), rho), rho);  // 驅動自己尾浪的船底壓力
+```
+
+`Water.sample` 回傳水面高度與坡度（不含這艘船自己的尾浪）；`ownWake` 給自己的尾浪時，以 ∫p∇η 算興波阻力，否則用準定常 Havelock 值。
+參數與驗證見 [原版船](ROWBOAT.md)。
+
+## 方塊材質（0.11）
+
+`ContactMaterial` 新增 `STEEL_ON_WOOD`、`STEEL_ON_ICE`、`STEEL_ON_SAND`、`STEEL_ON_GRAVEL`、`STEEL_ON_SOIL`、`STEEL_ON_MUD`、`STEEL_ON_SNOW`、
+`STEEL_ON_WOOL`、`STEEL_ON_GLASS` 與 `yieldVelocityFromPressure`（以硬度為 p_y）。把材質放進 `new WorldBox(min, max, material)`，求解器就逐接觸使用。
+Minecraft 端的分類在 `BlockMaterials.of(BlockState)`；係數來源見 [物理模型](PHYSICS.md)〈0.11 新增模型與係數來源〉。

@@ -4,12 +4,16 @@
   "package": "dev.mcmod.aerocore.neoforge.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "BoatAccessor",
+    "BoatPhysicsMixin",
     "BoatWaterMixin",
     "EntityCollideMixin",
     "EntityWaterMixin",
     "LivingEntityAccessor"
   ],
   "client": [
+    "BoatClientMixin",
+    "BoatRendererMixin",
     "CameraFogMixin",
     "LiquidBlockRendererMixin"
   ],

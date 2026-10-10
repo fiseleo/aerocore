@@ -75,10 +75,28 @@ public final class WaveRegion {
     public boolean ownsSurface(double surfaceY) { return Math.abs(surfaceY - stillWaterY) <= LEVEL_TOLERANCE; }
     /** The field with the local taper applied; the factor is taken at the given point and held over a small body. */
     public WaveField fieldAt(double x, double z) { return waves.scaled(weight(x, z)); }
-    /** Instantaneous tapered elevation above the still level. */
+    private static final ThreadLocal<double[]> TERMS = ThreadLocal.withInitial(() -> new double[6]);
+
+    /**
+     * Instantaneous tapered elevation above the still level, to second order (CompiledWaves): the taper w scales the
+     * linear surface by w and the second-order part by w^2, as it does the amplitudes.
+     */
     public double elevation(double x, double z, double t) {
         double w = weight(x, z);
-        return w == 0 ? 0 : w * compiled.elevation(x, z, t);
+        if (w == 0 || compiled.isEmpty()) { return 0; }
+        double[] terms = TERMS.get();
+        compiled.surfaceTerms(x, z, t, terms);
+        return w * terms[0] + w * w * terms[3];
+    }
+
+    /** Tapered second-order elevation and its slopes (the taper's own gradient neglected) into out[0..2]. */
+    public void surface(double x, double z, double t, double[] out) {
+        double w = weight(x, z);
+        out[0] = 0; out[1] = 0; out[2] = 0;
+        if (w == 0 || compiled.isEmpty()) { return; }
+        double[] terms = TERMS.get();
+        compiled.surfaceTerms(x, z, t, terms);
+        out[0] = w * terms[0] + w * w * terms[3]; out[1] = w * terms[1] + w * w * terms[4]; out[2] = w * terms[2] + w * w * terms[5];
     }
 
     @Override public boolean equals(Object o) {

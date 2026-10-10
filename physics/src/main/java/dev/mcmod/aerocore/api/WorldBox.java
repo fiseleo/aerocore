@@ -2,8 +2,12 @@ package dev.mcmod.aerocore.api;
 
 import java.util.Objects;
 
-/** Static axis-aligned obstacle in world metres, for example one Minecraft collision AABB. */
-public record WorldBox(Vec3d min, Vec3d max) {
+/**
+ * Static axis-aligned obstacle in world metres, for example one Minecraft collision AABB, with the contact material of
+ * a body against it (null: the body's own default).
+ */
+public record WorldBox(Vec3d min, Vec3d max, ContactMaterial material) {
+    public WorldBox(Vec3d min, Vec3d max) { this(min, max, null); }
     public WorldBox {
         Objects.requireNonNull(min, "min");
         Objects.requireNonNull(max, "max");

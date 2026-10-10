@@ -41,7 +41,7 @@ public final class WorldWaterSampler {
     private WaveField compiledField = WaveField.NONE;
     private CompiledWaves compiled = CompiledWaves.NONE;
     private double[] cos = new double[0], sin = new double[0];
-    private final double[] kinematics = new double[6], segment = new double[8], wake = new double[3];
+    private final double[] kinematics = new double[6], segment = new double[8], wake = new double[3], second = new double[3];
     /** Entity id whose own wake this sampler ignores (-1: none). */
     private int ownWake = -1;
 
@@ -112,7 +112,8 @@ public final class WorldWaterSampler {
                         phased = true;
                     }
                     int phaseOffset = (ix * COLUMNS + iz) * components;
-                    double surface = (free ? still + fast.elevation(cos, phaseOffset) : still) + wakeHeight;
+                    if (free) { fast.secondOrder(cos, sin, phaseOffset, second); }
+                    double surface = (free ? still + fast.elevation(cos, phaseOffset) + second[0] : still) + wakeHeight;
                     double lower = Math.max(bottom, start), upper = Math.min(top, surface);
                     for (int cellY = start; cellY <= y && upper > lower; cellY++) {
                         // A crest above the top block is attributed to that block's flow.
@@ -185,7 +186,8 @@ public final class WorldWaterSampler {
             fast.phases(point.x(), point.z(), timeSeconds, cos, sin);
             fast.kinematics(cos, sin, point.y() - still, kinematics);
             double[] slope = fast.slope(sin);
-            return new Column(still + fast.elevation(cos) + wake[0], new Vec3d(slope[0], 0, slope[1]).add(wakeSlope), still, amplitude > 0 ? weighted / amplitude : 0,
+            fast.secondOrder(cos, sin, 0, second);
+            return new Column(still + fast.elevation(cos) + second[0] + wake[0], new Vec3d(slope[0] + second[1], 0, slope[1] + second[2]).add(wakeSlope), still, amplitude > 0 ? weighted / amplitude : 0,
                     flow.add(new Vec3d(kinematics[0], kinematics[1], kinematics[2])), new Vec3d(kinematics[3], kinematics[4], kinematics[5]));
         }
         return Column.NONE;

@@ -8,6 +8,7 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.vehicle.Boat;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.common.NeoForgeMod;
@@ -93,86 +94,114 @@ public final class SeaGameTests {
     }
 
     @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 260, batch = "aerocore_sea_boat")
-    public static void vanillaBoatHeavesWithTheWaves(GameTestHelper h) {
+    public static void vanillaBoatRidesTheWaves(GameTestHelper h) {
         double still = pool(h);
         WaveRegion region = regularWave(h, still, 0.25);
         BlockPos o = h.absolutePos(BlockPos.ZERO);
         Boat boat = EntityType.BOAT.create(h.getLevel());
         if (boat == null) { throw new IllegalStateException("Boat factory failed"); }
-        boat.setPos(o.getX() + 11.5, still - 0.37, o.getZ() + 8.5);
+        boat.setPos(o.getX() + 11.5, still - 0.02, o.getZ() + 8.5);
         h.getLevel().addFreshEntity(boat);
-        final double[] range = {Double.MAX_VALUE, -Double.MAX_VALUE}, offset = {0, 0};
+        final double[] range = {Double.MAX_VALUE, -Double.MAX_VALUE}, offset = {0, 0, 0};
         for (int tick = 100; tick < 240; tick++) {
             h.runAfterDelay(tick, () -> {
                 range[0] = Math.min(range[0], boat.getY()); range[1] = Math.max(range[1], boat.getY());
                 double surface = SeaSurface.surfaceY(h.getLevel(), region, boat.getX(), boat.getZ(), SeaSurface.time(h.getLevel()));
                 offset[0] += surface - boat.getY(); offset[1]++;
+                offset[2] = Math.max(offset[2], Math.abs(RowingBoats.attitude(boat, 1)[1]));
                 h.assertTrue(!boat.isUnderWater(), "Boat must stay afloat: y " + boat.getY() + ", surface " + surface);
             });
         }
         h.runAfterDelay(241, () -> {
             remove(h, region);
             double heave = (range[1] - range[0]) / 2, mean = offset[0] / offset[1];
-            h.assertTrue(heave > 0.15 && heave < 0.4, "Vanilla boat must heave with 0.25 m waves: " + heave);
-            // Vanilla buoyancy balances gravity with (waterLevel - y) / 0.5625 = 0.65, about 0.37 m.
-            h.assertTrue(Math.abs(mean - 0.37) < 0.1, "Boat must float at vanilla's depth below the moving surface: " + mean);
+            h.assertTrue(heave > 0.15 && heave < 0.4, "The boat must heave with 0.25 m waves: " + heave);
+            // An empty 35 kg pram draws 35 / (1000 x 1.75) = 0.02 m (vanilla floated it 0.37 m deep).
+            h.assertTrue(Math.abs(mean - 0.02) < 0.03, "Boat must float at its hydrostatic draft below the moving surface: " + mean);
+            // Beam-on to a 12 m wave of slope ka = 0.13 rad, it rolls with the surface.
+            h.assertTrue(offset[2] > Math.toRadians(3), "The boat must roll with the wave slope: " + Math.toDegrees(offset[2]));
             boat.discard();
             h.succeed();
         });
     }
 
-    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 80, batch = "aerocore_sea_wake")
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 120, batch = "aerocore_sea_wake")
     public static void wakeRaisesTheSurfaceBehindItsSourceForEveryReader(GameTestHelper h) {
         double still = pool(h);
         BlockPos o = h.absolutePos(BlockPos.ZERO);
-        int bin = Wakes.bin(3.0), id = -7001;
-        double speed = Wakes.binSpeed(bin);
-        Wakes.prefetch(Wakes.TEST_HULL, bin);
-        dev.mcmod.aerocore.api.KelvinWake.Pattern pattern = Wakes.computeNow(Wakes.TEST_HULL, bin);
-        // A source moving along +x near the east wall; its wake trails toward -x.
-        Vec3d origin = new Vec3d(o.getX() + 18.5, still - 0.2, o.getZ() + 7.5);
-        for (int tick = 1; tick <= 30; tick++) { h.runAfterDelay(tick, () -> Wakes.update(h.getLevel(), id, Wakes.TEST_HULL, origin, new Vec3d(speed, 0, 0))); }
-        h.runAfterDelay(30, () -> {
-            double t = SeaSurface.time(h.getLevel()), x = origin.x() - 8, z = origin.z() + 1;
-            double expected = pattern.elevation(-8, 1);
-            h.assertTrue(Math.abs(expected) > 1e-3, "The test hull at 3 m/s must make a visible wake: " + expected);
-            h.assertTrue(Wakes.zones(h.getLevel()).stream().anyMatch(zone -> zone.contains(origin.x(), origin.z())), "A calm zone must follow the wake");
+        int id = -7001;
+        double speed = 3.0;
+        // A test hull source running along +x down the pool for 2 s; its wake trails behind it.
+        final Vec3d[] origin = {new Vec3d(o.getX() + 3.5, still - 0.2, o.getZ() + 7.5)};
+        for (int tick = 1; tick <= 40; tick++) {
+            h.runAfterDelay(tick, () -> {
+                origin[0] = origin[0].add(new Vec3d(speed * 0.05, 0, 0));
+                Wakes.update(h.getLevel(), id, Wakes.TEST_HULL, origin[0], new Vec3d(1, 0, 0), new Vec3d(speed, 0, 0));
+            });
+        }
+        h.runAfterDelay(43, () -> {
+            double t = SeaSurface.time(h.getLevel()), x = origin[0].x() - 4, z = origin[0].z() + 1;
+            double wake = Wakes.elevation(h.getLevel(), still, x, z, -1);
+            h.assertTrue(Math.abs(wake) > 1e-3, "The test hull at 3 m/s must make a visible wake: " + wake);
+            h.assertTrue(Wakes.zones(h.getLevel()).stream().anyMatch(zone -> zone.contains(origin[0].x(), origin[0].z())), "A calm zone must cover the wake");
             double vanilla = SeaSurface.surfaceNear(h.getLevel(), x, z, still - 1, still, t);
-            h.assertTrue(Math.abs(vanilla - (still + expected)) < 1e-9, "Vanilla entities must see the wake: " + vanilla + " vs " + (still + expected));
+            h.assertTrue(Math.abs(vanilla - (still + wake)) < 1e-9, "Vanilla entities must see the wake: " + vanilla + " vs " + (still + wake));
             WorldWaterSampler sampler = new WorldWaterSampler(h.getLevel());
             double body = sampler.column(new Vec3d(x, still - 0.3, z), WaveField.NONE, Double.NaN, t).surfaceY();
-            h.assertTrue(Math.abs(body - (still + expected)) < 1e-9, "Other bodies must feel the wake: " + body);
+            h.assertTrue(Math.abs(body - (still + wake)) < 1e-9, "Other bodies must feel the wake: " + body);
             double own = new WorldWaterSampler(h.getLevel()).excludingWakeOf(id).column(new Vec3d(x, still - 0.3, z), WaveField.NONE, Double.NaN, t).surfaceY();
             h.assertTrue(Math.abs(own - still) < 1e-12, "A body must not feel its own wake: " + own);
-            double ahead = SeaSurface.surfaceNear(h.getLevel(), origin.x() + 4, z, still - 1, still, t);
-            h.assertTrue(Math.abs(ahead - still) < 1e-12, "No wake ahead of the bow: " + ahead);
+            double ahead = Math.abs(Wakes.elevation(h.getLevel(), still, origin[0].x() + 6, z, -1));
+            h.assertTrue(ahead < 0.2 * Math.abs(wake), "Little wave ahead of the bow: " + ahead + " vs " + wake);
         });
-        // Unreported sources fade out and their zone goes away.
+        // The source is gone: its waves are no longer carried along but keep running where they were made.
         h.runAfterDelay(60, () -> {
-            h.assertTrue(Wakes.zones(h.getLevel()).isEmpty(), "Faded wakes must leave no zone");
-            h.assertTrue(Wakes.elevation(h.getLevel(), still, origin.x() - 8, origin.z() + 1, -1) == 0, "Faded wakes must leave a still surface");
+            h.assertTrue(!Wakes.zones(h.getLevel()).isEmpty(), "Running waves keep their zone");
+            h.assertTrue(Wakes.maxElevation(h.getLevel()) > 1e-4, "The wake must outlive its source: " + Wakes.maxElevation(h.getLevel()));
             h.succeed();
         });
     }
 
     @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 120, batch = "aerocore_sea_boat_wake")
-    public static void movingVanillaBoatLeavesAWake(GameTestHelper h) {
+    public static void pushedVanillaBoatCoastsAndLeavesAWake(GameTestHelper h) {
         double still = pool(h);
-        Wakes.Design design = Wakes.vanillaBoat(EntityType.BOAT.getWidth(), EntityType.BOAT.getHeight());
-        for (int bin = Wakes.bin(3.5); bin <= Wakes.bin(5.5); bin++) { Wakes.prefetch(design, bin); }
         BlockPos o = h.absolutePos(BlockPos.ZERO);
         Boat boat = EntityType.BOAT.create(h.getLevel());
         if (boat == null) { throw new IllegalStateException("Boat factory failed"); }
-        boat.setPos(o.getX() + 3.5, still - 0.37, o.getZ() + 8.5);
+        boat.setPos(o.getX() + 3.5, still - 0.02, o.getZ() + 8.5);
+        boat.setYRot(-90);
         h.getLevel().addFreshEntity(boat);
-        for (int tick = 1; tick <= 60; tick++) {
-            h.runAfterDelay(tick, () -> boat.setDeltaMovement(0.25, boat.getDeltaMovement().y, 0));
-        }
-        h.runAfterDelay(60, () -> {
-            double behind = Wakes.elevation(h.getLevel(), still, boat.getX() - 3, boat.getZ() + 0.5, -1);
-            h.assertTrue(Math.abs(behind) > 1e-4, "A boat at about 4.5 m/s must leave a wake: " + behind);
+        // A shove of 1.6 m/s along its bow (+x), taken by the rowing physics as an impulse.
+        h.runAfterDelay(2, () -> boat.setDeltaMovement(1.6 * 0.05, 0, 0));
+        final double[] start = new double[1];
+        h.runAfterDelay(5, () -> start[0] = boat.getX());
+        h.runAfterDelay(45, () -> {
+            double travelled = boat.getX() - start[0], speed = (boat.getX() - boat.xo) / 0.05;
+            h.assertTrue(travelled > 1.5 && speed > 0.1 && speed < 1.6, "A shoved boat must coast and slow: " + travelled + " m, " + speed + " m/s");
+            h.assertTrue(Wakes.maxElevation(h.getLevel()) > 1e-4, "A moving boat must leave a wake: " + Wakes.maxElevation(h.getLevel()));
             h.assertTrue(!Wakes.zones(h.getLevel()).isEmpty(), "Its calm zone must exist");
             boat.discard();
+            h.succeed();
+        });
+    }
+
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 120, batch = "aerocore_sea_boat_load")
+    public static void vanillaBoatSinksToTheDraftOfItsLoad(GameTestHelper h) {
+        double still = pool(h);
+        BlockPos o = h.absolutePos(BlockPos.ZERO);
+        Boat boat = EntityType.BOAT.create(h.getLevel());
+        Villager villager = EntityType.VILLAGER.create(h.getLevel());
+        if (boat == null || villager == null) { throw new IllegalStateException("Entity factory failed"); }
+        boat.setPos(o.getX() + 11.5, still - 0.02, o.getZ() + 8.5);
+        h.getLevel().addFreshEntity(boat);
+        villager.setPos(boat.getX(), boat.getY() + 0.2, boat.getZ());
+        h.getLevel().addFreshEntity(villager);
+        villager.startRiding(boat, true);
+        h.runAfterDelay(100, () -> {
+            // 35 kg hull + 62 kg person on a 1.75 x 1.0 m bottom.
+            double draft = still - boat.getY(), expected = (35 + 62) / (998.2 * 1.75);
+            h.assertTrue(Math.abs(draft - expected) < 0.01, "Loaded draft must follow Archimedes: " + draft + " vs " + expected);
+            boat.discard(); villager.discard();
             h.succeed();
         });
     }
@@ -202,6 +231,8 @@ public final class SeaGameTests {
 
     /** Stone floor and walls with 4 m of water inside; returns the absolute still-water level. */
     private static double pool(GameTestHelper h) {
+        // The GameTest server ticks faster than real time; step wakes on its thread so they keep pace.
+        Wakes.synchronous = true;
         for (int x = 0; x < 24; x++) for (int z = 0; z < 16; z++) {
             h.setBlock(new BlockPos(x, 0, z), Blocks.STONE);
             for (int y = 1; y <= 5; y++) {

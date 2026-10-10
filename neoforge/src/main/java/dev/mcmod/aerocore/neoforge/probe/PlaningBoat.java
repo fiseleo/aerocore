@@ -112,6 +112,7 @@ public final class PlaningBoat extends Entity implements DebugBody, CoupledBody,
         return Wakes.planingBoat(TestPlaningBoat.BEAM, TestPlaningBoat.DEADRISE, wettedLengthM(), TestPlaningBoat.MASS * Atmosphere.GRAVITY_MPS2, trim);
     }
     @Override public Vec3d wakeOrigin() { return toWorld(Vec3d.ZERO); }
+    @Override public Vec3d wakeForward() { return poseOrientation().rotate(Vec3d.X); }
     @Override public Vec3d wakeVelocity() {
         return level().isClientSide ? new Vec3d(getX() - xo, getY() - yo, getZ() - zo).scale(1 / MinecraftUnits.TICK_SECONDS) : state.velocity();
     }

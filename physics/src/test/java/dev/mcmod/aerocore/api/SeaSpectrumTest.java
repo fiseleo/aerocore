@@ -80,7 +80,7 @@ class SeaSpectrumTest {
                 assertEquals(field.elevation(point.x(), point.z(), 3.9), c.elevation(cos), 1e-12);
                 assertEquals(u.x(), c.velocity(point, 60, 3.9).x(), 1e-12);
             }
-            assertEquals(field.maxAmplitude(), c.maxAmplitude(), 1e-12);
+            assertTrue(c.maxAmplitude() >= field.maxAmplitude(), "The second-order bound covers the linear one");
             // Grid phases and one-pass segments equal the point queries, including segments across still water and the bed.
             int n = c.size();
             double[] gc = new double[6 * n], gs = new double[6 * n], seg = new double[8];
