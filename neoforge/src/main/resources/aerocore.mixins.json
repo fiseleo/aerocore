@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.mcmod.aerocore.neoforge.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BoatWaterMixin",
+    "EntityCollideMixin",
+    "EntityWaterMixin",
+    "LivingEntityAccessor"
+  ],
+  "client": [
+    "CameraFogMixin",
+    "LiquidBlockRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

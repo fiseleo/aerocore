@@ -1,0 +1,77 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+base { archivesName = 'aerocore-neoforge-1.21.1' }
+evaluationDependsOn(':physics')
+dependencies { api project(':physics') }
+
+// NFRT performs many small ZIP writes. Keep scratch files local even on a network checkout.
+// This property belongs to the pinned ModDevGradle 2.0.148 task API.
+// Stable across a mapped drive (Z:) and its UNC alias. Override only for an independent checkout.
+def runtimeId = providers.gradleProperty('aerocore_runtime_id').getOrElse('aerocore')
+if (!(runtimeId ==~ /[A-Za-z0-9_-]+/)) { throw new GradleException('Invalid aerocore_runtime_id') }
+def localRuntimeRoot = new File(System.getProperty('user.home'), ".mcmod/runs/${runtimeId}")
+// Java NIO pipes (the integrated server's local channel, HTTP clients) use Unix-domain sockets in the temp
+// directory on Windows. Redirected %TEMP% (packaged apps, IDEs not started by open-ide.cmd) breaks them, so
+// every game run uses the same local temp folder as dev.ps1, whatever launched Gradle or the IDE.
+def localTemp = new File(System.getProperty('user.home'), '.mcmod/tmp')
+localTemp.mkdirs()
+def scratchKey = runtimeId
+tasks.withType(net.neoforged.nfrtgradle.NeoFormRuntimeTask).configureEach {
+    workDirectory = new File(gradle.gradleUserHomeDir, "caches/aerocore-work/${scratchKey}/${project.name}")
+}
+
+neoForge {
+    version = rootProject.neo_version
+    runs {
+        client {
+            client()
+            gameDirectory = file(new File(localRuntimeRoot, 'client'))
+        }
+        server {
+            server()
+            gameDirectory = file(new File(localRuntimeRoot, 'server'))
+            programArgument '--nogui'
+        }
+        gameTestServer {
+            type = 'gameTestServer'
+            gameDirectory = file(new File(localRuntimeRoot, 'gametest'))
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'aerocore'
+            systemProperty 'aerocore.gametests', 'true'
+        }
+        configureEach {
+            systemProperty 'java.io.tmpdir', localTemp.absolutePath
+            systemProperty 'jdk.net.unixdomain.tmpdir', localTemp.absolutePath
+        }
+    }
+    mods {
+        aerocore {
+            sourceSet sourceSets.main
+            sourceSet project(':physics').sourceSets.main
+        }
+    }
+}
+
+tasks.register('showRuntimeDirectories') {
+    doLast {
+        println "AeroCore client: ${new File(localRuntimeRoot, 'client')}"
+        println "AeroCore server: ${new File(localRuntimeRoot, 'server')}"
+        println "AeroCore GameTest: ${new File(localRuntimeRoot, 'gametest')}"
+    }
+}
+
+def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    def properties = [mod_version: project.version, neo_version: rootProject.neo_version]
+    inputs.properties properties
+    expand properties
+    from 'src/main/templates'
+    into layout.buildDirectory.dir('generated/modMetadata')
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+// Ship the platform-independent API inside the mod, so players install one JAR.
+tasks.named('jar') { from project(':physics').sourceSets.main.output }
+tasks.named('sourcesJar') { from project(':physics').sourceSets.main.allSource }
