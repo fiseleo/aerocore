@@ -23,6 +23,8 @@ public final class VehicleState {
     final double[] trainSpeeds;
     final WaveRadiation.Memory radiation;
     final double[] radii;
+    /** Internal states of the parts (Part.internalStates), in installed order. */
+    final double[] internals;
     /** Whether the radiation memory has taken its first radii (VehicleDynamics.finish primes it at the first step). */
     boolean primed;
     List<AppliedForce> forces = List.of();
@@ -34,6 +36,12 @@ public final class VehicleState {
         trainSpeeds = new double[vehicle.trains()];
         radiation = vehicle.radiationPoints().isEmpty() ? null : new WaveRadiation.Memory(vehicle.radiationPoints(), dt);
         radii = new double[vehicle.radiationPoints().size()];
+        internals = new double[vehicle.internals()];
+        for (Vehicle.Installed i : vehicle.installed()) {
+            double[] start = i.part().initialInternals();
+            if (start.length != i.part().internalStates()) { throw new IllegalStateException("Part " + i.id() + " gives the wrong number of initial internals"); }
+            System.arraycopy(start, 0, internals, i.firstInternal(), start.length);
+        }
     }
 
     public Vehicle vehicle() { return vehicle; }
@@ -51,6 +59,17 @@ public final class VehicleState {
         Vehicle.Rotor r = vehicle.rotors().get(rotor);
         return r.ratio() * trainSpeeds[r.train()];
     }
+    /** A part's i-th internal state (Part.internalStates), for display and tests. */
+    public double internal(String partId, int i) {
+        for (Vehicle.Installed p : vehicle.installed()) {
+            if (p.id().equals(partId)) {
+                if (i < 0 || i >= p.part().internalStates()) { throw new IndexOutOfBoundsException("Internal state " + i); }
+                return internals[p.firstInternal() + i];
+            }
+        }
+        throw new IllegalArgumentException("No part " + partId);
+    }
+
     /** Loads of the last step, for arrows (offsets from that step's COM). */
     public List<AppliedForce> forces() { return forces; }
     /** Diagnostics of the last step by part id. */
@@ -58,13 +77,15 @@ public final class VehicleState {
     /** World position of the vehicle frame's origin. */
     public Vec3d origin() { return vehicle.origin(body); }
 
-    /** Rigid-body state and train speeds (the wave memory is not saved; it refills within its 8 s span). */
+    /** Rigid-body state, train speeds and part internals (the wave memory is not saved; it refills within its 8 s span). */
     public Map<String, Object> toJson() {
         Orientation q = body.orientation();
-        List<Object> speeds = new ArrayList<>();
+        List<Object> speeds = new ArrayList<>(), parts = new ArrayList<>();
         for (double s : trainSpeeds) { speeds.add(s); }
+        for (double s : internals) { parts.add(s); }
         return Fields.object("position", Fields.vector(body.position()), "velocity", Fields.vector(body.velocity()),
-                "orientation", List.of(q.w(), q.x(), q.y(), q.z()), "angularMomentum", Fields.vector(body.angularMomentum()), "trainSpeeds", speeds);
+                "orientation", List.of(q.w(), q.x(), q.y(), q.z()), "angularMomentum", Fields.vector(body.angularMomentum()), "trainSpeeds", speeds,
+                "internals", parts);
     }
 
     public static VehicleState fromJson(Vehicle vehicle, Object json, double dt) {
@@ -85,6 +106,12 @@ public final class VehicleState {
         // A blueprint changed since saving may have another number of trains: keep what still fits.
         for (int i = 0; i < Math.min(speeds.size(), state.trainSpeeds.length); i++) {
             if (speeds.get(i) instanceof Number n && Double.isFinite(n.doubleValue())) { state.trainSpeeds[i] = n.doubleValue(); }
+        }
+        List<Object> parts = f.list("internals", List.of());
+        if (parts.size() == state.internals.length) {   // a changed blueprint starts its parts afresh
+            for (int i = 0; i < parts.size(); i++) {
+                if (parts.get(i) instanceof Number n && Double.isFinite(n.doubleValue())) { state.internals[i] = n.doubleValue(); }
+            }
         }
         return state;
     }

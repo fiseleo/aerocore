@@ -76,6 +76,18 @@ public final class PartStep {
         return bound ? sum : fallback;
     }
 
+    /** This part's i-th internal state at the step start (Part.internalStates). */
+    public double internal(int i) {
+        if (i < 0 || i >= installed.part().internalStates()) { throw new IndexOutOfBoundsException("Internal state " + i); }
+        return out.internals[installed.firstInternal() + i];
+    }
+    /** Sets this part's i-th internal state for the end of the step (committed by VehicleDynamics.finish). */
+    public void setInternal(int i, double value) {
+        if (i < 0 || i >= installed.part().internalStates()) { throw new IndexOutOfBoundsException("Internal state " + i); }
+        if (!Double.isFinite(value)) { throw new IllegalArgumentException("Internal state must be finite"); }
+        out.nextInternals[installed.firstInternal() + i] = value;
+    }
+
     /** Speed of this part's k-th rotor at the step start, rad/s. */
     public double rotorSpeed(int k) { return out.rotorSpeed(installed.firstRotor() + k); }
     /** Waterplane radius last recorded for this part's k-th radiation point (unsmoothed), m. */

@@ -11,7 +11,7 @@
   - 測試台、設計畫面、物品與模型都在載具 Mod。AeroCore 提供零件藍圖格式、「設計參數 → 效能」的計算、組裝與連接、通用載具物理，
     以及可以離線呼叫的計算。設計見 [docs/VEHICLE_PARTS.md](docs/VEHICLE_PARTS.md)（0.17 範圍已經使用者確認）。
 - 先維持可驗證的物理核心，再逐步接入載具玩法。不要把近似模型描述成工程級 CFD。
-- 截至 2026-10-11，版本為 **0.17.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
+- 截至 2026-10-11，版本為 **0.19.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
   0.6 加入球形元件接觸反力（摩擦／反彈）、指定的線性 Airy 波浪、BEMT 螺旋槳推力（平台艉部示範槳）與阻力摩擦生熱；
   0.7 加入接觸摩擦生熱、波壓深度衰減（垂直 Froude–Krylov）、水平 Froude–Krylov 力與附加質量，測試球改用六自由度剛體與 `ContactSolver`；
   0.8 加入浮筒垂直方向的波浪輻射阻尼（Hulme 半球資料、Cummins 記憶力）與浮筒間點吸收體干擾；
@@ -38,9 +38,13 @@
   0.16.1（2026-10-11，使用者回報「crash 了 優化一下 有點卡」）修正微風時 NaN 造成的划船當機（`SeaWind.LIGHT_AIR`），
   消除自然海域換區的卡頓（只重建改變的 section 並分散、水面快取移交、水色格點、新區塊預算），並快取天空狀態與波浪輻射核函數；
   0.17（2026-10-11，使用者確認範圍：藍圖格式、零件編譯、組裝與連接、通用載具物理；測試台在載具 Mod）加入 `api.vehicle`
-  （九種零件、JSON 藍圖、質量性質、動力軸傳動系、`VehicleDynamics`）與遊戲端 `PartVehicle`，並修正原版船在單人遊戲兩端共用狀態造成的客戶端崩潰。
+  （九種零件、JSON 藍圖、質量性質、動力軸傳動系、`VehicleDynamics`）與遊戲端 `PartVehicle`，並修正原版船在單人遊戲兩端共用狀態造成的客戶端崩潰；
+  0.18（2026-10-11，使用者要求「先做零件」「引擎可以自己做」並列出內燃機元件）加入活塞引擎：`api.engine` 的逐曲軸角循環模擬、
+  16 個各自設計的引擎元件組成 `aerocore:piston_engine` 零件，以及零件內部狀態（`Part.internalStates`）；
+  0.19（2026-10-11，使用者列出噴射引擎元件並要求「開始做噴射引擎」）加入單軸渦輪噴射：`api.engine.Turbojet`（變比熱循環、設計點、
+  非設計點平衡、依飛行馬赫數的運轉線、準穩態暫態），進氣道、壓縮機、燃燒室、渦輪、噴嘴／尾管、燃油控制六個元件組成 `aerocore:jet_engine` 零件。
 - 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是線性自由面的非定常解（勢流），不是黏性流場求解。
-- AeroCore 不出可駕駛的載具（`PartVehicle` 是給載具 Mod 用的通用實體，AeroCore 只用範例藍圖與指令測它）；尚無引擎設計、輪子與懸吊、機翼零件、旋翼、三維 CFD、碎浪動力、
+- AeroCore 不出可駕駛的載具（`PartVehicle` 是給載具 Mod 用的通用實體，AeroCore 只用範例藍圖與指令測它）；尚無增壓、柴油、渦扇與後燃器、輪子與懸吊、機翼零件、旋翼、三維 CFD、碎浪動力、
   波浪反射、遠方風暴的湧浪、大氣層結（背風波）、氣象動力學、相變或完整熱流耦合；海岸是幾何光學（無反射、島後只有一個到達波）。
 - 船體模型刻意做成水面船與潛航體都能用的細長體；載具玩法屬於載具 Mod，不要放進 AeroCore。
 
@@ -134,7 +138,8 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | `neoforge/src/main/java/dev/mcmod/aerocore/neoforge/` | Mod 註冊、指令、Minecraft 整合 |
 | 上述目錄的 `probe/` | 測試球、平台、環境取樣、粒子顯示與 GameTest |
 | 上述目錄的 `client/` | 客戶端模型與渲染（含波面），避免專用伺服器載入客戶端類別 |
-| physics 的 `api/vehicle/` | 零件化載具（0.17）：零件藍圖、組裝、`VehicleDynamics`；純 Java，載具 Mod 的測試台可離線呼叫 |
+| physics 的 `api/vehicle/` | 零件化載具（0.17）：零件藍圖、組裝、`VehicleDynamics`；0.18 的引擎元件與 `PistonEngineDesign`；0.19 的噴射引擎元件與 `JetEngineDesign`；純 Java，載具 Mod 的測試台可離線呼叫 |
+| physics 的 `api/engine/` | 活塞引擎的物理（0.18）：氣體、燃料、循環模擬、摩擦、點火標定；渦輪噴射的循環（0.19，`Turbojet`）；純 Java，可離線呼叫（測功機、測試台） |
 | neoforge 的 `vehicle/` | 給載具 Mod 用的公開遊戲端 API：`PartVehicle`、`VehicleRegistry`、`VehicleNetwork`、`VehicleCommands`、`VehicleGameTests` |
 | neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船水面）、`BoatPhysicsMixin`（原版船改由 `RowingBoats` 移動、槳速）、`BoatSeatMixin`（座位隨船傾斜）、`BoatAccessor`、`LivingEntityAccessor`；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）、`BoatRendererMixin`（船的俯仰橫搖）、`BoatClientMixin`（槳動畫內插）、`RiderTiltMixin`（乘客模型隨船傾斜）、`SkyDomeMixin`（物理天空）、`CloudWindMixin`（雲隨風）、`WeatherWindMixin`（雨雪隨風傾斜）；只能放 mixin 類別 |
 | `scripts/` | JDK／IDE／本機資料與離線 CFD 繪圖工具 |
@@ -154,7 +159,11 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 客戶端 `SkyRenderer` 與天空 shader `aerocore_sky`；
 0.17：`api.vehicle` 的 `PartDesign`／`PartTypes`／`Part`／`PartStep`、九種零件設計（`FloatDesign`、`HullDesign`、`PlaningHullDesign`、`PropellerDesign`、
 `ControlSurfaceDesign`、`BoxDesign`、`MotorDesign`、`BallastDesign`、`SeatDesign`）、`VehicleBlueprint`／`Vehicle`／`VehicleState`／`VehicleDynamics`／`VehicleEnvironment`、
-`Json`、`SampleBlueprints`；遊戲端 `PartVehicle`，客戶端 `PartVehicleRenderer`、`VehicleControls`。
+`Json`、`SampleBlueprints`；遊戲端 `PartVehicle`，客戶端 `PartVehicleRenderer`、`VehicleControls`；
+0.18：`api.engine` 的 `Species`／`Gas`、`Fuel`、`CrankKinematics`、`ValveLift`、`ValveFlow`、`Combustion`、`EngineOil`、`Friction`、`EngineCycle`、`Dyno`；
+`api.vehicle` 的 `EngineComponent` 與 16 個元件設計、`EngineMaterial`、`PistonEngineDesign`、`SampleEngines`；
+0.19：`api.engine.Turbojet`；`api.vehicle` 的 `JetInletDesign`、`CompressorDesign`、`CombustorDesign`、`TurbineDesign`、`JetNozzleDesign`、`JetControlDesign`、
+`JetEngineDesign`，範例 `SampleEngines.turbojet()`／`modelTurbojet()`、`SampleBlueprints.jetBoat()`。
 修改來源檔，不直接修改 `build/`、Gradle 快取或生成的 Mod 中繼資料。
 
 ## 物理與顯示約定
@@ -251,6 +260,30 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
   卡頓要看最慢的一幀，不是平均 FPS：`AutoShot` 的 `fps` 與慢幀記錄（GC、JIT、水面各段、客戶端 tick；0.17 加伺服器 tick 平均與超過 50 ms 的數量）就是為此；
   更細的用 `jcmd <pid> JFR.start settings=profile`（遊戲的暫存目錄改過，`jcmd -l` 看不到，要加 `-J-Djava.io.tmpdir=%USERPROFILE%\.mcmod\tmp` 並直接給 PID）
   附加到開發客戶端（`jfr print` 輸出文字再分析，JSON 太大）。
+- 0.19 噴射引擎（詳見 docs/JET.md）：
+  - 性能只來自 `Turbojet` 的匹配（設計點 → 平衡 → 運轉線 → 準穩態）；元件只給參數與檢查，不要在零件裡另算推力。
+    準穩態在運轉線油量下必須就是平衡解：改平衡、運轉線或準穩態任何一個，都用 `TurbojetTest.quasiSteadyBalances...`
+    與兩具範例在靜止、100 m/s、11 km 確認運轉線油量的功率差在 1 % 內，全油門推力等於平衡解。
+  - 渦輪是跨越自身壓比的噴嘴（不是恆阻塞）：低壓比的模型引擎在設計點就沒有阻塞，改回恆阻塞會讓它在 935 K 以下沒有平衡解。
+  - 平衡的匹配式有退化根（轉子幾乎不轉、流量很大）：從大渦輪壓比往下掃描再二分的做法要保留。進氣損失直接在平衡式內由修正流量求
+    （與 pt2 無關）；不要改回外圈迭代（會在兩根之間跳，運轉線列的 pt2 與流量不一致）。
+  - 壓損（進氣道、燃燒室、尾管）隨修正流量平方縮放；固定比例的壓損會讓低轉速的低壓比引擎渦輪拿不到壓力，起不來。
+  - 運轉線依飛行馬赫數各一條、依衝壓總壓比內插、T4 範圍換算到最冷標準大氣；只用靜止的一條時，噴嘴未阻塞的引擎在飛行中推力差 20 % 以上，
+    高空寒冷時修正轉速超出表格。
+  - 燃油控制、起動機（45 % 後永久切離）、點火、熄火、喘振（30 %、0.6 s）是規則，寫在 `JetControlDesign`／`JetEngineDesign` 的註解；
+    起動機若在點火時就切離，模型引擎會在點火轉速附近反覆熄火。
+  - 質量係數以 J85-GE-17A（181 kg）與 JetCat P80（1.32 kg）一起定；改任何元件的質量估計都要重看兩者。
+  - 運轉線在背景建立（約 0.2 s），依設計 JSON 快取；`Compiled` 被所有載具共用，每台載具的狀態放 `PartStep.internal`。
+  - 噴射艇 GameTest 會把船推過整個水池，放在自己的批次（`aerocore_jet_boat`）。
+- 0.18 活塞引擎（詳見 docs/ENGINE.md）：
+  - 元件各自檢查自己；能不能裝在一起（活塞對缸徑、連桿對曲柄銷與活塞銷、缸面間隙、氣門排列、噴油嘴種類）由 `PistonEngineDesign.check` 檢查。
+    壓縮比不是參數，由燃燒室、床墊、缸面間隙與活塞頂算出；不要加一個壓縮比欄位繞過它。
+  - 性能只來自 `EngineCycle`＋`Dyno`＋`Friction`；不要為了「好玩」直接改 MAP 的值。燃燒相關式（Bonatesta）只在一具引擎擬合，
+    火焰行程與燃料縮放、爆震校準 `KNOCK_CALIBRATION = 1.45` 都是有註明的假設或單點校準，改動時要更新 ENGINE.md 的理由。
+  - 循環的顯式步長在稀薄氣體會發散：孔口流量限制（每步不超過讓兩側壓力相等之量的一半）與歧管氣柱倒流限制都要保留；
+    改步長或流量公式時，用 `EngineDesignTest` 與 12～20 % 歧管壓力的點確認不會出現 NaN 或負質量。
+  - MAP 在背景建立（`Part.warmUp`，數秒，各轉速平行），依設計 JSON 快取；`Compiled` 被所有載具共用，不可放每台載具的狀態（用 `PartStep.internal`）。
+  - 引擎船 GameTest 會跑很久（等 MAP），尾浪會影響同批次的鄰居，所以放在自己的批次（`aerocore_engine_boat`）。
 - 0.17 零件化載具：
   - 零件受力必須和原本的積分器逐步一致：`FloatingBodyDynamics.sphereLoads`、`HullDynamics.loads`、`PlaningDynamics.loads` 是共用的同一份程式，
     不要在零件裡另寫一份。`VehicleTest` 以 1e-9 比對浮筒平台、測試船、滑行艇，改受力時要一起過。
@@ -316,6 +349,8 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | 0.14.1 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 211＋5 | 43 | 未重新啟動客戶端；修正使用者實玩 0.14.0 的崩潰（新測試在未修正時失敗）與近處亮盤，遊戲中未實測 |
 | 0.15.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 216＋5 | 43 | 以 `AutoShot` 在 `AeroCore Render QA` 截圖：淺水風浪區的早晨／中午／傍晚／夜晚／水下／平視／俯視外觀，FPS 83～117（1280×720，RTX 5070） |
 | 0.16.0 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 234＋5 | 47 | `AutoShot` 截圖：划船的泡沫網紋與停船後消散、自然海域晴天與雷雨、天空正午／日出／日落／雨／雷雨、雲兩張相隔 5 秒的位移、雨的傾斜 |
+| 0.18.0 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 280＋5 | 51 | 未啟動客戶端；引擎船以 GameTest 確認起動與推進 |
+| 0.19.0 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 293＋5 | 52 | 未啟動客戶端；噴射艇以 GameTest 確認點火與推進；引擎船 GameTest 改成撞牆前判定（原本靠反彈才過） |
 | 0.17.0 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 257＋5 | 50 | `AutoShot` 在 `AeroCore Render QA` 生成三個範例載具：浮在水面、給油門後前進並留下尾浪；四個載具靜置時伺服器 tick 平均 31～34 ms（無載具 17 ms）；手動駕駛未實測 |
 | 0.16.1 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 237＋5 | 47 | `AutoShot` 沿 320 m 航線移動量測：自然海域換區時最慢一幀 18～25 ms（修正前 66～118 ms），平均 105～119 FPS；換區邊緣的過渡畫面未截圖確認 |
 
@@ -333,6 +368,8 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 風浪隨雷雨起落、擋風、靠岸浪頭、逐槳前衝的手感；
 0.14.1：使用者實玩 0.14.0 回報近處亮盤與池塘崩潰（已修正）；閃爍漸入後的近處外觀、使用者世界的池塘重新進入是否正常；
 0.15：已用自動截圖看過淺水風浪區（見上表）；仍未看過大浪外海、碎浪帶、尾浪與水花在新 shader 下、下雨與雷雨、其他生態域水色、Fabulous 模式、低階顯示卡 FPS、多人連線；
+0.19：噴射艇在遊戲中的表現（`/aerocore vehicle spawn jetboat`：起動、怠速推力、油門反應、熄火，沒有聲音與尾焰）、飛行器上的噴射引擎（還沒有機翼零件）；
+0.18：引擎船在遊戲中的表現（`/aerocore vehicle spawn engineboat`：起動時間、怠速、加速、聲音沒有）、引擎 MAP 建立期間的等待、冷車到熱車；
 0.17：坐上零件載具用預設按鍵駕駛、站在甲板上、受力箭頭（`/aerocore vehicle debug`）、多人連線的控制與同步、範例以外的藍圖（自己寫 JSON）、
 其他客戶端看到的螺旋槳與舵動畫；
 0.16.1：使用者世界與使用者電腦上的實際手感（量測在原開發機的 QA 世界、旁觀者模式瞬移）；換區邊緣 0.1～0.2 s 的過渡畫面；
@@ -354,3 +391,4 @@ CFD CSV／圖在 `cfd/build/experiments/water/` 或 `air/`；`scripts/plot-cfd.p
 - [CFD](docs/CFD.md)：獨立流道求解與離線圖，不等同於遊戲環境流場。
 - [大氣](docs/ATMOSPHERE.md)：全世界的風、天空、雲與雨雪、飛行用大氣；[地面載具](docs/GROUND.md)：輪胎、滾動阻力、軟地面。
 - [零件化載具](docs/VEHICLE_PARTS.md)：零件藍圖、組裝與連接、通用載具物理、遊戲端 `PartVehicle`、驗證。
+- [活塞引擎](docs/ENGINE.md)：16 個元件、循環模擬、標定與 MAP、執行時、驗證；[噴射引擎](docs/JET.md)：6 個元件、循環匹配、運轉線、暫態、驗證。

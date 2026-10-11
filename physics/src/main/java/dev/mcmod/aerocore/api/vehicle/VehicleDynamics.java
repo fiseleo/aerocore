@@ -42,7 +42,7 @@ public final class VehicleDynamics {
         final List<RigidBodyDynamics.PointMass> masses = new ArrayList<>();
         final List<Vec3d> excitations = new ArrayList<>();
         final List<RigidBodyDynamics.PointDrag> drags = new ArrayList<>();
-        final double[] internal, external, derivative, speeds, lastRadii, radii, shares;
+        final double[] internal, external, derivative, speeds, lastRadii, radii, shares, internals, nextInternals;
         final Map<String, double[]> thrusts = new HashMap<>();
         final Map<String, Map<String, Double>> diagnostics = new LinkedHashMap<>();
 
@@ -54,6 +54,7 @@ public final class VehicleDynamics {
             radii = new double[v.radiationPoints().size()];
             shares = new double[radii.length];
             java.util.Arrays.fill(shares, 1);
+            internals = st.internals.clone(); nextInternals = st.internals.clone();
         }
 
         double rotorSpeed(int k) { return speeds[k]; }
@@ -88,7 +89,7 @@ public final class VehicleDynamics {
      */
     public record Prepared(Vehicle vehicle, VehicleState state, RigidBodyState start, RigidBodyState damped, List<AppliedForce> forces,
                            Map<AppliedForce.Kind, Wrench> loads, Wrench inertia, List<RigidBodyDynamics.PointMass> masses,
-                           double[] trainSpeeds, double[] radii, Map<String, Map<String, Double>> diagnostics, double dt) {}
+                           double[] trainSpeeds, double[] radii, Map<String, Map<String, Double>> diagnostics, double dt, double[] internals) {}
 
     /**
      * A finished step: new state, every load drawn (world offsets from the step's starting COM), the loads summed by
@@ -186,7 +187,7 @@ public final class VehicleDynamics {
             c.display.add(new AppliedForce(AppliedForce.Kind.INERTIA, Vec3d.ZERO, inertia.force(), inertia.torque()));
         }
         return new Prepared(v, st, s, damped, List.copyOf(c.display), new EnumMap<>(c.sums), inertia, List.copyOf(c.masses),
-                trainSpeeds, c.radii, c.diagnostics, dt);
+                trainSpeeds, c.radii, c.diagnostics, dt, c.nextInternals);
     }
 
     /**
@@ -212,6 +213,7 @@ public final class VehicleDynamics {
         if (collision != null) { next = ContactSolver.separate(next, p, collision.shape(), collision.obstacles()); }
         st.setBody(next);
         System.arraycopy(prepared.trainSpeeds(), 0, st.trainSpeeds, 0, st.trainSpeeds.length);
+        System.arraycopy(prepared.internals(), 0, st.internals, 0, st.internals.length);
         if (st.radiation != null) {
             // The first step starts the waterplane radii where the vehicle floats (Memory.prime), not at zero.
             if (!st.primed) { st.radiation.prime(prepared.radii()); st.primed = true; }

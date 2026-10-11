@@ -31,6 +31,13 @@ public interface Part {
     default List<Vec3d> seats() { return List.of(); }
     /** Parts whose results others read in the same step (a propeller's thrust for its slipstream) go first. */
     default boolean early() { return false; }
+    /**
+     * Number of internal state values this part keeps per vehicle (an engine's manifold pressure and temperatures);
+     * they live in VehicleState, start at initialInternals() and are read and written through PartStep.
+     */
+    default int internalStates() { return 0; }
+    /** Values of the internal states for a new vehicle (zeros unless the part says otherwise). */
+    default double[] initialInternals() { return new double[internalStates()]; }
 
     /** This part's loads on the vehicle at the start of a step, written into step. */
     void loads(PartStep step);

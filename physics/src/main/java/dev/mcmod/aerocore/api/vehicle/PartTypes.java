@@ -28,6 +28,8 @@ public final class PartTypes {
         register(MotorDesign.TYPE, MotorDesign::read);
         register(BallastDesign.TYPE, BallastDesign::read);
         register(SeatDesign.TYPE, SeatDesign::read);
+        register(PistonEngineDesign.TYPE, PistonEngineDesign::read);
+        register(JetEngineDesign.TYPE, JetEngineDesign::read);
     }
 
     private PartTypes() {}

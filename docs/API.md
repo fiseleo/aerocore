@@ -39,7 +39,7 @@ double reynolds = detail.flow().reynoldsNumber();
 
 ```groovy
 dependencies {
-    implementation files('libs/aerocore-neoforge-1.21.1-0.17.0.jar')
+    implementation files('libs/aerocore-neoforge-1.21.1-0.19.0.jar')
 }
 ```
 
@@ -49,7 +49,7 @@ dependencies {
 [[dependencies.your_vehicle_mod]]
 modId="aerocore"
 type="required"
-versionRange="[0.17.0,0.18.0)"
+versionRange="[0.19.0,0.20.0)"
 ordering="AFTER"
 side="BOTH"
 ```
@@ -688,6 +688,32 @@ level.addFreshEntity(entity);
 - 載具 Mod 繼承 `PartVehicle` 可以改 `canControl`、`usesDefaultControls`（關掉 AeroCore 的品管用按鍵）、`interact`；
   畫面自己畫，或註冊 `PartVehicleRenderer`。
 - 控制通道名稱自由（綁定決定），`PartVehicle.input(partId, role)` 在客戶端給動畫用的輸入值，`rotorAngle(rotor, partialTick)` 給轉子角度。
+
+## 0.19 相容性變更
+
+- `api.engine.Turbojet`：單軸渦輪噴射的設計點（`size`）、非設計點平衡（`equilibrium`）、依飛行馬赫數的運轉線（`runningLines`）、
+  準穩態（`quasiSteady`）與控制用的反解（`lineFuel`、`fuelForTurbineInlet`、`fuelForSurgeMargin`），可離線呼叫（測試台、設計畫面）。
+  模型與驗證見 [JET.md](JET.md)。
+- `Gas` 新增 `enthalpy`、`entropyFunction`、`temperatureAtEntropy`、`temperatureAtEnthalpy`；`Fuel.KEROSENE`。
+- `api.vehicle` 新增噴射引擎元件 `JetInletDesign`、`CompressorDesign`、`CombustorDesign`、`TurbineDesign`、`JetNozzleDesign`、`JetControlDesign`，
+  組合成零件 `JetEngineDesign`（`aerocore:jet_engine`，輸入 `throttle`、`ignition`，三個內部狀態）；`SampleEngines.turbojet()`／`modelTurbojet()`、
+  `SampleBlueprints.jetBoat()`（`/aerocore vehicle spawn jetboat`）。
+- `EngineMaterial` 多一個欄位 `serviceTemperatureK`（JSON `serviceTemperature`，沒寫時 600 K）：自行建構 `EngineMaterial` 的程式要補上。
+  新材料 `STAINLESS_321`、`INCONEL_718`、`INCONEL_713C`、`CMSX_4`。
+- 活塞引擎與其他零件的行為不變。
+
+## 0.18 相容性變更
+
+- 新套件 `dev.mcmod.aerocore.api.engine`：`Species`／`Gas`（NASA 多項式氣體）、`Fuel`、`CrankKinematics`、`ValveLift`、`ValveFlow`、`Combustion`
+  （Woschni、Bonatesta 燃燒角、Douaud–Eyzat）、`EngineOil`、`Friction`（Patton／Sandoval）、`EngineCycle`（循環模擬）、`Dyno`（點火標定）。純 Java，可離線呼叫（測功機）。
+- `api.vehicle` 新增引擎元件 `EngineComponent` 與 `EngineBlockDesign`、`CylinderHeadDesign`、`PistonDesign`、`ConnectingRodDesign`、`CrankshaftDesign`、
+  `ValveDesign`、`CamshaftDesign`、`SparkPlugDesign`、`FuelInjectorDesign`、`ValvetrainDesign`、`FuelSystemDesign`、`IgnitionDesign`、`LubricationDesign`、
+  `CoolingDesign`、`IntakeDesign`、`ExhaustDesign`、`EngineMaterial`，組合成零件 `PistonEngineDesign`（`aerocore:piston_engine`）；`SampleEngines`、
+  `SampleBlueprints.engineBoat()`。
+- 零件內部狀態：`Part.internalStates()`／`initialInternals()`、`PartStep.internal(i)`／`setInternal(i, v)`（`VehicleDynamics.finish` 時寫回）、
+  `VehicleState.internal(partId, i)`，存檔 JSON 多一個 `internals` 陣列（藍圖改變、數量不同時重新開始）。
+  `Vehicle.Installed` 多 `firstInternal`，`VehicleDynamics.Prepared` 多 `internals`（自行建構這兩個 record 的程式要補上）。
+- `PartVehicle` 不變；新的範例 `engineboat`（`/aerocore vehicle spawn engineboat`），引擎 MAP 在背景建好前原地等待。
 
 ## 0.17 相容性變更
 

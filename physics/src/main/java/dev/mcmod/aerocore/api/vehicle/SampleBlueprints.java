@@ -17,7 +17,7 @@ public final class SampleBlueprints {
 
     /** Name to blueprint, for /aerocore vehicle samples. */
     public static Map<String, VehicleBlueprint> all() {
-        return Map.of("platform", platform(), "launch", launch(), "cruiser", cruiser());
+        return Map.of("platform", platform(), "launch", launch(), "cruiser", cruiser(), "engineboat", engineBoat(), "jetboat", jetBoat());
     }
 
     /**
@@ -79,5 +79,42 @@ public final class SampleBlueprints {
                 new VehicleBlueprint.Entry("ballast", new BallastDesign("keel ballast", 100), Mount.at(new Vec3d(0, -0.3, 0))),
                 new VehicleBlueprint.Entry("seat", new SeatDesign("helm", 10), Mount.at(new Vec3d(-1.5, 0.45, 0)))),
                 List.of(new Connection.Shaft("motor", "screw", 2, 0.97), new Connection.Slipstream("screw", "rudder")));
+    }
+
+    /**
+     * The cruiser's hull with the sample 2.0 l petrol engine (SampleEngines.inlineFour) in place of the motor, through a
+     * 3:1 reduction to the same screw; the ignition is not bound, so the engine starts by itself.
+     */
+    public static VehicleBlueprint engineBoat() {
+        HullDesign hull = new HullDesign("test hull", HullModel.Type.SURFACE, HullDesign.stationsOf(TestHull.HULL), TestHull.MASS, 0, 6,
+                new MassSpec.Given(1000, TestHull.CENTER_OF_MASS));
+        return new VehicleBlueprint("engine boat", List.of(
+                new VehicleBlueprint.Entry("hull", hull, Mount.ORIGIN),
+                new VehicleBlueprint.Entry("engine", SampleEngines.inlineFour(), Mount.at(new Vec3d(-1.9, 0.0, 0)), List.of(Binding.of("throttle", "throttle"))),
+                new VehicleBlueprint.Entry("screw", new PropellerDesign("B3-65", 0.4, 3, 0.65, 1.0, 0.18, 0.1, MassSpec.solid(Material.BRONZE)),
+                        Mount.at(new Vec3d(-3.15, -0.38, 0))),
+                new VehicleBlueprint.Entry("rudder", new ControlSurfaceDesign("rudder", 0.30, 0.50, 35, true, 0.15, MassSpec.solid(Material.STEEL)),
+                        Mount.at(new Vec3d(-3.45, -0.42, 0)), List.of(Binding.of("deflection", "rudder"))),
+                new VehicleBlueprint.Entry("ballast", new BallastDesign("keel ballast", 60), Mount.at(new Vec3d(0, -0.3, 0))),
+                new VehicleBlueprint.Entry("seat", new SeatDesign("helm", 10), Mount.at(new Vec3d(-1.0, 0.45, 0)))),
+                List.of(new Connection.Shaft("engine", "screw", 3, 0.97), new Connection.Slipstream("screw", "rudder")));
+    }
+
+    /**
+     * The test hull pushed by the J85-class turbojet of SampleEngines on its after deck (inlet clear of the water): even
+     * at idle (about 1.6 kN) it drives the boat; a rudder steers.
+     */
+    public static VehicleBlueprint jetBoat() {
+        HullDesign hull = new HullDesign("test hull", HullModel.Type.SURFACE, HullDesign.stationsOf(TestHull.HULL), TestHull.MASS, 0, 6,
+                new MassSpec.Given(1000, TestHull.CENTER_OF_MASS));
+        return new VehicleBlueprint("jet boat", List.of(
+                new VehicleBlueprint.Entry("hull", hull, Mount.ORIGIN),
+                new VehicleBlueprint.Entry("jet", SampleEngines.turbojet(), Mount.at(new Vec3d(-1.6, 0.75, 0)),
+                        List.of(Binding.of("throttle", "throttle"))),   // ignition unbound: always on
+                new VehicleBlueprint.Entry("rudder", new ControlSurfaceDesign("rudder", 0.30, 0.50, 35, true, 0.15, MassSpec.solid(Material.STEEL)),
+                        Mount.at(new Vec3d(-3.45, -0.42, 0)), List.of(Binding.of("deflection", "rudder"))),
+                new VehicleBlueprint.Entry("ballast", new BallastDesign("keel ballast", 120),Mount.at(new Vec3d(0, -0.3, 0))),
+                new VehicleBlueprint.Entry("seat", new SeatDesign("helm", 10), Mount.at(new Vec3d(-0.5, 0.45, 0)))),
+                List.of());
     }
 }

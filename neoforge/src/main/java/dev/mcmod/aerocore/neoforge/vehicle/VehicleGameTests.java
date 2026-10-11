@@ -82,6 +82,68 @@ public final class VehicleGameTests {
         });
     }
 
+    // Its own batch: it runs for as long as the engine map takes to build, and its wake would reach the neighbours' pools.
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 2400, batch = "aerocore_engine_boat")
+    public static void engineBoatStartsItsEngineAndDrivesAhead(GameTestHelper h) {
+        Wakes.synchronous = true;
+        double surface = pool(h);
+        VehicleBlueprint blueprint = SampleBlueprints.engineBoat();
+        // The GameTest server ticks faster than real time, so build the engine map (seconds) here; the vehicle's own
+        // warm-up then finds it cached.
+        blueprint.compile().warmUp();
+        HullDesign hull = (HullDesign) blueprint.part("hull").design();
+        double waterline = hull.designParticulars(hull.geometry()).waterlineY();
+        PartVehicle v = spawn(h, blueprint, 5, surface - waterline);
+        v.setControls(Map.of("throttle", 0.6, "rudder", 0.0));
+        // The engine map is built off the game thread (seconds): count ticks from when the vehicle is ready.
+        final int[] running = {0};
+        final Vec3d[] start = {null};
+        h.succeedWhen(() -> {
+            if (!v.ready()) { throw new net.minecraft.gametest.framework.GameTestAssertException("Engine map still building"); }
+            if (start[0] == null) { start[0] = v.vehicle().origin(v.vehicleState().body()); }
+            running[0]++;
+            // From 3 s on it passes as soon as all holds: at this throttle the boat reaches the far wall in about 7 s.
+            if (running[0] < 60) { throw new net.minecraft.gametest.framework.GameTestAssertException("Running"); }
+            Map<String, Double> engine = v.vehicleState().diagnostics().get("engine");
+            var body = v.vehicleState().body();
+            double surge = body.velocity().dot(body.orientation().rotate(Vec3d.X));
+            Vec3d moved = v.vehicle().origin(body).subtract(start[0]);
+            h.assertTrue(engine.get("running") == 1, "The starter must have started the engine: " + engine);
+            h.assertTrue(engine.get("rpm") > 1500 && engine.get("torqueNm") > 0, "The engine must pull at part throttle: " + engine);
+            h.assertTrue(surge > 0.5 && moved.x() > 1.0, "The engine and screw must drive the boat ahead: surge " + surge + " m/s, moved " + moved);
+            h.assertTrue(Math.abs(v.rotorSpeed(1) * 3 - v.rotorSpeed(0)) < 1e-6 * Math.abs(v.rotorSpeed(0)) + 1e-9, "The 3:1 gear");
+        });
+    }
+
+    // Its own batch too: the jet drives the boat across the pool and its wake would reach the neighbours.
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 400, batch = "aerocore_jet_boat")
+    public static void jetBoatLightsItsTurbojetAndDrivesAhead(GameTestHelper h) {
+        Wakes.synchronous = true;
+        double surface = pool(h);
+        VehicleBlueprint blueprint = SampleBlueprints.jetBoat();
+        blueprint.compile().warmUp();   // the running lines (a fraction of a second), so the vehicle finds them cached
+        HullDesign hull = (HullDesign) blueprint.part("hull").design();
+        double waterline = hull.designParticulars(hull.geometry()).waterlineY();
+        PartVehicle v = spawn(h, blueprint, 5, surface - waterline);
+        v.setControls(Map.of("throttle", 0.0, "rudder", 0.0));
+        final int[] running = {0};
+        final Vec3d[] start = {null};
+        h.succeedWhen(() -> {
+            if (!v.ready()) { throw new net.minecraft.gametest.framework.GameTestAssertException("Running lines still building"); }
+            if (start[0] == null) { start[0] = v.vehicle().origin(v.vehicleState().body()); }
+            running[0]++;
+            // From 5 s on (it lights at about 2 s and idles at about 4 s) it passes as soon as all holds.
+            if (running[0] < 100) { throw new net.minecraft.gametest.framework.GameTestAssertException("Running"); }
+            Map<String, Double> jet = v.vehicleState().diagnostics().get("jet");
+            var body = v.vehicleState().body();
+            double surge = body.velocity().dot(body.orientation().rotate(Vec3d.X));
+            Vec3d moved = v.vehicle().origin(body).subtract(start[0]);
+            h.assertTrue(jet.get("lit") == 1 && jet.get("speedFraction") > 0.5, "The starter must have lit the jet and it must idle: " + jet);
+            h.assertTrue(jet.get("thrustN") > 1000, "Idle thrust: " + jet);
+            h.assertTrue(surge > 0.5 && moved.x() > 1.0, "The jet must drive the boat ahead: surge " + surge + " m/s, moved " + moved);
+        });
+    }
+
     @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 120)
     public static void riderSitsInTheSeatAndTheVehicleSurvivesSaving(GameTestHelper h) {
         Wakes.synchronous = true;

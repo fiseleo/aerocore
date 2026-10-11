@@ -24,7 +24,7 @@ import java.util.Map;
 public final class Vehicle {
     /** One installed part with what the step needs precomputed. */
     public record Installed(int index, String id, Part part, Mount mount, Orientation rotation, List<Binding> bindings,
-                            int firstRotor, int firstRadiation, RigidBodyProperties partProperties, String slipstreamFrom) {}
+                            int firstRotor, int firstRadiation, RigidBodyProperties partProperties, String slipstreamFrom, int firstInternal) {}
 
     /**
      * A rotor in the vehicle: its part, spin axis and position in the vehicle frame, inertia, whether it drives, its
@@ -64,6 +64,13 @@ public final class Vehicle {
     public List<DesignIssue> issues() { return issues; }
     /** Body contact against blocks; per-block materials come from the obstacles (BlockMaterials). */
     public ContactMaterial contactMaterial() { return ContactMaterial.STEEL_ON_ROCK; }
+
+    /** Total internal state values of all parts (Part.internalStates). */
+    public int internals() {
+        int n = 0;
+        for (Installed i : installed) { n += i.part().internalStates(); }
+        return n;
+    }
 
     /** Part.warmUp of every part (about a second for a new hull design): call it off the game thread before stepping. */
     public void warmUp() { for (Installed i : installed) { i.part().warmUp(); } }
@@ -142,6 +149,7 @@ public final class Vehicle {
         List<Vec3d> radiation = new ArrayList<>(), seats = new ArrayList<>();
         List<WorldBox> deck = new ArrayList<>();
         List<Rotor> rotors = new ArrayList<>();
+        int internals = 0;
         for (int i = 0; i < entries.size(); i++) {
             VehicleBlueprint.Entry e = entries.get(i);
             Part part = parts.get(i);
@@ -150,7 +158,8 @@ public final class Vehicle {
             // The whole body seen in the part's axes: COM in the part frame, inertia rotated into the part axes.
             MassProperties seen = MassProperties.of(total.massKg(), Vec3d.ZERO, inertia).transformed(Vec3d.ZERO, inverse);
             RigidBodyProperties partProperties = new RigidBodyProperties(total.massKg(), inverse.rotate(total.centre().subtract(m.position())), seen.inertia());
-            installed.add(new Installed(i, e.id(), part, m, r, e.bindings(), rotors.size(), radiation.size(), partProperties, slipstreams.get(e.id())));
+            installed.add(new Installed(i, e.id(), part, m, r, e.bindings(), rotors.size(), radiation.size(), partProperties, slipstreams.get(e.id()), internals));
+            internals += part.internalStates();
             for (CollisionSphere s : part.collision()) { collision.add(new CollisionSphere(m.apply(s.centerLocal()), s.radiusM())); }
             for (Vec3d p : part.radiationPoints()) { radiation.add(m.apply(p)); }
             for (Vec3d p : part.seats()) { seats.add(m.apply(p)); }
