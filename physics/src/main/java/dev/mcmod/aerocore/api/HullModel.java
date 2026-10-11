@@ -148,7 +148,10 @@ public final class HullModel {
      * Contact spheres along the hull: at every other station, keel and both bilges at mid-depth plus both deck edges,
      * each sized to stay inside the section (radius a third of the smaller half-dimension, at least 3 cm).
      */
-    public List<CollisionSphere> collisionShape() {
+    public List<CollisionSphere> collisionShape() { return collisionShape(hull); }
+
+    /** The same spheres for any hull geometry, without building a model. */
+    public static List<CollisionSphere> collisionShape(SlenderHull hull) {
         List<CollisionSphere> shape = new ArrayList<>();
         for (int i = 0; i < hull.stations(); i += 2) {
             HullSection s = hull.sections().get(i);

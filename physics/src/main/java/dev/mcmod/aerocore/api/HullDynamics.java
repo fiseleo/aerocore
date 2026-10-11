@@ -59,9 +59,23 @@ public final class HullDynamics {
                          Wrench external, Wrench kirchhoff, List<AppliedForce> forces, double wetVolumeM3, double surgeSpeedMps,
                          double resistanceN, double dragPowerW, double contactFrictionW, double[] waterlineBreadth) {}
 
-    /** Fluid loads of one state, before the velocity update. kirchhoff includes the frame term; steady is -C_A(nu) nu. */
-    private record Loads(Wrench hydro, Wrench drag, Wrench lift, Wrench excitation, Wrench kirchhoff, Wrench steady, double[][] addedBody,
-                         List<AppliedForce> forces, double wetVolume, double surge, double resistance, double dragPower, double[] breadth) {}
+    /**
+     * Fluid loads of one state, before the velocity update (world axes, torques about the COM): hydro (buoyancy, and
+     * the body's weight when asked), drag, lift, wave excitation, kirchhoff (ideal-fluid terms including the frame term),
+     * steady (-C_A(nu) nu alone), the strip added mass in body axes about the COM, display forces, wet volume (m^3),
+     * surge speed (m/s), calm-water resistance (N), dissipated power (W) and each strip's waterline breadth (m).
+     */
+    public record Loads(Wrench hydro, Wrench drag, Wrench lift, Wrench excitation, Wrench kirchhoff, Wrench steady, double[][] addedBody,
+                        List<AppliedForce> forces, double wetVolume, double surge, double resistance, double dragPower, double[] breadth) {}
+
+    /**
+     * The hull's loads at one state (as prepare() integrates them), for composite bodies (VehicleDynamics): includeWeight
+     * false leaves out p's weight, so p may describe a larger body the hull belongs to (its COM and inertia set the
+     * moment arms and the angular velocity).
+     */
+    public static Loads loads(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity, boolean includeWeight) {
+        return assemble(s, p, model, environment, gravity, includeWeight);
+    }
 
     public static Result step(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity,
                               List<AppliedForce> externalLoads, FloatingBodyDynamics.Collision collision, double dt) {
@@ -91,7 +105,7 @@ public final class HullDynamics {
     public static Prepared prepare(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity,
                                    List<AppliedForce> externalLoads, double dt) {
         Checks.positive(dt, "Time step");
-        Loads loads = assemble(s, p, model, environment, gravity);
+        Loads loads = assemble(s, p, model, environment, gravity, true);
         List<AppliedForce> forces = new ArrayList<>(loads.forces());
         Wrench external = Wrench.ZERO;
         for (AppliedForce load : externalLoads) { external = external.add(load.wrench()); forces.add(load); }
@@ -117,20 +131,20 @@ public final class HullDynamics {
      * without any added-mass reaction. World axes, torque about the COM.
      */
     public static Wrench captiveLoad(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity) {
-        Loads loads = assemble(s, p, model, environment, gravity);
+        Loads loads = assemble(s, p, model, environment, gravity, true);
         return loads.hydro().add(loads.drag()).add(loads.lift()).add(loads.excitation()).add(loads.steady());
     }
 
-    private static Loads assemble(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity) {
+    private static Loads assemble(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity, boolean includeWeight) {
         SlenderHull hull = model.hull();
         int n = hull.stations();
         Orientation q = s.orientation();
         Vec3d ex = q.rotate(Vec3d.X), ey = q.rotate(Vec3d.Y), ez = q.rotate(Vec3d.Z);
         Vec3d omega = s.angularVelocity(p);
         double g = gravity.length();
-        Wrench hydro = new Wrench(gravity.scale(p.massKg()), Vec3d.ZERO), drag = Wrench.ZERO, lift = Wrench.ZERO, excitation = Wrench.ZERO;
+        Wrench hydro = includeWeight ? new Wrench(gravity.scale(p.massKg()), Vec3d.ZERO) : Wrench.ZERO, drag = Wrench.ZERO, lift = Wrench.ZERO, excitation = Wrench.ZERO;
         List<AppliedForce> forces = new ArrayList<>();
-        forces.add(new AppliedForce(AppliedForce.Kind.WEIGHT, Vec3d.ZERO, gravity.scale(p.massKg())));
+        if (includeWeight) { forces.add(new AppliedForce(AppliedForce.Kind.WEIGHT, Vec3d.ZERO, gravity.scale(p.massKg()))); }
         HullSection.Wet[] wets = new HullSection.Wet[n];
         Water[] waters = new Water[n];
         Vec3d[] offsets = new Vec3d[n];
@@ -306,7 +320,7 @@ public final class HullDynamics {
         for (int row = 0; row < 6; row++) for (int col = 0; col < 6; col++) for (int k = 0; k < 3; k++) { a[row][col] += m[k] * j[k][row] * j[k][col]; }
     }
     /** World 6 x 6 matrix T A T^T, T = diag(R, R). */
-    static double[][] rotate(double[][] body, Orientation q) {
+    public static double[][] rotate(double[][] body, Orientation q) {
         double[][] r = new double[3][3];
         Vec3d[] axes = {q.rotate(Vec3d.X), q.rotate(Vec3d.Y), q.rotate(Vec3d.Z)};
         for (int c = 0; c < 3; c++) { r[0][c] = axes[c].x(); r[1][c] = axes[c].y(); r[2][c] = axes[c].z(); }

@@ -146,19 +146,28 @@ public final class WaveRadiation {
         double[] k = new double[count];
         if (ai == 0 || aj == 0) { return k; }
         double maxOmega = Math.sqrt(MAX_KA * G / Math.min(ai, aj)), step = maxOmega / FREQUENCIES;
+        double[] weight = new double[FREQUENCIES + 1];
         for (int m = 0; m <= FREQUENCIES; m++) {
             double omega = m * step;
             double b = Math.sqrt(heaveDampingPerDensity(ai, omega) * heaveDampingPerDensity(aj, omega)) * besselJ0(omega * omega / G * distanceM);
-            double weight = (m == 0 || m == FREQUENCIES ? 0.5 : 1) * step * 2 / Math.PI * b;
-            if (weight == 0) { continue; }
-            // cos(omega n dt) by the stable Chebyshev recurrence.
-            double c1 = Math.cos(omega * dt), previous = 1, current = c1;
-            k[0] += weight;
-            if (count > 1) { k[1] += weight * current; }
-            for (int n = 2; n < count; n++) {
-                double next = 2 * c1 * current - previous;
-                k[n] += weight * next;
-                previous = current; current = next;
+            weight[m] = (m == 0 || m == FREQUENCIES ? 0.5 : 1) * step * 2 / Math.PI * b;
+        }
+        // The frequencies are equally spaced, so cos(omega_m n dt) = cos(m theta_n) with theta_n = step n dt: the stable
+        // Chebyshev recurrence runs over m for all n at once. The loop over n has no dependency between its elements
+        // (the compiler vectorises it), where a recurrence over n for each frequency waits on itself at every step:
+        // about six times faster, which is what a hull settling into new waterlines waits for.
+        double[] twoCos = new double[count], previous = new double[count], current = new double[count];
+        for (int n = 0; n < count; n++) {
+            double c = Math.cos(step * n * dt);
+            twoCos[n] = 2 * c; previous[n] = c; current[n] = 1;   // cos(-theta), cos(0)
+        }
+        for (int m = 0; m <= FREQUENCIES; m++) {
+            double w = weight[m];
+            for (int n = 0; n < count; n++) {
+                double c = current[n];
+                k[n] += w * c;
+                current[n] = twoCos[n] * c - previous[n];
+                previous[n] = c;
             }
         }
         return k;
@@ -198,10 +207,11 @@ public final class WaveRadiation {
     private record KernelKey(double a, double b, double distanceM, double dt, int count) {}
     /**
      * Kernels already computed, shared by every Memory (each costs FREQUENCIES x count operations, about 1.3 million at
-     * a 5 ms step: recomputing them whenever a boat's waterline changed stalled frames). Read-only once made.
+     * a 5 ms step: recomputing them whenever a boat's waterline changed stalled frames). Read-only once made; at most
+     * 1024 of 12.8 kB (a settling hull visits a few hundred radius pairs).
      */
     private static final Map<KernelKey, double[]> KERNELS = Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75f, true) {
-        @Override protected boolean removeEldestEntry(Map.Entry<KernelKey, double[]> eldest) { return size() > 512; }
+        @Override protected boolean removeEldestEntry(Map.Entry<KernelKey, double[]> eldest) { return size() > 1024; }
     });
 
     /** kernel, from the shared cache (the array must not be modified). */
@@ -275,11 +285,13 @@ public final class WaveRadiation {
                 double sum = 0;
                 for (int j = 0; j < floats; j++) {
                     double[] k = kernels[i][j], w = history[j];
-                    double partial = 0;
-                    for (int n = 0; n < count; n++) {
-                        double weight = n == 0 || n == count - 1 ? 0.5 : 1;
-                        partial += weight * k[n] * w[(head - n + count) % count];
-                    }
+                    // Trapezoid over n = 0 .. count-1 with w at head - n (wrapping once), summed in that order; the
+                    // index runs down without a modulo per element (the hot loop of every floating body).
+                    double partial = 0.5 * k[0] * w[head];
+                    int n = 1;
+                    for (int index = head - 1; index >= 0 && n < count - 1; index--, n++) { partial += k[n] * w[index]; }
+                    for (int index = count - 1; n < count - 1; index--, n++) { partial += k[n] * w[index]; }
+                    partial += 0.5 * k[count - 1] * w[(head + 1) % count];
                     sum += partial;
                 }
                 forces[i] = -densityKgPerM3 * dt * sum;
@@ -361,6 +373,20 @@ public final class WaveRadiation {
                 a[i] = waterplaneRadius(sphere.radiusM(), wetFractions.get(i));
             }
             record(w, a);
+        }
+
+        /**
+         * Starts the radii at these values (snapped like record's rebuilds) instead of growing them from zero over the
+         * 0.5 s average: for a body that is already floating when its memory starts (spawned or loaded on water), whose
+         * damping should not build up as if it had just been dropped in, and which would otherwise rebuild its kernels at
+         * every few percent of that growth.
+         */
+        public void prime(double[] waterplaneRadii) {
+            if (waterplaneRadii.length != floats) { throw new IllegalArgumentException("One value per float is required"); }
+            for (double r : waterplaneRadii) { Checks.nonnegative(r, "Waterplane radius"); }
+            System.arraycopy(waterplaneRadii, 0, radii, 0, floats);
+            System.arraycopy(waterplaneRadii, 0, instant, 0, floats);
+            rebuild(true);
         }
 
         /** Sets radii immediately (for example a float already in equilibrium) and rebuilds the kernels for exactly these radii. */

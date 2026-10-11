@@ -196,10 +196,15 @@ public final class AutoShot {
             case "fps" -> {
                 IntegratedServer server = minecraft.getSingleplayerServer();
                 long worstTick = 0;
-                if (server != null) { for (long t : server.getTickTimesNanos()) { worstTick = Math.max(worstTick, t); } }
-                LOGGER.info("AeroCore autoshot: {} fps, slowest frame {} ms, {} frames over 50 ms, slowest server tick {} ms (last 100); "
+                int slowTicks = 0;
+                if (server != null) {
+                    for (long t : server.getTickTimesNanos()) { worstTick = Math.max(worstTick, t); if (t > 50_000_000L) { slowTicks++; } }
+                }
+                double meanTick = server == null ? 0 : server.getAverageTickTimeNanos() / 1e6;
+                LOGGER.info("AeroCore autoshot: {} fps, slowest frame {} ms, {} frames over 50 ms, slowest server tick {} ms (last 100: mean {} ms, {} over 50 ms); "
                         + "region updates {}, sections remeshed {}; sea {}", minecraft.getFps(), String.format("%.1f", worstFrame / 1e6), slowFrames,
-                        String.format("%.1f", worstTick / 1e6), ClientWaveRegions.updates, ClientWaveRegions.remeshed, WaveSurfaceRenderer.timing());
+                        String.format("%.1f", worstTick / 1e6), String.format("%.1f", meanTick), slowTicks, ClientWaveRegions.updates, ClientWaveRegions.remeshed,
+                        WaveSurfaceRenderer.timing());
                 worstFrame = 0; slowFrames = 0; ClientWaveRegions.updates = 0; ClientWaveRegions.remeshed = 0;
             }
             case "quit" -> leave(minecraft);

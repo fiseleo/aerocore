@@ -75,6 +75,72 @@ public final class RigidBodyDynamics {
         return new RigidBodyState(s.position(), new Vec3d(velocity[0], velocity[1], velocity[2]), s.orientation(),
                 p.inertia().applyWorld(s.orientation(), new Vec3d(velocity[3], velocity[4], velocity[5])));
     }
+    /**
+     * The general implicit velocity update of a composite body (VehicleDynamics): a 6 x 6 added mass A (world axes, about
+     * the COM, as in the overload taking a matrix), point added masses and point drags (as in the overload taking lists),
+     * all at once:
+     * (M + A + sum m_i J_i^T J_i + sum c_i dt J_i^T J_i) nu1 = M nu0 + dt W + A nu0 + sum m_i J_i^T u_i0 + sum c_i dt J_i^T u_f.
+     * Quadratic drag coefficients are frozen at the speeds after an explicit kick by W, as there. With A null and the
+     * lists empty or not, it equals the other two overloads up to rounding.
+     */
+    public static RigidBodyState implicitVelocity(RigidBodyState s, RigidBodyProperties p, Wrench load, double[][] addedMass,
+                                                  List<PointDrag> points, List<PointMass> added, double dt) {
+        Checks.positive(dt, "Time step");
+        RigidBodyState kicked = kick(s, p, load, dt);
+        double[][] a = massMatrix(s, p);
+        Vec3d momentum = kicked.velocity().scale(p.massKg());
+        double[] b = {momentum.x(), momentum.y(), momentum.z(), kicked.angularMomentum().x(), kicked.angularMomentum().y(), kicked.angularMomentum().z()};
+        Vec3d omega = s.angularVelocity(p);
+        if (addedMass != null) {
+            if (addedMass.length != 6) { throw new IllegalArgumentException("Added mass must be 6 x 6"); }
+            double[] nu = {s.velocity().x(), s.velocity().y(), s.velocity().z(), omega.x(), omega.y(), omega.z()};
+            for (int i = 0; i < 6; i++) {
+                if (addedMass[i].length != 6) { throw new IllegalArgumentException("Added mass must be 6 x 6"); }
+                for (int j = 0; j < 6; j++) {
+                    if (!Double.isFinite(addedMass[i][j]) || Math.abs(addedMass[i][j] - addedMass[j][i]) > 1e-9 * (1 + Math.abs(addedMass[i][j]))) {
+                        throw new IllegalArgumentException("Added mass must be finite and symmetric");
+                    }
+                    a[i][j] += addedMass[i][j];
+                    b[i] += addedMass[i][j] * nu[j];
+                }
+            }
+        }
+        for (PointMass point : added) {
+            accumulate(a, b, jacobian(point.offset()), point.massKg(), values(s.velocity().add(omega.cross(point.offset()))));
+        }
+        Vec3d kickedOmega = kicked.angularVelocity(p);
+        for (PointDrag point : points) {
+            Vec3d r = point.offset();
+            double speed = kicked.velocity().add(kickedOmega.cross(r)).subtract(point.fluidVelocity()).length();
+            accumulate(a, b, jacobian(r), (point.linearResistance() + point.quadraticResistance() * speed) * dt, values(point.fluidVelocity()));
+        }
+        double[] velocity = solvePositiveDefinite(a, b);
+        return new RigidBodyState(s.position(), new Vec3d(velocity[0], velocity[1], velocity[2]), s.orientation(),
+                p.inertia().applyWorld(s.orientation(), new Vec3d(velocity[3], velocity[4], velocity[5])));
+    }
+    /**
+     * Torque-free drift of the body and its added point masses as one rigid system (body mass plus entrained
+     * water), so free rotation keeps the system's momentum and kinetic energy rather than the body's alone.
+     * The added masses are held at their start-of-step body positions for this step; with none it is drift().
+     */
+    public static RigidBodyState driftWithPointMasses(RigidBodyState s, RigidBodyProperties p, List<PointMass> added, double dt) {
+        double extra=0;
+        Vec3d moment=Vec3d.ZERO;
+        for(PointMass m:added) {extra+=m.massKg();moment=moment.add(m.offset().scale(m.massKg()));}
+        if(extra==0) {return drift(s,p,dt);}
+        double total=p.massKg()+extra;
+        Orientation q=s.orientation(),inverse=q.inverse();
+        Vec3d c=moment.scale(1/total),cBody=inverse.rotate(c);
+        InertiaTensor inertia=p.inertia().shifted(p.massKg(),cBody);
+        for(PointMass m:added) {inertia=inertia.shifted(m.massKg(),inverse.rotate(m.offset()).subtract(cBody));}
+        RigidBodyProperties system=new RigidBodyProperties(total,p.centerOfMassLocal().add(cBody),inertia);
+        Vec3d omega=s.angularVelocity(p);
+        RigidBodyState virtual=new RigidBodyState(s.position().add(c),s.velocity().add(omega.cross(c)),q,inertia.applyWorld(q,omega));
+        RigidBodyState drifted=drift(virtual,system,dt);
+        Orientation q1=drifted.orientation();
+        Vec3d omega1=drifted.angularVelocity(system),c1=q1.rotate(cBody);
+        return new RigidBodyState(drifted.position().subtract(c1),drifted.velocity().subtract(omega1.cross(c1)),q1,p.inertia().applyWorld(q1,omega1));
+    }
     private static double[][] massMatrix(RigidBodyState s, RigidBodyProperties p) {
         double[][] a = new double[6][6];
         for (int i=0; i<3; i++) { a[i][i] = p.massKg(); }

@@ -21,7 +21,11 @@ public record Vec3d(double x, double y, double z) {
         return new Vec3d(y * other.z - z * other.y, z * other.x - x * other.z, x * other.y - y * other.x);
     }
     public double lengthSquared() { return dot(this); }
-    public double length() { return Math.hypot(Math.hypot(x, y), z); }
+    /** Euclidean length; sqrt of the sum of squares (hypot only where that overflows: hypot is several times slower and this is in every contact loop). */
+    public double length() {
+        double squared = x * x + y * y + z * z;
+        return squared < Double.POSITIVE_INFINITY ? Math.sqrt(squared) : Math.hypot(Math.hypot(x, y), z);
+    }
     public Vec3d normalized() {
         double length = length();
         if (length < 1e-12) { throw new IllegalArgumentException("Direction must be nonzero"); }

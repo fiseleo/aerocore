@@ -39,7 +39,7 @@ double reynolds = detail.flow().reynoldsNumber();
 
 ```groovy
 dependencies {
-    implementation files('libs/aerocore-neoforge-1.21.1-0.8.0.jar')
+    implementation files('libs/aerocore-neoforge-1.21.1-0.17.0.jar')
 }
 ```
 
@@ -49,7 +49,7 @@ dependencies {
 [[dependencies.your_vehicle_mod]]
 modId="aerocore"
 type="required"
-versionRange="[0.8.0,0.9.0)"
+versionRange="[0.17.0,0.18.0)"
 ordering="AFTER"
 side="BOTH"
 ```
@@ -642,6 +642,64 @@ Rowboat.Result r = Rowboat.step(state, crew, oars, water, ownWake, new Rowboat.A
 - Minecraft 端：`WaveRegion.Sea` 多 `windMps`、`fetchBeyondM`（風浪才有）；`WaveRegion.Wind` 多 `rainMps`、`thunderMps`（隨天氣）與 `mean(level)`；
   `WaveRegion.meanWind`／`gust`／`windAt`／`windDrift(level, ...)`／`drawnWaves`；`WaveRegions.at(level, x, z)` 回傳含該點風的 `Local`（`wind10`、`gust`）；
   `SeaSurface.waterVelocity` 多 `level` 參數；`WaveSurfaceRenderer.surfaceMask`。
+
+## 零件化載具（0.17）
+
+載具 Mod 用零件藍圖組出載具，AeroCore 算物理。完整說明、零件參數與驗證見 [零件化載具](VEHICLE_PARTS.md)。
+
+```java
+// 1. 零件藍圖（玩家設計的參數；check() 列出不合物理與外推的值）
+PartDesign hull = HullDesign.tapered("my hull", 8, 1.0, -0.6, 0.6, 1.0, 2, 17, 2500, MassSpec.shell(Material.ALUMINIUM, 0.005));
+PartDesign screw = new PropellerDesign("screw", 0.45, 3, 0.65, 1.0, 0.18, 0.1, MassSpec.solid(Material.BRONZE));
+PartDesign motor = new MotorDesign("motor", 150, 25000, 3000, 0.02, 0.92, 45);
+List<DesignIssue> warnings = screw.check();             // EXTRAPOLATION：超出 B 系列範圍等
+
+// 2. 載具藍圖：安裝位置、控制綁定、連接
+VehicleBlueprint boat = new VehicleBlueprint("my boat", List.of(
+        new VehicleBlueprint.Entry("hull", hull, Mount.ORIGIN),
+        new VehicleBlueprint.Entry("motor", motor, Mount.at(new Vec3d(-2.5, 0, 0)), List.of(Binding.of("throttle", "throttle"))),
+        new VehicleBlueprint.Entry("screw", screw, Mount.at(new Vec3d(-4.2, -0.45, 0)))),
+        List.of(new Connection.Shaft("motor", "screw", 2, 0.97)));
+String json = boat.toJsonText();                         // 存檔、網路、分享；VehicleBlueprint.fromJsonText(json) 讀回
+
+// 3. 離線（測試台）：編譯、在靜水中推進
+Vehicle v = boat.compile();                              // 不合物理時拋 DesignException（issues() 附路徑）
+v.warmUp();                                              // 建船體與螺旋槳的表（約 1 s，可在背景執行緒）
+VehicleState s = v.newState(new Vec3d(0, 0, 0), Orientation.IDENTITY, 0.005);
+VehicleEnvironment calm = VehicleEnvironment.calm(0.3, FluidState.FRESH_WATER_20C, Atmosphere.atAltitude(0, Vec3d.ZERO).fluid());
+for (int i = 0; i < 2000; i++) {
+    VehicleDynamics.Result r = VehicleDynamics.step(v, s, calm, Map.of("throttle", 1.0), Vec3d.Y.scale(-9.80665), List.of(), null, i * 0.005, 0.005);
+}
+double speed = s.body().velocity().length();             // 極速；s.diagnostics() 有各零件的推力、扭矩、阻力等
+```
+
+遊戲中：
+
+```java
+// 生成（伺服器）
+PartVehicle entity = VehicleRegistry.PART_VEHICLE.get().create(level);   // 或載具 Mod 自己註冊的 EntityType<PartVehicle 子類>
+entity.setBlueprint(boat, origin, orientation);
+level.addFreshEntity(entity);
+// 操作：伺服器 entity.setControls(Map.of("throttle", 0.5))；客戶端 VehicleNetwork.send(entity, Map.of(...))（canControl 決定是否接受）
+```
+
+- 新的零件類型：實作 `PartDesign`（record、`toJson`）與 `Part`（`loads(PartStep)` 寫入受力），以 `PartTypes.register("modid:part", reader)` 註冊。
+  `PartStep` 提供載具狀態、環境、輸入、轉子轉速；`partState()`／`partProperties()` 讓以零件自身座標寫的模型裝在任意位置都能用。
+- 載具 Mod 繼承 `PartVehicle` 可以改 `canControl`、`usesDefaultControls`（關掉 AeroCore 的品管用按鍵）、`interact`；
+  畫面自己畫，或註冊 `PartVehicleRenderer`。
+- 控制通道名稱自由（綁定決定），`PartVehicle.input(partId, role)` 在客戶端給動畫用的輸入值，`rotorAngle(rotor, partialTick)` 給轉子角度。
+
+## 0.17 相容性變更
+
+- 新套件 `dev.mcmod.aerocore.api.vehicle`（見上）。
+- `RigidBodyDynamics.implicitVelocity(s, p, load, addedMass6x6, pointDrags, pointMasses, dt)`：通用隱式解；`driftWithPointMasses`（原
+  `FloatingBodyDynamics` 的私有方法）公開。
+- `FloatingBodyDynamics.sphereLoads`、`HullDynamics.loads`、`PlaningDynamics.loads`：原積分器的受力，`includeWeight` false 時不含重量，給組合物體用；
+  `HullDynamics.Loads`、`PlaningDynamics.Loads` 改為公開，`HullDynamics.rotate` 公開，`HullModel.collisionShape(SlenderHull)` 靜態版。結果不變。
+- `WaveRadiation.Memory.prime(waterplaneRadii)`：以目前的水線面半徑啟動記憶（格點化），不從 0 爬升；既有物體不呼叫，行為不變。
+- Minecraft 端：新套件 `dev.mcmod.aerocore.neoforge.vehicle`（`PartVehicle`、`VehicleRegistry`、`VehicleNetwork`、`VehicleCommands`、`VehicleGameTests`），
+  客戶端 `PartVehicleRenderer`、`VehicleControls`；`EntityLoads`、`WorldObstacles` 公開；`Wakes.thinShip(hull, particulars)`（任意細長船體的尾浪）。
+- 新指令：`/aerocore vehicle samples|spawn <名稱>|control <通道> <值>|info|debug <模式>|remove`。
 
 ## 0.16 相容性變更
 

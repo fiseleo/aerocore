@@ -262,20 +262,38 @@ public final class ContactSolver {
     /**
      * Sphere-sphere contacts between bodies a and b at their current poses, with the same speculative margin as
      * generate() (relative point speed times dt plus 2 cm). Shapes are model-local; spheres must not be nested.
+     * <p>
+     * Two hulls of about a hundred spheres each test ten thousand pairs per call, once per substep and again in every
+     * separation iteration, so B's spheres are placed in the world once, and a pair farther apart than the radii plus
+     * the largest margin it could have (the sum of both point speeds, times dt) is skipped before anything else; the
+     * pairs kept and their contacts are the same as testing every pair in full.
      */
     public static List<PairContact> generatePair(int a, Body bodyA, List<CollisionSphere> shapeA, int b, Body bodyB,
                                                  List<CollisionSphere> shapeB, ContactMaterial material, double dt) {
         Checks.nonnegative(dt, "Time step");
         List<PairContact> contacts = new ArrayList<>();
         Vec3d omegaA = bodyA.state().angularVelocity(bodyA.properties()), omegaB = bodyB.state().angularVelocity(bodyB.properties());
+        int countB = shapeB.size();
+        Vec3d[] offsetB = new Vec3d[countB], velocityB = new Vec3d[countB];
+        double[] xB = new double[countB], yB = new double[countB], zB = new double[countB], speedB = new double[countB];
+        for (int j = 0; j < countB; j++) {
+            Vec3d rb = bodyB.state().worldOffset(bodyB.properties(), shapeB.get(j).centerLocal()), cb = bodyB.state().position().add(rb);
+            offsetB[j] = rb; velocityB[j] = bodyB.state().velocity().add(omegaB.cross(rb));
+            xB[j] = cb.x(); yB[j] = cb.y(); zB[j] = cb.z(); speedB[j] = velocityB[j].length();
+        }
         for (CollisionSphere sa : shapeA) {
             Vec3d ra = bodyA.state().worldOffset(bodyA.properties(), sa.centerLocal()), ca = bodyA.state().position().add(ra);
             Vec3d va = bodyA.state().velocity().add(omegaA.cross(ra));
-            for (CollisionSphere sb : shapeB) {
-                Vec3d rb = bodyB.state().worldOffset(bodyB.properties(), sb.centerLocal()), cb = bodyB.state().position().add(rb);
-                Vec3d delta = ca.subtract(cb);
+            double speedA = va.length();
+            for (int j = 0; j < countB; j++) {
+                CollisionSphere sb = shapeB.get(j);
+                double dx = ca.x() - xB[j], dy = ca.y() - yB[j], dz = ca.z() - zB[j];
+                double reach = sa.radiusM() + sb.radiusM() + (speedA + speedB[j]) * dt + SPECULATIVE_DISTANCE;
+                if (dx * dx + dy * dy + dz * dz > reach * reach * (1 + 1e-12)) { continue; }
+                Vec3d rb = offsetB[j];
+                Vec3d delta = new Vec3d(dx, dy, dz);
                 double distance = delta.length();
-                double margin = va.subtract(bodyB.state().velocity().add(omegaB.cross(rb))).length() * dt + SPECULATIVE_DISTANCE;
+                double margin = va.subtract(velocityB[j]).length() * dt + SPECULATIVE_DISTANCE;
                 double separation = distance - sa.radiusM() - sb.radiusM();
                 if (separation > margin) { continue; }
                 // Coincident centres have no defined normal; push along +Y, which only happens in degenerate setups.

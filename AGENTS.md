@@ -5,9 +5,13 @@
 
 ## 專案目標與現況
 
-- 為 Minecraft Java 載具 Mod 建立通用的空氣／水動力前置；載具形式尚未決定。
+- 為 Minecraft Java 載具 Mod 建立通用的空氣／水動力前置。2026-10-11 使用者決定：
+  - 載具是另一個獨立 Mod **High Degree of Freedom Vehicles**，在 `Z:\MCMod\HighDegreeOfFreedomVehicles`，有自己的 git 倉庫。AeroCore 只當它的前置，不在 AeroCore 裡做可駕駛的載具。
+  - 載具 Mod 走《Automation》式高自由度：玩家自己設計零件（每個參數都能自由設定、形狀也是參數），再用零件組合出載具；合成是 CNC／機加工類。
+  - 測試台、設計畫面、物品與模型都在載具 Mod。AeroCore 提供零件藍圖格式、「設計參數 → 效能」的計算、組裝與連接、通用載具物理，
+    以及可以離線呼叫的計算。設計見 [docs/VEHICLE_PARTS.md](docs/VEHICLE_PARTS.md)（0.17 範圍已經使用者確認）。
 - 先維持可驗證的物理核心，再逐步接入載具玩法。不要把近似模型描述成工程級 CFD。
-- 截至 2026-10-11，版本為 **0.16.1**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
+- 截至 2026-10-11，版本為 **0.17.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
   0.6 加入球形元件接觸反力（摩擦／反彈）、指定的線性 Airy 波浪、BEMT 螺旋槳推力（平台艉部示範槳）與阻力摩擦生熱；
   0.7 加入接觸摩擦生熱、波壓深度衰減（垂直 Froude–Krylov）、水平 Froude–Krylov 力與附加質量，測試球改用六自由度剛體與 `ContactSolver`；
   0.8 加入浮筒垂直方向的波浪輻射阻尼（Hulme 半球資料、Cummins 記憶力）與浮筒間點吸收體干擾；
@@ -32,11 +36,13 @@
   地面載具物理、飛行用大氣四項）白沫改泡沫網紋、自然生成浪（`NaturalSeas`）、全世界的風（`SurfaceWind`／`WorldWind`）、
   物理天空與隨風的雲與雨雪（`SkyModel`／`SkyRenderer`）、飛行用大氣（`FlightAtmosphere`）、地面載具物理（`GroundContact`／`GroundSurfaces`）；
   0.16.1（2026-10-11，使用者回報「crash 了 優化一下 有點卡」）修正微風時 NaN 造成的划船當機（`SeaWind.LIGHT_AIR`），
-  消除自然海域換區的卡頓（只重建改變的 section 並分散、水面快取移交、水色格點、新區塊預算），並快取天空狀態與波浪輻射核函數。
+  消除自然海域換區的卡頓（只重建改變的 section 並分散、水面快取移交、水色格點、新區塊預算），並快取天空狀態與波浪輻射核函數；
+  0.17（2026-10-11，使用者確認範圍：藍圖格式、零件編譯、組裝與連接、通用載具物理；測試台在載具 Mod）加入 `api.vehicle`
+  （九種零件、JSON 藍圖、質量性質、動力軸傳動系、`VehicleDynamics`）與遊戲端 `PartVehicle`，並修正原版船在單人遊戲兩端共用狀態造成的客戶端崩潰。
 - 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是線性自由面的非定常解（勢流），不是黏性流場求解。
-- 尚無可駕駛的新載具（陸、海、空都沒有；0.16 的輪胎、地面、亂流、地面效應是給之後載具用的 API）、方塊組裝、引擎模型、旋翼、三維 CFD、碎浪動力、
+- AeroCore 不出可駕駛的載具（`PartVehicle` 是給載具 Mod 用的通用實體，AeroCore 只用範例藍圖與指令測它）；尚無引擎設計、輪子與懸吊、機翼零件、旋翼、三維 CFD、碎浪動力、
   波浪反射、遠方風暴的湧浪、大氣層結（背風波）、氣象動力學、相變或完整熱流耦合；海岸是幾何光學（無反射、島後只有一個到達波）。
-- 載具形式仍未決定；船體模型刻意做成水面船與潛航體都能用的細長體，不要擅自改成特定載具玩法。
+- 船體模型刻意做成水面船與潛航體都能用的細長體；載具玩法屬於載具 Mod，不要放進 AeroCore。
 
 ## 固定開發基底
 
@@ -55,12 +61,17 @@
 
 ## 工作目錄與本機資料
 
-- `Z:\MCMod` 與 `\\100.96.25.71\share\MCMod` 是同一份專案的別名，不是兩個 checkout。
-- Windows Shell 操作優先使用 `Z:\MCMod`，避免 CMD 的 UNC 工作目錄限制。
+- 2026-10-11 起 `Z:\MCMod` 底下分成兩個專案資料夾，`Z:\MCMod` 本身不是 git 倉庫，只有一份說明兩者關係的 `AGENTS.md`：
+  - `AeroCore`：本專案。
+  - `HighDegreeOfFreedomVehicles`：載具 Mod，獨立倉庫。
+- `Z:\MCMod\AeroCore` 與 `\\100.96.25.71\share\MCMod\AeroCore` 是同一份專案的別名，不是兩個 checkout。
+- Windows Shell 操作優先使用 `Z:\MCMod\AeroCore`，避免 CMD 的 UNC 工作目錄限制。
+- 2026-10-11 從 `Z:\MCMod` 搬進 `Z:\MCMod\AeroCore`（`.git`、`.idea` 一起搬）。兩台電腦的 IntelliJ 要改開新位置，再重新載入 Gradle；
+  `.idea/workspace.xml` 裡舊路徑的執行設定快取會在重新載入後重建。
 - 原始碼及 JAR 在專案內；遊戲世界、設定、記錄與截圖必須留在本機。
 - 本機執行根目錄：`%USERPROFILE%\.mcmod\runs\aerocore`，每台電腦各自一份：原開發機（`DESKTOP-AH3A4MO`）為 `C:\Users\ZHU YU TA\.mcmod\runs\aerocore`，`DESKTOP-KLLC9QQ` 為 `C:\Users\CHU YU TA\.mcmod\runs\aerocore`。
 - 2026-10-10 起專案是 git 倉庫，依使用者要求上傳到公開的 GitHub `fiseleo/aerocore`；網路磁碟上的 git 指令要加
-  `-c safe.directory=%(prefix)///100.96.25.71/share/MCMod`（不改全域設定）。推送是對外公開的動作，每次先經使用者同意。
+  `-c safe.directory=Z:/MCMod/AeroCore -c safe.directory=%(prefix)///100.96.25.71/share/MCMod/AeroCore`（不改全域設定）。推送是對外公開的動作，每次先經使用者同意。
   大改前仍把原始碼備份到 `%USERPROFILE%\.mcmod\backups\`（0.9 開工前 `aerocore-src-0.8.0-20261010-002942`，0.11 開工前 `aerocore-src-0.10.0-20261010-130423`；
   0.12 開工時的狀態是 git commit `be82bc5`，沒有另做資料夾備份）。
 - `client` 放開發客戶端資料，`server` 放開發伺服器資料，`gametest` 放自動測試世界。
@@ -104,6 +115,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 build
 代理執行時的已知狀況：
 - 把 `dev.ps1` 的輸出導到檔案再管線讀取時，Gradle daemon 會佔住 stdout，前景指令可能不結束；改用背景執行並讀取記錄檔。
 - 在網路磁碟上用 `--rerun` 強制重編，偶爾出現 `could not create parent directories`；不加 `--rerun` 重跑即可，不是程式錯誤。
+- 搬動專案資料夾或大量刪除 `build` 之後，沿用的 Gradle daemon 對網路磁碟的檔案狀態會過時
+  （`Failed to create MD5 hash ... does not exist`、`Cannot create directory`、`Unable to delete file`），重跑也一樣。
+  先 `dev.ps1 --stop` 停掉 daemon，第一次建置加 `--no-watch-fs` 就正常（2026-10-11 搬進 `AeroCore` 時遇到）。
 
 IDE 使用 `.run/` 裡的 Gradle 執行設定。建置設定變更後重新載入 Gradle，再執行 **Minecraft Client**。
 IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，而 `DESKTOP-KLLC9QQ` 的系統 `JAVA_HOME` 是 JDK 17、系統 TEMP 無法建立 Unix socket。
@@ -120,6 +134,8 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | `neoforge/src/main/java/dev/mcmod/aerocore/neoforge/` | Mod 註冊、指令、Minecraft 整合 |
 | 上述目錄的 `probe/` | 測試球、平台、環境取樣、粒子顯示與 GameTest |
 | 上述目錄的 `client/` | 客戶端模型與渲染（含波面），避免專用伺服器載入客戶端類別 |
+| physics 的 `api/vehicle/` | 零件化載具（0.17）：零件藍圖、組裝、`VehicleDynamics`；純 Java，載具 Mod 的測試台可離線呼叫 |
+| neoforge 的 `vehicle/` | 給載具 Mod 用的公開遊戲端 API：`PartVehicle`、`VehicleRegistry`、`VehicleNetwork`、`VehicleCommands`、`VehicleGameTests` |
 | neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船水面）、`BoatPhysicsMixin`（原版船改由 `RowingBoats` 移動、槳速）、`BoatSeatMixin`（座位隨船傾斜）、`BoatAccessor`、`LivingEntityAccessor`；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）、`BoatRendererMixin`（船的俯仰橫搖）、`BoatClientMixin`（槳動畫內插）、`RiderTiltMixin`（乘客模型隨船傾斜）、`SkyDomeMixin`（物理天空）、`CloudWindMixin`（雲隨風）、`WeatherWindMixin`（雨雪隨風傾斜）；只能放 mixin 類別 |
 | `scripts/` | JDK／IDE／本機資料與離線 CFD 繪圖工具 |
 | `docs/` | API、模型假設、操作和驗證說明 |
@@ -135,7 +151,10 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 0.11：`RowingBoats`（原版船）、`BlockMaterials`，客戶端 `SeaFoam`；0.12：客戶端 `BoatCamera`（第一人稱隨船滾轉）；
 0.15：客戶端水面 shader `assets/aerocore/shaders/core/rendertype_aerocore_sea.{json,vsh,fsh}`、開發用 `AutoShot`；
 0.16：`SurfaceWind`、`FlightAtmosphere`、`SkyModel`、`GroundContact`；遊戲端 `WorldWind`（全世界的風）、`WindCommands`、`NaturalSeas`、`GroundSurfaces`，
-客戶端 `SkyRenderer` 與天空 shader `aerocore_sky`。
+客戶端 `SkyRenderer` 與天空 shader `aerocore_sky`；
+0.17：`api.vehicle` 的 `PartDesign`／`PartTypes`／`Part`／`PartStep`、九種零件設計（`FloatDesign`、`HullDesign`、`PlaningHullDesign`、`PropellerDesign`、
+`ControlSurfaceDesign`、`BoxDesign`、`MotorDesign`、`BallastDesign`、`SeatDesign`）、`VehicleBlueprint`／`Vehicle`／`VehicleState`／`VehicleDynamics`／`VehicleEnvironment`、
+`Json`、`SampleBlueprints`；遊戲端 `PartVehicle`，客戶端 `PartVehicleRenderer`、`VehicleControls`。
 修改來源檔，不直接修改 `build/`、Gradle 快取或生成的 Mod 中繼資料。
 
 ## 物理與顯示約定
@@ -229,8 +248,25 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
   快取（`TileKey`、`NEEDS` 等）才不會每次比對整個海床陣列。水面區塊的水色只在第一次初始化時讀 4 格格點（原版色彩快取只有 256 個區塊）；
   新區塊每幀 16、到期更新每幀 8、白沫重建每 tick 4 是預算。`SkyRenderer.state` 依太陽角度與天氣快取。`WaveRadiation.Memory` 的核函數全域共用、
   陣列唯讀不可修改；`record` 觸發的重算半徑取 2% 格點，`setRadii` 用精確值。其他客戶端的船只在玩家 64 m 內算傾斜。
-  卡頓要看最慢的一幀，不是平均 FPS：`AutoShot` 的 `fps` 與慢幀記錄（GC、JIT、水面各段、客戶端 tick）就是為此；更細的用 `jcmd <pid> JFR.start settings=profile`
+  卡頓要看最慢的一幀，不是平均 FPS：`AutoShot` 的 `fps` 與慢幀記錄（GC、JIT、水面各段、客戶端 tick；0.17 加伺服器 tick 平均與超過 50 ms 的數量）就是為此；
+  更細的用 `jcmd <pid> JFR.start settings=profile`（遊戲的暫存目錄改過，`jcmd -l` 看不到，要加 `-J-Djava.io.tmpdir=%USERPROFILE%\.mcmod\tmp` 並直接給 PID）
   附加到開發客戶端（`jfr print` 輸出文字再分析，JSON 太大）。
+- 0.17 零件化載具：
+  - 零件受力必須和原本的積分器逐步一致：`FloatingBodyDynamics.sphereLoads`、`HullDynamics.loads`、`PlaningDynamics.loads` 是共用的同一份程式，
+    不要在零件裡另寫一份。`VehicleTest` 以 1e-9 比對浮筒平台、測試船、滑行艇，改受力時要一起過。
+  - 船體、控制面這類「以自身座標寫的模型」用 `PartStep.partState()`／`partProperties()`（同一剛體以零件軸表示），不要自己轉換座標。
+  - 傳動系：轉子的外力扭矩（水對槳）與內力扭矩（馬達）要分開傳（`rotorTorque(..., external)`），載具才會承受正確的反扭矩；
+    螺旋槳的 `AppliedForce` 不再帶偶力（反扭矩改由傳動系給）。
+  - 垂直輻射記憶以載具座標的水平面量點距：船體零件只能水平安裝（只改 yaw），傾斜安裝會被當成另一種排列。
+  - 船體的 Michell 表與螺旋槳四象限表延後到第一步（`Part.warmUp`），`PartVehicle` 在背景執行緒預建、建好前原地等待；
+    客戶端只畫不算，不建這些表。不要改回在伺服器執行緒同步建表（第一次生成新船體會卡 1.9 s）。
+  - 輻射記憶在第一步 `prime`（以浮在水上的半徑開始）；尾浪設計在背景建立；空氣取樣每 tick 每格快取。這些是生成時不卡的原因，不要拿掉。
+  - 輻射核函數的餘弦遞迴走頻率、內圈跑時間點（可向量化，快 3.8 倍）；不要改回每個頻率對時間遞迴。
+  - 球對球接觸（`ContactSolver.generatePair`）的保守略過與預先放置是多船相鄰時不卡的原因；`Vec3d.length` 不要改回 `hypot`（慢數倍，在每個接觸迴圈裡）。
+  - 以實體為鍵的靜態 Map 必須伺服器／客戶端分開：`Entity.equals` 比較網路 ID，單人遊戲兩端的同一實體 ID 相同。
+    `RowingBoats` 0.11～0.16 共用一份狀態，0.17 開發時重現客戶端 `memory is null` 崩潰後才分開。
+  - 藍圖 JSON 的數字以最短往返形式寫出；`format` 比目前新的拒絕讀。新增參數要有預設值，舊藍圖才讀得回來。
+  - 範例藍圖只示範格式與物理，不是要出的載具；AeroCore 不加可駕駛載具的玩法（AGENTS 開頭）。
 - 0.15 `AutoShot`：只在非正式環境、遊戲目錄有 `aerocore-autoshot.txt` 時啟動（讀後即刪），只開資料夾名稱以 AeroCore 開頭的世界，最後正常存檔離開。
   0.16 加 `key`（按住移動鍵，例如划船）、`camera`、`look`、`clouds`（只在這次執行打開雲，結束還原使用者設定）；1.21.1 的船實體 ID 是 `minecraft:boat`。
   `AeroCore Render QA` 是 2026-10-10 在原開發機從使用者的「新的世界」複製的 QA 世界（複製時遊戲已關閉，只讀原世界，`level.dat` 名稱已改），
@@ -280,6 +316,7 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | 0.14.1 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 211＋5 | 43 | 未重新啟動客戶端；修正使用者實玩 0.14.0 的崩潰（新測試在未修正時失敗）與近處亮盤，遊戲中未實測 |
 | 0.15.0 | 2026-10-10，原開發機 DESKTOP-AH3A4MO | 216＋5 | 43 | 以 `AutoShot` 在 `AeroCore Render QA` 截圖：淺水風浪區的早晨／中午／傍晚／夜晚／水下／平視／俯視外觀，FPS 83～117（1280×720，RTX 5070） |
 | 0.16.0 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 234＋5 | 47 | `AutoShot` 截圖：划船的泡沫網紋與停船後消散、自然海域晴天與雷雨、天空正午／日出／日落／雨／雷雨、雲兩張相隔 5 秒的位移、雨的傾斜 |
+| 0.17.0 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 257＋5 | 50 | `AutoShot` 在 `AeroCore Render QA` 生成三個範例載具：浮在水面、給油門後前進並留下尾浪；四個載具靜置時伺服器 tick 平均 31～34 ms（無載具 17 ms）；手動駕駛未實測 |
 | 0.16.1 | 2026-10-11，原開發機 DESKTOP-AH3A4MO | 237＋5 | 47 | `AutoShot` 沿 320 m 航線移動量測：自然海域換區時最慢一幀 18～25 ms（修正前 66～118 ms），平均 105～119 FPS；換區邊緣的過渡畫面未截圖確認 |
 
 **客戶端仍待實測**（0.6～0.9）：螺旋槳模型與轉動、洋紅接觸／橙推力／淡紫慣性／墨綠輻射／藍升力箭頭、淺藍波面粒子、
@@ -296,6 +333,8 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 風浪隨雷雨起落、擋風、靠岸浪頭、逐槳前衝的手感；
 0.14.1：使用者實玩 0.14.0 回報近處亮盤與池塘崩潰（已修正）；閃爍漸入後的近處外觀、使用者世界的池塘重新進入是否正常；
 0.15：已用自動截圖看過淺水風浪區（見上表）；仍未看過大浪外海、碎浪帶、尾浪與水花在新 shader 下、下雨與雷雨、其他生態域水色、Fabulous 模式、低階顯示卡 FPS、多人連線；
+0.17：坐上零件載具用預設按鍵駕駛、站在甲板上、受力箭頭（`/aerocore vehicle debug`）、多人連線的控制與同步、範例以外的藍圖（自己寫 JSON）、
+其他客戶端看到的螺旋槳與舵動畫；
 0.16.1：使用者世界與使用者電腦上的實際手感（量測在原開發機的 QA 世界、旁觀者模式瞬移）；換區邊緣 0.1～0.2 s 的過渡畫面；
 0.16：見上表；仍未看過使用者自己划船時的手感與白沫、熱氣流與坡面上升氣流（沒有飛行器）、雪地的雪傾斜、Fabulous 模式下的天空、多人連線的風同步。
 JUnit 報告在各模組 `build/reports/tests/test/` 與 `build/test-results/test/`；網路磁碟偶爾寫入 HTML 報告失敗，以 XML 結果為準後重跑即可。
@@ -314,3 +353,4 @@ CFD CSV／圖在 `cfd/build/experiments/water/` 或 `air/`；`scripts/plot-cfd.p
 - [本機執行資料](docs/LOCAL_RUNTIME.md)：世界遷移、備份與暫存目錄造成的建立世界崩潰。
 - [CFD](docs/CFD.md)：獨立流道求解與離線圖，不等同於遊戲環境流場。
 - [大氣](docs/ATMOSPHERE.md)：全世界的風、天空、雲與雨雪、飛行用大氣；[地面載具](docs/GROUND.md)：輪胎、滾動阻力、軟地面。
+- [零件化載具](docs/VEHICLE_PARTS.md)：零件藍圖、組裝與連接、通用載具物理、遊戲端 `PartVehicle`、驗證。

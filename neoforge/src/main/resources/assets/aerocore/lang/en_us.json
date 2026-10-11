@@ -84,5 +84,21 @@
   "command.aerocore.waves.natural_on": "Natural seas on: open water at the sea level near players gets waves from the world wind by itself (regions up to 128 m around players, following them, clear of commanded regions; ponds get short chop, the ocean long waves, their height following the wind).",
   "command.aerocore.waves.natural_off": "Natural seas off: the natural regions are removed; commanded regions stay.",
   "command.aerocore.ground.firm": "Ground here: %s (firm). Tyre peak friction %s (Magic Formula), rolling resistance coefficient %s (for a car wheel: 4 kN load, 0.65 m diameter, 0.2 m width).",
-  "command.aerocore.ground.soft": "Ground here: %s (soft; Bekker-Wong soil). Tyre peak friction %s; a car wheel (4 kN, 0.65 m diameter, 0.2 m width) sinks %s cm, rolling resistance coefficient %s, and the soil gives at most %s times the load in traction."
+  "command.aerocore.ground.soft": "Ground here: %s (soft; Bekker-Wong soil). Tyre peak friction %s; a car wheel (4 kN, 0.65 m diameter, 0.2 m width) sinks %s cm, rolling resistance coefficient %s, and the soil gives at most %s times the load in traction.",
+  "entity.aerocore.part_vehicle": "AeroCore part-built vehicle",
+  "command.aerocore.vehicle.none": "No part-built vehicle within 64 blocks.",
+  "command.aerocore.vehicle.samples": "Wrote %s sample blueprint(s) to %s (existing files are kept). Spawn one with /aerocore vehicle spawn <name>.",
+  "command.aerocore.vehicle.io": "Could not write the blueprints: %s",
+  "command.aerocore.vehicle.name": "Blueprint names are 1 to 64 letters, digits, _ . -",
+  "command.aerocore.vehicle.missing": "No blueprint file %s (write the samples with /aerocore vehicle samples).",
+  "command.aerocore.vehicle.malformed": "The blueprint file is not a valid blueprint: %s",
+  "command.aerocore.vehicle.invalid": "The blueprint has %s unphysical value(s) and was not spawned:",
+  "command.aerocore.vehicle.issue": "  %s: %s",
+  "command.aerocore.vehicle.spawned": "Spawned %s: %s parts, %s kg. %s value(s) lie outside the ranges their models were validated over (results are extrapolated):",
+  "command.aerocore.vehicle.control": "Control %s set to %s.",
+  "command.aerocore.vehicle.debug": "Force arrows of the nearest vehicle: mode %s.",
+  "command.aerocore.vehicle.removed": "Removed the nearest part-built vehicle.",
+  "command.aerocore.vehicle.broken": "This vehicle's blueprint does not compile, so it does not move: %s",
+  "command.aerocore.vehicle.info": "%s (entity %s): %s kg, %s m/s (%s km/h); controls %s",
+  "command.aerocore.vehicle.part": "  %s: %s"
 }

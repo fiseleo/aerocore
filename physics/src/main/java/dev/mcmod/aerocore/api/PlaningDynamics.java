@@ -56,12 +56,18 @@ public final class PlaningDynamics {
                               double[] waterlineBreadth) {}
     public record Prepared(RigidBodyProperties properties, RigidBodyState damped, Wrench hydrostatics, Wrench hydrodynamic, Wrench friction,
                            Wrench inertia, Wrench external, List<AppliedForce> forces, Diagnostics diagnostics, double dt) {}
-    private record Loads(Wrench hydro, Wrench dynamic, Wrench friction, Wrench excitation, double[][] addedBody, List<AppliedForce> forces, Diagnostics diagnostics) {}
+    /** Loads of one state (world axes, torques about the COM), the strip added mass in body axes about the COM, display forces and diagnostics. */
+    public record Loads(Wrench hydro, Wrench dynamic, Wrench friction, Wrench excitation, double[][] addedBody, List<AppliedForce> forces, Diagnostics diagnostics) {}
+
+    /** The planing hull's loads at one state, for composite bodies; includeWeight false leaves out p's weight (see HullDynamics.loads). */
+    public static Loads loads(RigidBodyState s, RigidBodyProperties p, PlaningHull hull, HullDynamics.Environment environment, Vec3d gravity, boolean includeWeight) {
+        return assemble(s, p, hull, environment, gravity, includeWeight);
+    }
 
     public static Prepared prepare(RigidBodyState s, RigidBodyProperties p, PlaningHull hull, HullDynamics.Environment environment, Vec3d gravity,
                                    List<AppliedForce> externalLoads, double dt) {
         Checks.positive(dt, "Time step");
-        Loads loads = assemble(s, p, hull, environment, gravity);
+        Loads loads = assemble(s, p, hull, environment, gravity, true);
         List<AppliedForce> forces = new ArrayList<>(loads.forces());
         Wrench external = Wrench.ZERO;
         for (AppliedForce load : externalLoads) { external = external.add(load.wrench()); forces.add(load); }
@@ -100,7 +106,7 @@ public final class PlaningDynamics {
         return s * s * (3 - 2 * s);
     }
 
-    private static Loads assemble(RigidBodyState s, RigidBodyProperties p, PlaningHull planing, HullDynamics.Environment environment, Vec3d gravity) {
+    private static Loads assemble(RigidBodyState s, RigidBodyProperties p, PlaningHull planing, HullDynamics.Environment environment, Vec3d gravity, boolean includeWeight) {
         SlenderHull hull = planing.hull();
         int n = hull.stations();
         Orientation q = s.orientation();
@@ -109,9 +115,9 @@ public final class PlaningDynamics {
         double g = gravity.length();
         Vec3d up = g > 0 ? gravity.scale(-1 / g) : Vec3d.Y;
         double beta = planing.deadrise(), cotBeta = 1 / Math.tan(beta), cosBeta = Math.cos(beta);
-        Wrench hydro = new Wrench(gravity.scale(p.massKg()), Vec3d.ZERO), dynamic = Wrench.ZERO, friction = Wrench.ZERO, excitation = Wrench.ZERO;
+        Wrench hydro = includeWeight ? new Wrench(gravity.scale(p.massKg()), Vec3d.ZERO) : Wrench.ZERO, dynamic = Wrench.ZERO, friction = Wrench.ZERO, excitation = Wrench.ZERO;
         List<AppliedForce> forces = new ArrayList<>();
-        forces.add(new AppliedForce(AppliedForce.Kind.WEIGHT, Vec3d.ZERO, gravity.scale(p.massKg())));
+        if (includeWeight) { forces.add(new AppliedForce(AppliedForce.Kind.WEIGHT, Vec3d.ZERO, gravity.scale(p.massKg()))); }
         double[][] addedBody = new double[6][6];
         double[] dx = new double[n], momentumY = new double[n], momentumZ = new double[n], surge = new double[n], girth = new double[n], density = new double[n];
         double[] breadth = new double[n];

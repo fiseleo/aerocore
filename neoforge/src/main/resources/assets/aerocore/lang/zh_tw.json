@@ -84,5 +84,21 @@
   "command.aerocore.waves.natural_on": "自然生成浪已開啟：玩家附近海平面高度的天然水域，會依全世界的風自動起浪（半徑最多 128 m，跟著玩家移動，避開指令建立的海域；池塘是短浪、海洋是長浪，浪高隨風速漸變）。",
   "command.aerocore.waves.natural_off": "自然生成浪已關閉：自動產生的海域已移除；用指令建立的海域不受影響。",
   "command.aerocore.ground.firm": "腳下地面：%s（硬地面）。輪胎最大摩擦係數 %s（Magic Formula），滾動阻力係數 %s（以載重 4 kN、直徑 0.65 m、寬 0.2 m 的轎車輪為例）。",
-  "command.aerocore.ground.soft": "腳下地面：%s（軟地面，Bekker／Wong 土壤參數）。輪胎最大摩擦係數 %s；轎車輪（4 kN、直徑 0.65 m、寬 0.2 m）下陷 %s cm，滾動阻力係數 %s，土壤最多提供 %s 倍載重的牽引力。"
+  "command.aerocore.ground.soft": "腳下地面：%s（軟地面，Bekker／Wong 土壤參數）。輪胎最大摩擦係數 %s；轎車輪（4 kN、直徑 0.65 m、寬 0.2 m）下陷 %s cm，滾動阻力係數 %s，土壤最多提供 %s 倍載重的牽引力。",
+  "entity.aerocore.part_vehicle": "AeroCore 零件載具",
+  "command.aerocore.vehicle.none": "64 格內沒有零件載具。",
+  "command.aerocore.vehicle.samples": "已寫入 %s 個範例藍圖到 %s（已存在的檔案不覆蓋）。用 /aerocore vehicle spawn <名稱> 生成。",
+  "command.aerocore.vehicle.io": "無法寫入藍圖：%s",
+  "command.aerocore.vehicle.name": "藍圖名稱只能是 1～64 個英文字母、數字、_ . -",
+  "command.aerocore.vehicle.missing": "找不到藍圖檔 %s（可用 /aerocore vehicle samples 寫入範例）。",
+  "command.aerocore.vehicle.malformed": "藍圖檔格式不正確：%s",
+  "command.aerocore.vehicle.invalid": "藍圖有 %s 個不合物理的數值，沒有生成：",
+  "command.aerocore.vehicle.issue": "  %s：%s",
+  "command.aerocore.vehicle.spawned": "已生成 %s：%s 個零件、%s kg。有 %s 個數值超出模型的驗證範圍（結果是外推）：",
+  "command.aerocore.vehicle.control": "控制 %s 設為 %s。",
+  "command.aerocore.vehicle.debug": "最近載具的受力箭頭：模式 %s。",
+  "command.aerocore.vehicle.removed": "已移除最近的零件載具。",
+  "command.aerocore.vehicle.broken": "這台載具的藍圖無法編譯，所以不會動：%s",
+  "command.aerocore.vehicle.info": "%s（實體 %s）：%s kg、%s m/s（%s km/h）；控制 %s",
+  "command.aerocore.vehicle.part": "  %s：%s"
 }

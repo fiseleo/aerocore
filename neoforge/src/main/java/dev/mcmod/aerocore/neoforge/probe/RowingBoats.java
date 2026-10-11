@@ -64,12 +64,21 @@ public final class RowingBoats {
         boolean asleep, simulated;
         Rowboat.Result last;
     }
-    private static final Map<Boat, Physics> STATES = Collections.synchronizedMap(new WeakHashMap<>());
+    /**
+     * One map per side: Entity.equals compares network ids, and in single player the client's copy of a boat has the
+     * server boat's id, so one map made both sides share (and race on) one state -- the server putting a resting boat
+     * to sleep cleared the radiation memory the client was about to use (0.17 crash), and the client's tilt step
+     * advanced the server's state as well.
+     */
+    private static final Map<Boat, Physics> SERVER_STATES = Collections.synchronizedMap(new WeakHashMap<>()),
+            CLIENT_STATES = Collections.synchronizedMap(new WeakHashMap<>());
+
+    private static Map<Boat, Physics> states(Boat boat) { return boat.level().isClientSide ? CLIENT_STATES : SERVER_STATES; }
 
     private RowingBoats() {}
 
     private static Physics physics(Boat boat) {
-        return STATES.computeIfAbsent(boat, b -> {
+        return states(boat).computeIfAbsent(boat, b -> {
             Physics p = new Physics();
             p.velocity = MinecraftUnits.toMetersPerSecond(b.getDeltaMovement());
             return p;
@@ -290,7 +299,7 @@ public final class RowingBoats {
 
     /** Whether this tick's movement was ours (vanilla's controlBoat must then not add its own). */
     public static boolean controlsBoat(Boat boat) {
-        Physics p = STATES.get(boat);
+        Physics p = states(boat).get(boat);
         return p != null && p.simulated;
     }
 
@@ -322,7 +331,7 @@ public final class RowingBoats {
 
     /** Interpolated {pitch, roll} in radians for rendering (bow up and right side down positive). */
     public static float[] attitude(Boat boat, float partialTick) {
-        Physics p = STATES.get(boat);
+        Physics p = states(boat).get(boat);
         if (p == null) { return new float[]{0, 0}; }
         return new float[]{(float) Mth.lerp(partialTick, p.prevPitch, p.pitch), (float) Mth.lerp(partialTick, p.prevRoll, p.roll)};
     }
@@ -359,7 +368,7 @@ public final class RowingBoats {
 
     /** The last step's diagnostics for this boat, or null (tests and the inspect readout). */
     public static Rowboat.Result last(Boat boat) {
-        Physics p = STATES.get(boat);
+        Physics p = states(boat).get(boat);
         return p == null ? null : p.last;
     }
 }

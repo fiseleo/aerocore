@@ -7,6 +7,19 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WaveRadiationTest {
+    @Test void primingStartsTheRadiiWhereTheBodyFloats() {
+        // Without priming the radii grow from zero over the 0.5 s average; primed they start at the floating value.
+        WaveRadiation.Memory grown = new WaveRadiation.Memory(List.of(Vec3d.ZERO, new Vec3d(1.5, 0, 0)), 0.005);
+        WaveRadiation.Memory primed = new WaveRadiation.Memory(List.of(Vec3d.ZERO, new Vec3d(1.5, 0, 0)), 0.005);
+        double[] radii = {0.4, 0.3};
+        primed.prime(radii);
+        grown.record(new double[]{0, 0}, radii);
+        primed.record(new double[]{0, 0}, radii);
+        assertArrayEquals(radii, primed.effectiveRadii(), 1e-12);
+        assertTrue(grown.effectiveRadii()[0] < 0.01 * radii[0], "unprimed: still near zero after one step");
+        assertThrows(IllegalArgumentException.class, () -> primed.prime(new double[]{0.4}));
+    }
+
     @Test void snappedRadiiStayWithinOnePercentAndShareKernels() {
         for (double a = 0.001; a < 5; a *= 1.013) {
             double s = WaveRadiation.snapRadius(a);
@@ -32,6 +45,25 @@ class WaveRadiationTest {
             double integral = 0; int n = 4000;
             for (int i = 0; i < n; i++) { integral += Math.cos(x * Math.sin(Math.PI * (i + 0.5) / n)); }
             assertEquals(integral / n, WaveRadiation.besselJ0(x), 2e-7, "x=" + x);
+        }
+    }
+    @Test void kernelMatchesTheCosineSumEvaluatedDirectly() {
+        // Trapezoidal (2/pi) sum over 800 equal steps up to ka = 10 of the smaller float (the kernel's quadrature),
+        // each cosine from Math.cos instead of the recurrence the kernel uses.
+        double ai = 0.6, aj = 0.7, d = 1.7, dt = 0.005, g = Atmosphere.GRAVITY_MPS2;
+        int count = 1600, frequencies = 800;
+        double[] k = WaveRadiation.kernel(ai, aj, d, dt, count);
+        double step = Math.sqrt(10 * g / ai) / frequencies, largest = 0;
+        for (double v : k) { largest = Math.max(largest, Math.abs(v)); }
+        for (int n : new int[]{0, 1, 2, 3, 57, 400, 799, 800, 1234, 1598, 1599}) {
+            double sum = 0;
+            for (int m = 0; m <= frequencies; m++) {
+                double omega = m * step;
+                double b = Math.sqrt(WaveRadiation.heaveDampingPerDensity(ai, omega) * WaveRadiation.heaveDampingPerDensity(aj, omega))
+                        * WaveRadiation.besselJ0(omega * omega / g * d);
+                sum += (m == 0 || m == frequencies ? 0.5 : 1) * step * 2 / Math.PI * b * Math.cos(omega * n * dt);
+            }
+            assertEquals(sum, k[n], 1e-11 * largest, "n=" + n);
         }
     }
     @Test void waterplaneRadiusFollowsSphericalCapGeometry() {

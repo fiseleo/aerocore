@@ -26,12 +26,14 @@ public final class AeroCore {
 
     public AeroCore(IEventBus modBus) {
         ProbeEntities.TYPES.register(modBus);
+        dev.mcmod.aerocore.neoforge.vehicle.VehicleRegistry.register(modBus);
         modBus.addListener(WaveNetwork::register);
         if (Boolean.getBoolean("aerocore.gametests")) {
             modBus.addListener((RegisterGameTestsEvent event) -> event.register(ProbeGameTests.class));
             modBus.addListener((RegisterGameTestsEvent event) -> event.register(PlatformGameTests.class));
             modBus.addListener((RegisterGameTestsEvent event) -> event.register(dev.mcmod.aerocore.neoforge.probe.HullGameTests.class));
             modBus.addListener((RegisterGameTestsEvent event) -> event.register(dev.mcmod.aerocore.neoforge.probe.SeaGameTests.class));
+            modBus.addListener((RegisterGameTestsEvent event) -> event.register(dev.mcmod.aerocore.neoforge.vehicle.VehicleGameTests.class));
         }
         NeoForge.EVENT_BUS.addListener(AeroCore::registerCommands);
     }
@@ -45,6 +47,7 @@ public final class AeroCore {
                 .then(dev.mcmod.aerocore.neoforge.probe.GroundSurfaces.tree())
                 .then(dev.mcmod.aerocore.neoforge.probe.HullCommands.tree())
                 .then(dev.mcmod.aerocore.neoforge.probe.PlaningCommands.tree())
+                .then(dev.mcmod.aerocore.neoforge.vehicle.VehicleCommands.tree())
                 .then(Commands.literal("sample")
                         .executes(context -> sample(context.getSource(), 30, 5))
                         .then(Commands.argument("speed_mps", DoubleArgumentType.doubleArg(0, 100))

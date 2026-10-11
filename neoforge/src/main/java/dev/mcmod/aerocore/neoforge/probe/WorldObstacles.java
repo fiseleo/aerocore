@@ -17,14 +17,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Static contact boxes around an entity: block and entity collision shapes plus the world border. */
-final class WorldObstacles {
+public final class WorldObstacles {
     private WorldObstacles() {}
 
     /**
      * Obstacles are one-way: the solver pushes the moving body, never these blocks or entities. Block boxes carry
      * their block's material (BlockMaterials); entity boxes use the body's default.
      */
-    static List<WorldBox> collect(Entity self, AABB region) {
+    public static List<WorldBox> collect(Entity self, AABB region) {
         List<WorldBox> boxes = new ArrayList<>();
         Level level = self.level();
         CollisionContext context = CollisionContext.of(self);
@@ -50,7 +50,7 @@ final class WorldObstacles {
         return boxes;
     }
 
-    static boolean contains(AABB outer, AABB inner) {
+    public static boolean contains(AABB outer, AABB inner) {
         return inner.minX >= outer.minX && inner.minY >= outer.minY && inner.minZ >= outer.minZ
                 && inner.maxX <= outer.maxX && inner.maxY <= outer.maxY && inner.maxZ <= outer.maxZ;
     }

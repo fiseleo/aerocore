@@ -111,6 +111,26 @@ public final class Wakes {
     };
 
     /**
+     * Any slender hull at its design waterline, as TEST_HULL: Michell's thin-ship sources as their double-body pressure,
+     * on a grid about a twelfth of the waterline length apart (0.25 to 1 m, so a 128-point grid spans about ten hull
+     * lengths); bow spray from the entrance half-angle over the forward twentieth of the length.
+     */
+    public static Design thinShip(SlenderHull hull, SlenderHull.Particulars d) {
+        double spacing = Math.clamp(d.lengthM() / 12, 0.25, 1);
+        UnsteadyWake.Forcing forcing = UnsteadyWake.thinShip((x, depth) -> hull.halfBreadth(x, depth, d.waterlineY()), d.xAftM(), d.xForwardM(), d.draftM(),
+                60, 12, RHO, 1.2 * Math.PI / spacing);
+        return new Design() {
+            @Override public UnsteadyWake.Forcing forcing() { return forcing; }
+            @Override public double spacing() { return spacing; }
+            @Override public Bow bow(double speed) {
+                double step = Math.max(0.05, d.lengthM() / 20), tip = hull.halfBreadth(d.xForwardM(), 0, d.waterlineY());
+                double back = hull.halfBreadth(d.xForwardM() - step, 0, d.waterlineY());
+                return new Bow(d.xForwardM(), tip, BowSpray.displacementBow(speed, Math.atan((back - tip) / step), d.draftM(), G));
+            }
+        };
+    }
+
+    /**
      * A planing hull as a uniform pressure over its wetted bottom (chine beam by the wetted keel length from the transom)
      * carrying its weight, the usual far-field representation of a planing boat; spray is Savitsky's whisker spray at
      * the chines where they first wet, L_C = L_K - b tan(beta) / (pi tan(trim)) from the transom.

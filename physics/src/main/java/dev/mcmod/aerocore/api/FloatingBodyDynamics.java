@@ -126,7 +126,6 @@ public final class FloatingBodyDynamics {
         if (cd != STANDARD_DRAG) { Checks.nonnegative(cd,"Drag coefficient"); }
         Vec3d omega0=state.angularVelocity(properties);
         Wrench hydro = new Wrench(gravity.scale(properties.massKg()), Vec3d.ZERO);
-        Vec3d down = gravity.lengthSquared()==0?Vec3d.ZERO:gravity.normalized();
         List<RigidBodyDynamics.PointDrag> drag = new ArrayList<>();
         List<RigidBodyDynamics.PointMass> added = new ArrayList<>();
         List<Vec3d> excitations = new ArrayList<>();
@@ -136,28 +135,13 @@ public final class FloatingBodyDynamics {
         for (BuoyantSphere sphere : floats) {
             Vec3d r = state.worldOffset(properties,sphere.offset());
             Contact contact = environment.sample(state.position().add(r),sphere.radiusM());
-            wet.add(contact.fraction());
-            double volume=sphere.volumeM3(), air=contact.air().densityKgPerM3(), water=contact.water().densityKgPerM3();
-            // Full-volume air buoyancy, then water pressure on the wet part replacing the air it displaces.
-            hydro = hydro.add(Wrench.atOffset(gravity.scale(-air*volume),r));
-            double displaced = (water*contact.pressureFraction()-air*contact.fraction())*volume;
-            hydro = hydro.add(Wrench.atOffset(gravity.scale(-displaced),r.add(contact.pressureCentroidOffset())));
-            double totalDisplaced=air*volume+displaced;
-            Vec3d buoyancyPoint=totalDisplaced==0?r:r.add(contact.pressureCentroidOffset().scale(displaced/totalDisplaced));
-            forces.add(new AppliedForce(AppliedForce.Kind.BUOYANCY,buoyancyPoint,gravity.scale(-totalDisplaced)));
-            Vec3d pointVelocity=state.velocity().add(omega0.cross(r));
-            addDrag(drag,r,pointVelocity,contact.air(),1-contact.fraction(),sphere.radiusM(),cd);
-            addDrag(drag,r,pointVelocity,contact.water(),contact.fraction(),sphere.radiusM(),cd);
-            double wetMass=water*contact.fraction()*volume;
-            if (wetMass>0) {
-                // Morison inertia: rho V a_f (horizontal part; the vertical part is in the pressure integral)
-                // plus C_a rho V (a_f - a_body), whose body-acceleration term is implicit via the added mass.
-                // With surfaceDiffraction the vertical C_a rho V a_f is replaced by the caller's exact heave diffraction.
-                Vec3d a=contact.waterAcceleration(), horizontal=a.subtract(down.scale(a.dot(down)));
-                Vec3d diffracted=contact.surfaceDiffraction()?horizontal:a;
-                added.add(new RigidBodyDynamics.PointMass(r.add(contact.wetCentroidOffset()),ADDED_MASS_COEFFICIENT*wetMass));
-                excitations.add(horizontal.scale(wetMass).add(diffracted.scale(ADDED_MASS_COEFFICIENT*wetMass)));
-            }
+            SphereLoads loads = sphereLoads(state,properties,omega0,sphere,contact,gravity,cd);
+            wet.add(loads.wetFraction());
+            hydro = hydro.add(loads.hydrostatics());
+            forces.add(loads.buoyancy());
+            drag.add(loads.airDrag());
+            drag.add(loads.waterDrag());
+            if (loads.addedMass()!=null) { added.add(loads.addedMass()); excitations.add(loads.excitation()); }
         }
         Wrench external = Wrench.ZERO;
         for (AppliedForce load : externalLoads) { external = external.add(load.wrench()); forces.add(load); }
@@ -201,29 +185,51 @@ public final class FloatingBodyDynamics {
         return new Prepared(state,properties,damped,List.copyOf(added),hydro,averageDrag,inertia,external,List.copyOf(wet),List.copyOf(forces),dissipation,dt);
     }
 
-    /**
-     * Torque-free drift of the body and its added point masses as one rigid system (body mass plus entrained
-     * water), so free rotation keeps the system's momentum and kinetic energy rather than the body's alone.
-     * The added masses are held at their start-of-step body positions for this step.
-     */
+    /** Drift of body plus entrained water (RigidBodyDynamics.driftWithPointMasses). */
     private static RigidBodyState driftWithAddedMass(RigidBodyState s, RigidBodyProperties p,
                                                      List<RigidBodyDynamics.PointMass> added, double dt) {
-        double extra=0;
-        Vec3d moment=Vec3d.ZERO;
-        for(RigidBodyDynamics.PointMass m:added) {extra+=m.massKg();moment=moment.add(m.offset().scale(m.massKg()));}
-        if(extra==0) {return RigidBodyDynamics.drift(s,p,dt);}
-        double total=p.massKg()+extra;
-        Orientation q=s.orientation(),inverse=q.inverse();
-        Vec3d c=moment.scale(1/total),cBody=inverse.rotate(c);
-        InertiaTensor inertia=p.inertia().shifted(p.massKg(),cBody);
-        for(RigidBodyDynamics.PointMass m:added) {inertia=inertia.shifted(m.massKg(),inverse.rotate(m.offset()).subtract(cBody));}
-        RigidBodyProperties system=new RigidBodyProperties(total,p.centerOfMassLocal().add(cBody),inertia);
-        Vec3d omega=s.angularVelocity(p);
-        RigidBodyState virtual=new RigidBodyState(s.position().add(c),s.velocity().add(omega.cross(c)),q,inertia.applyWorld(q,omega));
-        RigidBodyState drifted=RigidBodyDynamics.drift(virtual,system,dt);
-        Orientation q1=drifted.orientation();
-        Vec3d omega1=drifted.angularVelocity(system),c1=q1.rotate(cBody);
-        return new RigidBodyState(drifted.position().subtract(c1),drifted.velocity().subtract(omega1.cross(c1)),q1,p.inertia().applyWorld(q1,omega1));
+        return RigidBodyDynamics.driftWithPointMasses(s,p,added,dt);
+    }
+
+    /**
+     * One float's loads without the body's weight, as prepare() sums them, for composite bodies (VehicleDynamics):
+     * air buoyancy on the full volume and water pressure on the wet part (hydrostatics, torque about the COM), the
+     * buoyancy arrow, drag in each medium (implicit point drags), and for a wet float its added mass C_a rho V_wet with
+     * the Morison excitation it carries (null when dry). omega is the body's angular velocity at the step start.
+     */
+    public record SphereLoads(Wrench hydrostatics, AppliedForce buoyancy, RigidBodyDynamics.PointDrag airDrag,
+                              RigidBodyDynamics.PointDrag waterDrag, RigidBodyDynamics.PointMass addedMass, Vec3d excitation,
+                              double wetFraction) {}
+
+    public static SphereLoads sphereLoads(RigidBodyState state, RigidBodyProperties properties, Vec3d omega, BuoyantSphere sphere,
+                                          Contact contact, Vec3d gravity, double cd) {
+        Vec3d down = gravity.lengthSquared()==0?Vec3d.ZERO:gravity.normalized();
+        Vec3d r = state.worldOffset(properties,sphere.offset());
+        double volume=sphere.volumeM3(), air=contact.air().densityKgPerM3(), water=contact.water().densityKgPerM3();
+        // Full-volume air buoyancy, then water pressure on the wet part replacing the air it displaces.
+        Wrench hydro = Wrench.atOffset(gravity.scale(-air*volume),r);
+        double displaced = (water*contact.pressureFraction()-air*contact.fraction())*volume;
+        hydro = hydro.add(Wrench.atOffset(gravity.scale(-displaced),r.add(contact.pressureCentroidOffset())));
+        double totalDisplaced=air*volume+displaced;
+        Vec3d buoyancyPoint=totalDisplaced==0?r:r.add(contact.pressureCentroidOffset().scale(displaced/totalDisplaced));
+        AppliedForce buoyancy=new AppliedForce(AppliedForce.Kind.BUOYANCY,buoyancyPoint,gravity.scale(-totalDisplaced));
+        Vec3d pointVelocity=state.velocity().add(omega.cross(r));
+        List<RigidBodyDynamics.PointDrag> drag=new ArrayList<>(2);
+        addDrag(drag,r,pointVelocity,contact.air(),1-contact.fraction(),sphere.radiusM(),cd);
+        addDrag(drag,r,pointVelocity,contact.water(),contact.fraction(),sphere.radiusM(),cd);
+        double wetMass=water*contact.fraction()*volume;
+        RigidBodyDynamics.PointMass added=null;
+        Vec3d excitation=null;
+        if (wetMass>0) {
+            // Morison inertia: rho V a_f (horizontal part; the vertical part is in the pressure integral)
+            // plus C_a rho V (a_f - a_body), whose body-acceleration term is implicit via the added mass.
+            // With surfaceDiffraction the vertical C_a rho V a_f is replaced by the caller's exact heave diffraction.
+            Vec3d a=contact.waterAcceleration(), horizontal=a.subtract(down.scale(a.dot(down)));
+            Vec3d diffracted=contact.surfaceDiffraction()?horizontal:a;
+            added=new RigidBodyDynamics.PointMass(r.add(contact.wetCentroidOffset()),ADDED_MASS_COEFFICIENT*wetMass);
+            excitation=horizontal.scale(wetMass).add(diffracted.scale(ADDED_MASS_COEFFICIENT*wetMass));
+        }
+        return new SphereLoads(hydro,buoyancy,drag.get(0),drag.get(1),added,excitation,contact.fraction());
     }
     /**
      * Drag of one sphere in one fluid, weighted by the fraction of the sphere in it. With STANDARD_DRAG the coefficient
