@@ -72,6 +72,23 @@ public final class WindGusts {
         out[0] = u; out[1] = v;
     }
 
+    /**
+     * 0.38: the highest and lowest running means over a window of samples each, of a series sampled at equal steps
+     * ({max, min}; the whole series' mean when it is shorter than the window). A weather report's gust is the highest
+     * 3 s mean in the last 10 minutes (WMO-No. 8); the gusts being a function of time, the past is known.
+     */
+    public static double[] runningExtremes(double[] series, int window) {
+        if (series.length == 0) { throw new IllegalArgumentException("An empty series"); }
+        int w = Math.clamp(window, 1, series.length);
+        double max = Double.NEGATIVE_INFINITY, min = Double.POSITIVE_INFINITY, run = 0;
+        for (int i = 0; i < series.length; i++) {
+            run += series[i];
+            if (i >= w) { run -= series[i - w]; }
+            if (i >= w - 1) { double m = run / w; max = Math.max(max, m); min = Math.min(min, m); }
+        }
+        return new double[]{max, min};
+    }
+
     /** Standard deviations {sigma_u, sigma_v} of the synthesised gusts for a 10 m wind, m/s. */
     public double[] deviations(double u10) {
         if (!(u10 > 0)) { return new double[]{0, 0}; }

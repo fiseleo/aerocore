@@ -8,18 +8,28 @@
     "BoatPhysicsMixin",
     "BoatSeatMixin",
     "BoatWaterMixin",
+    "ChunkMapAccessor",
+    "ChunkUnloadMixin",
     "EntityCollideMixin",
     "EntityWaterMixin",
+    "GameTestTickerAccessor",
     "LivingEntityAccessor"
   ],
   "client": [
     "BoatClientMixin",
     "BoatRendererMixin",
     "CameraFogMixin",
+    "ChannelAccessor",
     "CloudWindMixin",
+    "DevWindowFocusMixin",
+    "DevWindowMixin",
+    "GuiAccessor",
     "LiquidBlockRendererMixin",
     "RiderTiltMixin",
     "SkyDomeMixin",
+    "SoundBufferLibraryMixin",
+    "SoundEngineAccessor",
+    "SoundManagerAccessor",
     "WeatherWindMixin"
   ],
   "injectors": {

@@ -22,6 +22,24 @@ def scratchKey = runtimeId
 tasks.withType(net.neoforged.nfrtgradle.NeoFormRuntimeTask).configureEach {
     workDirectory = new File(gradle.gradleUserHomeDir, "caches/aerocore-work/${scratchKey}/${project.name}")
 }
+// 0.33.1 (DevWindow): the development client opens on this monitor (1 the primary) without taking focus or the mouse,
+// out of the way of a game being played on the primary monitor; -Pdev_window_monitor=0 opens it as usual.
+def devWindowMonitor = providers.gradleProperty('dev_window_monitor').getOrElse('2')
+if (!(devWindowMonitor ==~ /\d+/)) { throw new GradleException('Invalid dev_window_monitor') }
+// NeoForge's early loading window opens on the primary monitor and takes focus before any mod runs: the client run
+// turns it off in its own config/fml.toml (FML fills in the other keys), so the game's window is the first one.
+def quietEarlyWindow = { File gameDirectory ->
+    if (devWindowMonitor == '0') { return }
+    def toml = new File(gameDirectory, 'config/fml.toml')
+    def text = toml.isFile() ? toml.getText('UTF-8') : ''
+    def line = /(?m)^earlyWindowControl\s*=.*$/
+    def quiet = text =~ line ? text.replaceAll(line, 'earlyWindowControl = false')
+            : text + (text.isEmpty() || text.endsWith('\n') ? '' : '\n') + 'earlyWindowControl = false\n'
+    if (quiet != text) {
+        toml.parentFile.mkdirs()
+        toml.setText(quiet, 'UTF-8')
+    }
+}
 
 neoForge {
     version = rootProject.neo_version
@@ -29,6 +47,7 @@ neoForge {
         client {
             client()
             gameDirectory = file(new File(localRuntimeRoot, 'client'))
+            systemProperty 'aerocore.window.monitor', devWindowMonitor
         }
         server {
             server()
@@ -54,6 +73,8 @@ neoForge {
     }
 }
 
+tasks.matching { it.name == 'runClient' }.configureEach { doFirst { quietEarlyWindow(new File(localRuntimeRoot, 'client')) } }
+
 tasks.register('showRuntimeDirectories') {
     doLast {
         println "AeroCore client: ${new File(localRuntimeRoot, 'client')}"
@@ -75,3 +96,19 @@ neoForge.ideSyncTask generateModMetadata
 // Ship the platform-independent API inside the mod, so players install one JAR.
 tasks.named('jar') { from project(':physics').sourceSets.main.output }
 tasks.named('sourcesJar') { from project(':physics').sourceSets.main.allSource }
+
+// The game JAR (with the physics API inside) for mods that build against AeroCore, without dependencies: a mod adds
+// it as a mod and must not pull the physics JAR as well (the same packages twice break the module layer).
+apply plugin: 'maven-publish'
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId = 'aerocore-neoforge-1.21.1'
+            artifact tasks.named('jar')
+            artifact tasks.named('sourcesJar')
+        }
+    }
+    // build/repo in the project, not under the build directory (on this computer's disk, root build.gradle): hdfv and the
+    // other computer read it there.
+    repositories { maven { name = 'workspace'; url = rootProject.file('build/repo') } }
+}

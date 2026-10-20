@@ -34,7 +34,25 @@ public record HullSection(double xM, List<double[]> vertices) {
             double[] p = copy.get(i), q = copy.get((i + 1) % copy.size()), r = copy.get((i + 2) % copy.size());
             if ((q[0] - p[0]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[0] - q[0]) < -1e-12) { throw new IllegalArgumentException("Section must be convex"); }
         }
-        vertices = List.copyOf(copy);
+        vertices = new Outline(copy);
+    }
+
+    /** 0.30: the vertices as an immutable list that also keeps its edges' lengths (clip's wetted girth uses them). */
+    private static final class Outline extends java.util.AbstractList<double[]> implements java.util.RandomAccess {
+        private final double[][] points;
+        private final double[] edges;
+
+        Outline(List<double[]> list) {
+            points = list.toArray(new double[0][]);
+            edges = new double[points.length];
+            for (int i = 0; i < points.length; i++) {
+                double[] p = points[i], q = points[(i + 1) % points.length];
+                edges[i] = Math.hypot(q[0] - p[0], q[1] - p[1]);
+            }
+        }
+
+        @Override public double[] get(int i) { return points[i]; }
+        @Override public int size() { return points.length; }
     }
 
     /**
@@ -111,6 +129,7 @@ public record HullSection(double xM, List<double[]> vertices) {
         List<double[]> wet = new ArrayList<>();
         double girth = 0, cut = 0, draft = 0;
         int n = vertices.size();
+        double[] edges = ((Outline) vertices).edges;
         for (int i = 0; i < n; i++) {
             double[] p = vertices.get(i), q = vertices.get((i + 1) % n);
             double sp = a * p[0] + b * p[1] - d, sq = a * q[0] + b * q[1] - d;
@@ -120,7 +139,7 @@ public record HullSection(double xM, List<double[]> vertices) {
                 wet.add(new double[]{p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])});
             }
             // Wetted length of this edge: the part below the line.
-            double length = Math.hypot(q[0] - p[0], q[1] - p[1]);
+            double length = edges[i];
             if (sp < 0 && sq < 0) { girth += length; }
             else if (sp < 0 || sq < 0) { girth += length * (sp < 0 ? sp / (sp - sq) : sq / (sq - sp)); }
         }

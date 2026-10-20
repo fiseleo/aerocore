@@ -1,8 +1,8 @@
 # 本機開發執行資料（0.5）
 
-原始碼與建置產物仍在專案目錄；頻繁存取的遊戲資料使用本機硬碟。
+原始碼與發佈的 Maven 資料夾（`build/repo`）在專案目錄；頻繁存取的遊戲資料與建置輸出使用本機硬碟（建置輸出見下方〈建置輸出〉）。
 根目錄是 `%USERPROFILE%\.mcmod\runs\aerocore`，每台電腦各自一份：
-原開發機為 `C:\Users\ZHU YU TA\.mcmod\runs\aerocore`，`DESKTOP-KLLC9QQ` 為 `C:\Users\CHU YU TA\.mcmod\runs\aerocore`。
+原開發機與第二台電腦的使用者資料夾不同，各自展開 `%USERPROFILE%`。
 
 | 子目錄 | 內容 |
 | --- | --- |
@@ -20,6 +20,22 @@ Gradle 使用 Java 的 `user.home`，不依賴可能被封裝應用程式重新�
 .\dev.ps1 :neoforge:runClient
 ```
 
+## 建置輸出
+
+2026-10-18 起建置輸出也在本機（hdfv 同日先改）：GameTest 與開發遊戲每次啟動都從建置資料夾讀 AeroCore 的 class／資源檔與 Minecraft JAR，
+網路磁碟（Tailscale 上的 SMB）每個檔案要來回好幾趟，改走中繼時要好幾分鐘。根 `build.gradle` 把每個專案的 `build` 放在
+`%USERPROFILE%\.mcmod\build\aerocore-<路徑雜湊>\{root,physics,neoforge,cfd}`；雜湊是小寫的專案正式路徑的 SHA-256 前 8 碼
+（`Z:\MCMod\AeroCore` 是 `aerocore-e6babf45`，從 UNC 路徑開會是另一份），兩台電腦各自一份。
+
+```powershell
+.\dev.ps1 showBuildDirectories -q
+.\dev.ps1 build -Paerocore_local_build=false   # 這次改回專案裡的 build
+```
+
+- 發佈固定寫專案的 `build/repo`（`rootProject.file('build/repo')`，不跟著建置資料夾）：hdfv 從那裡鏡像，另一台電腦也讀那裡。
+- CFD 結果仍在專案的 `cfd/build/experiments`（`FlowExperiment` 的預設輸出是相對於 `cfd` 的路徑）。
+- 專案裡其餘的 `physics/build`、`neoforge/build`、`cfd/build`、`build/reports` 是改之前的舊輸出，不要讀。
+
 ## 既有資料
 
 原開發機已將 `neoforge/run` 的兩個世界及設定複製到 `client`，78 個檔案逐一驗證 SHA-256。
@@ -30,7 +46,7 @@ Gradle 使用 Java 的 `user.home`，不依賴可能被封裝應用程式重新�
 `scripts/migrate-runtime.ps1` 用於尚未遷移的電腦；先關閉使用來源／目標世界的 Minecraft。
 腳本會取得世界鎖、先檢查全部檔案衝突，再複製與驗證。目標若已有不同內容會停止，不覆寫較新的本機進度。
 遷移已完成的電腦無須重跑。腳本不合併兩份已各自遊玩的世界。
-`DESKTOP-KLLC9QQ` 於 2026-10-07 建立環境時刻意不複製舊備份，避免與原開發機的進度分歧；
+`第二台電腦` 於 2026-10-07 建立環境時刻意不複製舊備份，避免與原開發機的進度分歧；
 需要既有世界時，關閉兩邊遊戲後從原開發機複製 `client/saves`。
 
 ```powershell
@@ -48,7 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 :neoforge:runClien
 ## 建立世界時崩潰：Unable to establish loopback connection
 
 Windows 上的 Java NIO 會在暫存目錄建立 Unix socket 當作內部管道；單人世界的內建伺服器連線與版本檢查都需要它。
-某些環境（封裝應用程式的 TEMP 重新導向、`DESKTOP-KLLC9QQ` 的系統 TEMP）在那裡建立會失敗，錯誤是
+某些環境（封裝應用程式的 TEMP 重新導向、`第二台電腦` 的系統 TEMP）在那裡建立會失敗，錯誤是
 `failed to open a new selector … Unable to establish loopback connection … Invalid argument: connect`。
 
 `neoforge/build.gradle` 因此讓所有遊戲 run 使用 `-Djava.io.tmpdir` 與 `-Djdk.net.unixdomain.tmpdir` 指向

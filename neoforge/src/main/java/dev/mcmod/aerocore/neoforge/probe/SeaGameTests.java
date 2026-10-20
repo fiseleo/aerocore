@@ -498,6 +498,53 @@ public final class SeaGameTests {
         return region;
     }
 
+    /**
+     * 0.38: the air at a point (WorldAir) is what a vehicle there feels: inside a region with its own wind, the region's
+     * profile and gust (WaveRegions.Local.windAt) and no vertical part; outside, the level's wind (WorldWind.at, here a
+     * fixed 8 m/s); the standard atmosphere at the height above sea level; a report's peak gust at least the mean.
+     */
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 40, batch = "aerocore_world_air")
+    public static void airAtAPointIsWhatVehiclesFeel(GameTestHelper h) {
+        double still = pool(h);
+        // a small region at one end of the pool; the other end is outside it (and loaded: the level's wind treats an
+        // unloaded column as ground at sea level, which in the GameTest world is far above its flat ground)
+        BlockPos centre = h.absolutePos(new BlockPos(5, 4, 8)), far = h.absolutePos(new BlockPos(19, 4, 8));
+        double cx = centre.getX() + 0.5, cz = centre.getZ() + 0.5, y = still + 3;
+        net.minecraft.server.level.ServerLevel level = h.getLevel();
+        WaveRegion region = new WaveRegion(cx, cz, 4, still, WaveField.NONE, null, null, new WaveRegion.Wind(10, 0));
+        WaveRegions.of(level).add(level, region);
+        WorldWind.Reference before = WorldWind.override(level);
+        WorldWind.setOverride(level, new WorldWind.Reference(8, Math.PI / 2));
+        h.runAfterDelay(5, () -> {
+            try {
+                WorldAir.Air inside = WorldAir.at(level, cx, y, cz);
+                Vec3d felt = WaveRegions.of(level).at(level, cx, cz).windAt(cx, y, cz);
+                h.assertTrue(inside.meanWind().add(inside.gust()).subtract(felt).length() < 1e-9, "inside: the region's wind " + felt + " vs " + inside);
+                h.assertTrue(inside.verticalMps() == 0 && inside.meanWind().x() > 5, "toward +x at about 10 m/s, no vertical part: " + inside.meanWind());
+                dev.mcmod.aerocore.api.Atmosphere.Sample isa = dev.mcmod.aerocore.api.Atmosphere.atAltitude(y - level.getSeaLevel(), Vec3d.ZERO);
+                h.assertTrue(Math.abs(inside.temperatureK() - isa.temperatureKelvin()) < 1e-9 && Math.abs(inside.pressurePa() - isa.pressurePa()) < 1e-6,
+                        "the standard atmosphere at the height above sea level");
+                h.assertTrue(inside.densityKgM3() > 1.1 && inside.densityKgM3() < 1.3, "air's density: " + inside.densityKgM3());
+                h.assertTrue(inside.visibilityM() >= WorldAir.THUNDER_M && inside.visibilityM() <= WorldAir.CLEAR_M, "visibility " + inside.visibilityM());
+                double ox = far.getX() + 0.5, oz = far.getZ() + 0.5;
+                h.assertTrue(SeaSurface.regionAt(SeaSurface.persistentRegions(level), ox, oz) == null, "the far end is outside the region");
+                WorldAir.Air outside = WorldAir.at(level, ox, y + 5, oz);
+                Vec3d world = WorldWind.at(level, ox, y + 5, oz, SeaSurface.time(level));
+                h.assertTrue(outside.wind().subtract(world).length() < 1e-9, "outside: the level's wind " + world + " vs " + outside.wind());
+                h.assertTrue(outside.meanWind().z() > 1 && Math.abs(outside.meanWind().x()) < 0.1 * outside.meanWind().z(), "the fixed wind toward +z: " + outside.meanWind() + " (reference " + WorldWind.reference(level)
+                        + ", " + WorldWind.describe(level, ox, y + 5, oz) + ", sea level " + level.getSeaLevel() + ", y " + (y + 5) + ")");
+                double peak = WorldAir.peakGustMps(level, ox, y + 5, oz, 600, 3);
+                System.out.printf("[AeroCore] WorldAir: inside %.2f m/s, outside mean %.2f m/s, 10 min peak 3 s gust %.2f m/s%n",
+                        inside.meanWind().length(), outside.meanWind().length(), peak);
+                h.assertTrue(peak >= outside.meanWind().length() && peak < 3 * outside.meanWind().length(), "the peak gust over the mean: " + peak);
+            } finally {
+                WorldWind.setOverride(level, before);
+                remove(h, region);
+            }
+            h.succeed();
+        });
+    }
+
     private static void remove(GameTestHelper h, WaveRegion region) {
         WaveRegions.of(h.getLevel()).removeAt(h.getLevel(), region.centerX(), region.centerZ());
     }

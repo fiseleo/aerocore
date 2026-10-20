@@ -133,7 +133,11 @@ class FluidPhysicsTest {
 
     @Test void rejectsInvalidFluidGeometryAndUnsupportedEnvelope() {
         assertThrows(IllegalArgumentException.class, () -> Atmosphere.atAltitude(Double.NaN, Vec3d.ZERO));
-        assertThrows(IllegalArgumentException.class, () -> Atmosphere.atAltitude(20001, Vec3d.ZERO));
+        assertThrows(IllegalArgumentException.class, () -> Atmosphere.atAltitude(32001, Vec3d.ZERO));
+        // 0.28: the 20-32 km layer (ICAO at 30 km geopotential: 226.65 K, 1171.87 Pa; 1197.0 Pa is the geometric 30 km), continuous at 20 km
+        assertEquals(226.65, Atmosphere.atAltitude(30000, Vec3d.ZERO).temperatureKelvin(), 1e-9);
+        assertEquals(1171.87, Atmosphere.atAltitude(30000, Vec3d.ZERO).pressurePa(), 0.5);
+        assertEquals(Atmosphere.atAltitude(20000 - 1e-6, Vec3d.ZERO).pressurePa(), Atmosphere.atAltitude(20000 + 1e-6, Vec3d.ZERO).pressurePa(), 1e-4);
         assertThrows(IllegalArgumentException.class, () -> new FluidState(1000, 0, 1482, Vec3d.ZERO));
         assertThrows(IllegalArgumentException.class, () -> new BuoyantSphere(Vec3d.ZERO, -1));
         assertThrows(IllegalArgumentException.class, () -> new Immersion(1, Vec3d.ZERO, 1.1));

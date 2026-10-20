@@ -24,7 +24,9 @@ import java.util.Locale;
 public final class AeroCore {
     public static final String MOD_ID = "aerocore";
 
-    public AeroCore(IEventBus modBus) {
+    public AeroCore(IEventBus modBus, net.neoforged.fml.ModContainer container) {
+        // 0.29: client settings (how finished parts are shaded)
+        container.registerConfig(net.neoforged.fml.config.ModConfig.Type.CLIENT, AeroCoreClientConfig.SPEC);
         ProbeEntities.TYPES.register(modBus);
         dev.mcmod.aerocore.neoforge.vehicle.VehicleRegistry.register(modBus);
         modBus.addListener(WaveNetwork::register);

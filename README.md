@@ -1,7 +1,7 @@
 # AeroCore 空氣與流體動力核心
 
 為後續 Minecraft 載具 Mod 準備的通用前置。暫定名稱為 **AeroCore**，Mod ID 為 `aerocore`。
-**0.19.0** 提供空氣／水的即時受力 API、六自由度剛體、四浮筒平台、受力／流速粒子箭頭、基礎熱交換，以及獨立二維 CFD 實驗模組；
+**0.22.1** 提供空氣／水的即時受力 API、六自由度剛體、四浮筒平台、受力／流速粒子箭頭、基礎熱交換，以及獨立二維 CFD 實驗模組；
 0.6 新增接觸反力（摩擦／反彈）、線性波浪、葉素動量螺旋槳推力與阻力摩擦生熱；
 0.7 新增接觸摩擦生熱、波壓隨深度衰減與附加質量，測試球也改用六自由度剛體與接觸求解器（會反彈與滾動）；
 0.8 新增浮筒的波浪輻射阻尼與浮筒間干擾；
@@ -23,8 +23,18 @@
 壓縮比、進排氣、爆震、摩擦與極限由零件決定；性能來自逐曲軸角的循環模擬（見 [docs/ENGINE.md](docs/ENGINE.md)）。
 0.19 加入玩家自己設計的噴射引擎：進氣道、壓縮機、燃燒室、渦輪、噴嘴／尾管、燃油控制各自是藍圖，組成單軸渦輪噴射引擎；
 推力、耗油、起動與加速、喘振與熄火來自變比熱的循環匹配（以 Seitzman 例題、J79／J85 驗證，見 [docs/JET.md](docs/JET.md)）。
+0.20 依使用者決定把 AeroCore 定位成「計算 API」：所有零件設計（含引擎元件）與範例搬到載具 Mod **hdfv**，
+AeroCore 留下物理、從設計抽出的計算、零件的執行時受力、通用載具框架與海浪／尾浪的渲染（見 [零件化載具](docs/VEHICLE_PARTS.md)）。
+0.21 加入雙轉子燃氣渦輪的計算：渦扇（分開或混合排氣）與自由渦輪（渦軸；加減速齒輪箱就是渦槳），
+以 CFM56-7B、FJ44、PT6A-27、T700 級引擎驗證，hdfv 0.3 用它們組出玩家設計的引擎（見 [docs/TURBOFAN.md](docs/TURBOFAN.md)）。
+0.22 加入「形狀 → 性能」的翼型、機翼、空氣螺旋槳與直升機旋翼：翼型由面板法加積分邊界層算出極曲線（含失速、可壓縮性、襟翼），
+機翼用數值升力線（後掠、上反、扭轉、副翼、地面效應）與翼盒結構，螺旋槳與旋翼用葉素理論（可變距、揮舞、動量入流、渦環、自轉），
+傳動加單向離合器與陀螺力矩；以 Abbott & von Doenhoff、Helmbold／DATCOM、NACA Report 640、UH-60 級懸停驗證（見 [docs/WING.md](docs/WING.md)）。
+0.22.1 讓一台載具的物理錯誤只停住那台載具（記錄錯誤、存檔保留原因，`/aerocore vehicle info` 顯示、`resume` 重新開始），伺服器與其他載具照常運作。
 0.17 加入零件化載具的前置：零件藍圖（浮筒、排水船體、滑行船體、螺旋槳、控制面、方塊體、電動馬達、壓艙、座位）、組裝與動力軸、
 通用載具物理與遊戲中的通用載具實體，給獨立的載具 Mod 使用（見 [零件化載具](docs/VEHICLE_PARTS.md)）。
+0.29 加入零件繪製的通用工具（給 hdfv 更逼真的引擎與機器）：網格的公尺 UV 與材質鍵、Blender 細節零件的 OBJ 讀寫、
+背景烘焙的環境光遮蔽與看不見的面、可無縫鋪排的材質貼圖、零件著色器（高光與天空反射）、尾焰的形狀與顏色（見 [docs/RENDERING.md](docs/RENDERING.md)）。
 目前沒有可駕駛載具；CFD 是已通過基礎數值驗證的研究原型，還不是完整三維工程求解器。
 
 ## 開發基底
@@ -120,14 +130,16 @@ open-ide.cmd "D:\Apps\IntelliJ IDEA\bin\idea64.exe"
 其他作業系統或已有 JDK 21 的環境可直接使用 `./gradlew build`（Windows 為 `gradlew.bat build`）。
 IDE 可開啟根目錄的 `settings.gradle`，並將 Gradle JVM 設為 JDK 21。
 初次建置會下載 Gradle、Minecraft 與 NeoForge，相依檔案需要一些時間。
-Minecraft 解編譯暫存放在 Gradle 使用者目錄的 `caches/aerocore-work`，以改善網路磁碟上的建置速度；
-最終 JAR 仍輸出到專案內的 `build/libs`。
+Minecraft 解編譯暫存放在 Gradle 使用者目錄的 `caches/aerocore-work`，以改善網路磁碟上的建置速度。
+建置輸出（2026-10-18 起）也在本機：`%USERPROFILE%\.mcmod\build\aerocore-<路徑雜湊>\<模組>`，
+`.\dev.ps1 showBuildDirectories -q` 印出位置；`-Paerocore_local_build=false` 改回專案內的 `build`。
+`build publish` 仍寫到專案內的 `build/repo`（hdfv 取用的 Maven 資料夾）。
 
-產物：
+產物（在上述建置資料夾）：
 
-- `neoforge/build/libs/aerocore-neoforge-1.21.1-0.9.0.jar`：遊戲用前置與測試物件；放進 NeoForge 1.21.1 的 `mods` 資料夾，只保留一個 AeroCore 版本。
-- `physics/build/libs/aerocore-physics-0.9.0.jar`：不依賴 Minecraft 的 Java 計算函式庫。
-- `cfd/build/distributions/cfd-0.9.0.zip`：獨立 CFD 工具與 Java 相依檔；需要 Java 21。
+- `neoforge\libs\aerocore-neoforge-1.21.1-<版本>.jar`：遊戲用前置與測試物件；放進 NeoForge 1.21.1 的 `mods` 資料夾，只保留一個 AeroCore 版本。
+- `physics\libs\aerocore-physics-<版本>.jar`：不依賴 Minecraft 的 Java 計算函式庫。
+- `cfd\distributions\cfd-<版本>.zip`：獨立 CFD 工具與 Java 相依檔；需要 Java 21。
 - `*-sources.jar`：原始碼附件，無須放進遊戲。
 
 遊戲中可用：
@@ -330,13 +342,81 @@ python scripts/plot-cfd.py cfd/build/experiments/water/field.csv
 - **0.15**：水面 shader 逐像素算法線（網格略去的波譜分量＋Cox-Munk 小波紋到毛細極限），像素以下的波併入陽光閃爍；
   反射天空漸層與岸邊地形的暗色倒影；閃爍加 Smith 遮蔽；風浪成長不超過陡度上限、白冠依 Monahan 覆蓋率、40 m 外畫平均白沫。
   開發用 `AutoShot`：在 `%USERPROFILE%\.mcmod\runs\aerocore\client` 放 `aerocore-autoshot.txt` 後啟動開發客戶端，
-  會開啟名稱以 AeroCore 開頭的 QA 世界、依步驟（`cmd`、`wait`、`shot`、`debug`、`fps`、`key`、`camera`、`look`、`clouds`、`quit`）截圖後正常存檔離開，見 `AutoShot` 類別說明。
+  會開啟名稱以 AeroCore 開頭的 QA 世界、依步驟（`cmd`、`wait`、`shot`、`debug`、`fps`、`key`、`camera`、`look`、`clouds`、`quit`；0.20 加 `gui`、`client`）截圖後正常存檔離開，見 `AutoShot` 類別說明。
+  0.33.1 起開發客戶端（`runClient`）一開就在第 2 個螢幕、不取得焦點、不鎖滑鼠（`-Pdev_window_monitor=<n>` 換螢幕，0 照原樣），
+  並關掉 NeoForge 的早期載入視窗（它開在主螢幕並取得焦點）；見 [API](docs/API.md)〈0.33.1 開發用視窗〉。
 - **0.16**：`/aerocore wind`（全世界的風：查詢、`set`、`natural`）、`/aerocore waves natural on|off`（自然生成浪）、`/aerocore ground`（腳下地面的輪胎與土壤數值）。
   見 [大氣](docs/ATMOSPHERE.md) 與 [地面載具](docs/GROUND.md)。
+- **0.24 輪子與傳動**（給載具 Mod 用的計算 API）：傳動約束求解（齒輪、離合器、煞車、差速器、限滑）、車輪的地面射線、
+  由尺寸與胎壓算出的輪胎（暫態滑移）、懸吊與煞車、車軸與起落架零件、手排／自排／雙離合／CVT 與三種四驅的機構，以及離線測試場。
+  見 [傳動](docs/DRIVETRAIN.md)、[輪子](docs/WHEELS.md)、[地面](docs/GROUND.md)。
+- **0.25 製造計算**：ISO 286 公差等級、車削與鑽孔時間、依功率的粗加工、粗糙度、Chvorinov 凝固時間、鍛造與軋延力、焊道與鉚接、
+  複材積層與固化、輪胎硫化（給載具 Mod 的機床與組裝用）。見 [製造](docs/MANUFACTURE.md)。
+- **0.26 動力、石油、柴油與油箱**：動力（電機、電池、電纜、皮帶與天軸、蒸汽機；見 [動力](docs/POWER.md)）、石油（原油分析、蒸餾、FCC、重組、蒸汽裂解、油藏、抽油、鑽井；
+  見 [石油](docs/PETROLEUM.md)）、柴油引擎與渦輪增壓（見 [引擎](docs/ENGINE.md)）、載具油箱與耗油。
 - **原版船**：乘客跟船一起傾斜，第一人稱鏡頭隨船滾轉；槳葉速度受划手拉槳速度限制，單槳轉向穩定在 58°/s。
 - **滑行艇**：Garme 艉板修正後，航行俯仰與 Fridsma 差 0.35° 內，縱搖不穩起始點與水槽一致。
 
 見 [海況與尾浪](docs/SEA.md)、[原版船](docs/ROWBOAT.md)、[滑行艇](docs/PLANING.md) 與 [物理模型](docs/PHYSICS.md)〈0.12 新增模型與係數來源〉。客戶端畫面尚未實測。
+
+## 改裝與車用空氣套件（0.34）
+
+給 hdfv 0.16 的改裝廠：
+
+- **原地改裝**（`PartVehicle.refit`）：物理可以不同的新藍圖在原地換上，車停在原處；零件狀態與軸轉速依零件 id 帶過，油截在新油箱容量內並回報倒掉多少。
+- **車用空氣套件**（`body.RoadAero`，機體可帶）：車底通道與擴散器、側裙、擋風板、分流板、擾流板唇、倒裝尾翼（升力線查表）、外掛件的阻力；
+  車底從地面射線取離地高度。是一維通道與文獻相關式，見 [機體](docs/BODY.md)〈車用空氣套件〉。沒有套件的機體物理不變。
+- **0.35.1 車底校準**：車底通道加上車輪（前輪損失、後輪尾流讓擴散器回收少六成）、側裙改成封住漏氣面積、擋風板分離區取代車底壓力，
+  對 Porsche 718 Cayman GT4 的擴散器與 AMG GT R 的車底擋板在 ±15 % 內；hdfv 範例轎車的溫和套件在 200 km/h 從 4.0 kN 變 1.78 kN。
+
+## 機加工的計算（0.35）
+
+給 hdfv 0.17 的九族機床與耗材：刀具壽命（Taylor）、磨削、研磨與珩磨（Preston）、滾齒與其他齒輪加工、拉削、鋸切、螺紋、鉚接、
+放電（Weller）與線切割、電化學（Faraday）、雷射與電漿的熱平衡、水刀（Hashish）、輔助氣體的阻塞流與氣瓶、空氣分離的能耗。
+見 [製造](docs/MANUFACTURE.md)〈機加工的計算（0.35）〉。
+
+## 聲音（0.37）
+
+給 hdfv 0.19 的程式合成聲音（不帶任何音檔）：
+
+- **聲源模型**（`api.acoustics`）：
+  - 活塞引擎依曲柄角點火、經排氣管波導；渦輪與噴流（Lighthill）、衝壓、火箭、脈衝噴射。
+  - 螺旋槳與旋翼（Gutin）、電動機與變頻器；輪胎（胎紋、滑移、路面）、風（Curle）、水（Wagner 拍水）。
+  - 撞擊（模態合成）、放氣（阻塞噴流）、機器的製程、喇叭與船笛。
+- **傳播**：ISO 9613 的擴散與空氣吸收、都卜勒與延遲時間（超音速時錐外聽不到、錐掃過時音爆，Carlson 法）。
+  房間的迴響（從聽者射線估 Eyring T60）、牆與車艙的隔音（質量定律），真實聲壓級對播放音量的響度對應。
+- **接 Minecraft 的聲音引擎**：
+  - 程式產生的靜態聲音、自己的合成與補塊執行緒的串流（主執行緒卡住也不斷聲）。
+  - OpenAL EFX 的迴響與低通（只碰程式合成的聲音）。
+  - 伺服器送的撞擊與刮擦事件、追蹤範圍外的大聲載具。
+
+見 [聲音](docs/ACOUSTICS.md)。
+
+## 機場的燈與空氣資料（0.38）
+
+給 hdfv 0.20 的機場塔台：
+
+- **大量固定燈**（`api.light`、客戶端 `FieldLamps`）：跑道燈、進場順閃燈、PAPI 的分色、燈標的交替；亮度依 Allard 定律與能見度，
+  一批畫到 8 km（視距外沒有區塊也看得到），千盞約每幀 0.3～0.5 ms。
+- **空氣資料**（`AirData`、`probe/WorldAir`）：壓力與密度高度、QNH、空速換算、頂風與側風；一點的風與空氣和載具感受到的相同，十分鐘最大陣風、盛行風、能見度。
+- **載具清單**（`VehicleTracks`）：一點附近的載具與它們的位置、速度、航向、離地高。
+- **選用的材質著色**：法線貼圖、反射玻璃、遠處玻璃亮度（材質自己選用，舊材質不變）。
+
+見 [零件的繪製](docs/RENDERING.md)〈大量固定燈〉〈選用的材質著色〉、[大氣](docs/ATMOSPHERE.md)〈空氣資料與一點的風〉。
+
+## 美化著色（0.39）
+
+給 hdfv 0.22 的全面美化。客戶端設定「美化著色」（Mod 清單的設定畫面，預設開；關掉時畫面和 0.38 一樣）：
+
+- **材質**：材質 JSON 的 `beautify` 子物件在開著時蓋上去（hdfv 用它給每種材質法線貼圖與反射玻璃）；切換時零件重烤，新的烤好前照舊畫舊的。
+- **光**：方塊光在被照到的地方加暖、在光滑面上有暖色高光（白天淡）；地面反射依鏡頭附近的地面顏色。
+- **遮蔽**：四角都暗、中間開闊的長面也會細分（比較面中心），不再整面發黑。
+- **燈罩光暈**：零件的燈罩依亮度與朝向畫光暈（256 m 內）。
+- **接觸陰影**：載具底下依底部大小的柔和陰影，取代原版的圓形影子。
+- **繪製**（不受開關影響）：GPU 上的零件每種材質只設定一次著色器，可動件多的載具畫得更快。
+- 截圖比對工具 `scripts/ShotDiff.java`。
+
+見 [零件的繪製](docs/RENDERING.md)〈美化著色（0.39）〉。
 
 ## 專案分工
 

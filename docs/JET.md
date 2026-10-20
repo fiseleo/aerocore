@@ -1,8 +1,14 @@
 # 噴射引擎（0.19）
 
+> 0.21 起渦扇、渦槳、渦軸見 [TURBOFAN.md](TURBOFAN.md)；本文件的氣體、燃燒室、噴嘴與進氣恢復現在由 `GasPath` 提供，三種引擎共用。
+
 使用者 2026-10-11 列出噴射引擎的元件「進氣道、壓縮機、燃燒室、渦輪、噴嘴／排氣尾管」，並要求「開始做噴射引擎」。
 0.19 把它們做成各自獨立設計的元件，再加一個燃油控制，組成一具單軸渦輪噴射引擎零件（`aerocore:jet_engine`）。
 引擎沿零件 +X 推（進氣口在前、噴口在後）；轉子繞 +X 轉，所以加速轉子時載具會受反扭力。
+
+**0.20 起的分工**：元件設計（參數、檢查、JSON、質量估計）、`JetEngineDesign` 與它執行時的燃油控制、起動、喘振規則都搬到 hdfv
+（`dev.mcmod.hdfv.part.engine`，類型 `hdfv:jet_engine`）。AeroCore 留下循環匹配（`Turbojet`）與元件的設計關係
+（`Turbomachinery`：壓縮機功、滑移、級負荷、進口流率、轉盤應力、冷卻葉片溫度、轉子扭力）。本文件其餘章節照原樣說明整具引擎。
 
 ## 元件與參數
 
@@ -131,12 +137,12 @@ Seitzman《AE4803 Engine off-design performance》的單軸匹配）。
 | `theRunningLinesPassThroughTheDesignPointAndRiseWithSpeed` | 運轉線通過設計點、各欄隨轉速單調上升、低到 45 % 以下；模型引擎在 Mach 0.6 的運轉線流量較大（衝壓） |
 | `quasiSteadyBalancesOnTheRunningLineAndOverFuellingHeadsForSurge` | 兩具範例在靜止與 100 m/s、70 % 與 100 % 轉速：運轉線油量功率平衡（1 % 內）；多 10 % 油會加速並朝喘振移動、少 10 % 會減速；T4 與喘振裕度的反解 |
 | `aStoppedEngineMakesNoThrustAndAConvergentDivergentNozzleHelpsAtHighPressureRatio` | 停轉沒有推力；Seitzman 設計點用面積比 1.5 的擴張噴嘴推力多 3 % 以上；面積比 3 在噴嘴壓比約 2.4 時分離、以大氣壓排出 |
-| `JetEngineTest.theSampleTurbojetsAreValidRoundTripAndWeighLikeTheirKind` | 兩具範例有效、JSON 往返；質量與長度對 J85-GE-17A、JetCat P80（25 % 內） |
+| （hdfv）`JetEngineTest.theSampleTurbojetsAreValidRoundTripAndWeighLikeTheirKind` | 兩具範例有效、JSON 往返；質量與長度對 J85-GE-17A、JetCat P80（25 % 內） |
 | `enginesThatCannotWorkAreRejected` | 2 級壓比 8、轉速 2.4 倍降伏、1500 K 燒壞 713C 葉片、700 K 循環不閉合、鋁尾管、進氣道太小、單級小渦輪 |
 | `bothSamplesStartIdleRunUpToDesignThrustAndSpoolDown` | 起動→自持→怠速 ±3 %、全油門到設計轉速與推力（1 % 內）、T4 守住上限、不喘振、推力沿軸向、收油回怠速、內部狀態存檔、關點火後熄火停轉 |
 | `withoutItsAccelerationScheduleASlammedThrottleSurges` | 沒有加速排程時，猛推油門會喘振，之後恢復到全速 |
 | `aDrownedInletPutsTheFlameOut` | 進氣口沒入水中就熄火、沒有推力 |
-| GameTest `jetBoatLightsItsTurbojetAndDrivesAhead` | 範例噴射艇（測試船體＋J85 級引擎在後甲板）在遊戲中自己起動、怠速推力超過 1 kN、推船前進 |
+| （hdfv）GameTest `jetBoatLightsItsTurbojetAndDrivesAhead` | 範例噴射艇（測試船體＋J85 級引擎在後甲板）在遊戲中自己起動、怠速推力超過 1 kN、推船前進 |
 
 ### Seitzman 例題
 
@@ -184,7 +190,7 @@ J85 推力高 11 %，因為小引擎實際的元件效率比給的低。
 
 ## 限制
 
-- 只有單軸渦輪噴射：沒有後燃器、旁通（渦扇）、雙軸、渦軸／渦槳、可調噴嘴、可調靜子或放氣閥。
+- 本文件的 `Turbojet` 只有單軸：雙轉子的渦扇、渦軸、渦槳在 0.21 另成 `Turbofan`、`FreeTurbine`；仍沒有後燃器、可調噴嘴、可調靜子或放氣閥。
 - 沒有元件特性圖：效率固定。壓縮機特性是平衡解隱含的那一種（轉速定功與壓比），渦輪是噴嘴形式的 Stodola 定律，喘振影響是規則；轉子失速、旋轉失速與閉鎖失速都不模擬。
 - 準穩態：轉子、機匣與燃燒室沒有熱慣性，排氣溫度沒有起動峰值以外的過衝；燃燒室的火焰穩定、液膜溫度、汙染物不計。
 - 起動、點火、熄火、喘振持續時間、怠速控制與油閥落後都是規則。

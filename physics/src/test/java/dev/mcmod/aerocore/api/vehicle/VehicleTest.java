@@ -13,7 +13,7 @@ import dev.mcmod.aerocore.api.PlaningDynamics;
 import dev.mcmod.aerocore.api.PlaningHull;
 import dev.mcmod.aerocore.api.RigidBodyProperties;
 import dev.mcmod.aerocore.api.RigidBodyState;
-import dev.mcmod.aerocore.api.SlenderHull;
+import dev.mcmod.aerocore.api.Rudder;
 import dev.mcmod.aerocore.api.TestHull;
 import dev.mcmod.aerocore.api.TestPlatform;
 import dev.mcmod.aerocore.api.Vec3d;
@@ -46,18 +46,18 @@ class VehicleTest {
         assertEquals(2 * 10 * 1.0, sum.yy(), 1e-9);
         assertEquals(2 * 10 * 0.16 + 5 * 1.6 * 1.6, sum.zz(), 1e-9);
         // Unit shells against closed forms: thin sphere 2/3 m r^2; solid box m (b^2 + c^2) / 12.
-        MassProperties shell = Shapes.sphere(1, 1e-5);
+        MassProperties shell = MassShapes.sphere(1, 1e-5);
         // The exact shell differs from the thin limit by order t / r = 1e-5.
         assertEquals(4 * Math.PI * 1e-5, shell.massKg(), 2e-5 * shell.massKg());
         assertEquals(2.0 / 3 * shell.massKg(), shell.xx(), 2e-5 * shell.xx());
-        MassProperties box = Shapes.box(new Vec3d(2, 1, 3), 10);
+        MassProperties box = MassShapes.box(new Vec3d(2, 1, 3), 10);
         assertEquals(6, box.massKg(), 1e-12);
         assertEquals(6 * (1 + 9) / 12.0, box.xx(), 1e-12);
     }
 
     @Test void mountsTurnAndMovePartMass() {
         // A long box (4 x 1 x 1) yawed 90 deg lies along z: its xx and zz swap.
-        BoxDesign box = new BoxDesign("b", new Vec3d(4, 1, 1), 1.05, true, 1, MassSpec.solid(new Material("unit", 1)));
+        PartDesign box = TestParts.box("b", new Vec3d(4, 1, 1), 1.05, true, 1, MassSpec.solid(new Material("unit", 1)));
         Vehicle straight = new VehicleBlueprint("s", List.of(new VehicleBlueprint.Entry("b", box, Mount.ORIGIN)), List.of()).compile();
         Vehicle turned = new VehicleBlueprint("t", List.of(new VehicleBlueprint.Entry("b", box, new Mount(new Vec3d(1, 2, 3), 90, 0, 0))), List.of()).compile();
         assertEquals(straight.properties().inertia().xx(), turned.properties().inertia().zz(), 1e-9);
@@ -72,10 +72,10 @@ class VehicleTest {
         List<VehicleBlueprint.Entry> parts = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
             BuoyantSphere s = TestPlatform.FLOATS.get(i);
-            parts.add(new VehicleBlueprint.Entry("float" + i, new FloatDesign("float", s.radiusM(), MassSpec.shell(Material.STEEL, 0.004)), Mount.at(s.offset())));
+            parts.add(new VehicleBlueprint.Entry("float" + i, TestParts.sphere("float", s.radiusM(), MassSpec.shell(Material.STEEL, 0.004)), Mount.at(s.offset())));
         }
-        parts.add(new VehicleBlueprint.Entry("frame", new BoxDesign("frame", new Vec3d(2, 0.2, 2), 0, false, 1, MassSpec.given(300)), Mount.at(new Vec3d(0, 0.35, 0))));
-        parts.add(new VehicleBlueprint.Entry("ballast", new BallastDesign("ballast", 200), Mount.at(TestPlatform.DEFAULT_BALLAST)));
+        parts.add(new VehicleBlueprint.Entry("frame", TestParts.box("frame", new Vec3d(2, 0.2, 2), 0, false, 1, MassSpec.given(300)), Mount.at(new Vec3d(0, 0.35, 0))));
+        parts.add(new VehicleBlueprint.Entry("ballast", TestParts.ballast("ballast", 200), Mount.at(TestPlatform.DEFAULT_BALLAST)));
         return new VehicleBlueprint("platform", parts, List.of());
     }
 
@@ -108,8 +108,8 @@ class VehicleTest {
     }
 
     @Test void hullReproducesHullDynamicsAndDoesNotCareHowItIsMounted() {
-        HullDesign design = new HullDesign("test hull", HullModel.Type.SURFACE, HullDesign.stationsOf(TestHull.HULL), TestHull.MASS, 0, 6,
-                MassSpec.given(TestHull.MASS));
+        PartDesign design = TestParts.hull("test hull", TestHull.HULL, TestHull.MASS,
+                MassSpec.given(TestHull.MASS).resolve(t -> MassShapes.hullShell(TestHull.HULL, 1e-3)));
         Vehicle straight = new VehicleBlueprint("a", List.of(new VehicleBlueprint.Entry("hull", design, Mount.ORIGIN)), List.of()).compile();
         // The same hull mounted turned and moved, the vehicle turned back: the same body in the world. (Yaw only: the heave
         // radiation memory measures point distances in the vehicle's level plane, so a tilted mount is a different layout.)
@@ -147,7 +147,7 @@ class VehicleTest {
     }
 
     @Test void planingHullReproducesPlaningDynamics() {
-        PlaningHullDesign design = new PlaningHullDesign("fridsma", 6, 1.2, 20, 0.75, 48, 6, MassSpec.given(1048));
+        PartDesign design = TestParts.planing("fridsma", 6, 1.2, 20, 0.75, 48, 1048);
         Vehicle v = new VehicleBlueprint("p", List.of(new VehicleBlueprint.Entry("hull", design, Mount.ORIGIN)), List.of()).compile();
         PlaningHull hull = PlaningHull.fridsma(6, 1.2, Math.toRadians(20), 0.75, 48);
         HullDynamics.Environment calm = point -> HullDynamics.Water.calm(0.25, WATER, AIR);
@@ -182,10 +182,10 @@ class VehicleTest {
     /** A motor driving a B4-70 screw through a gearbox on a vehicle too heavy to move (bollard pull). */
     private static Vehicle bollard(double ratio, double efficiency) {
         return new VehicleBlueprint("bollard", List.of(
-                new VehicleBlueprint.Entry("motor", new MotorDesign("m", 200, 20000, 3000, 0.02, 0.9, 30), Mount.ORIGIN, List.of(Binding.of("throttle", "throttle"))),
-                new VehicleBlueprint.Entry("screw", new PropellerDesign("s", 0.35, 4, 0.70, 1.4, 0.18, 0.1, MassSpec.solid(Material.BRONZE)), Mount.at(new Vec3d(-1, -1, 0))),
-                new VehicleBlueprint.Entry("weight", new BallastDesign("w", 1e8), Mount.at(new Vec3d(0, 0, 0))),
-                new VehicleBlueprint.Entry("body", new BoxDesign("b", new Vec3d(1, 1, 1), 0, false, 1, MassSpec.given(1e7)), Mount.ORIGIN)),
+                new VehicleBlueprint.Entry("motor", TestParts.motor("m", 200, 20000, 3000, 0.02, 0.9, 30), Mount.ORIGIN, List.of(Binding.of("throttle", "throttle"))),
+                new VehicleBlueprint.Entry("screw", TestParts.propeller("s", 0.35, 4, 0.70, 1.4, 0.18, 0.1), Mount.at(new Vec3d(-1, -1, 0))),
+                new VehicleBlueprint.Entry("weight", TestParts.ballast("w", 1e8), Mount.at(new Vec3d(0, 0, 0))),
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(1, 1, 1), 0, false, 1, MassSpec.given(1e7)), Mount.ORIGIN)),
                 List.of(new Connection.Shaft("motor", "screw", ratio, efficiency))).compile();
     }
 
@@ -217,8 +217,8 @@ class VehicleTest {
 
     @Test void anUnloadedMotorRunsUpToItsTopSpeedAndStays() {
         Vehicle v = new VehicleBlueprint("free", List.of(
-                new VehicleBlueprint.Entry("motor", new MotorDesign("m", 50, 5000, 3000, 0.01, 0.9, 10), Mount.ORIGIN, List.of(Binding.of("throttle", "throttle"))),
-                new VehicleBlueprint.Entry("body", new BoxDesign("b", new Vec3d(1, 1, 1), 0, false, 1, MassSpec.given(1000)), Mount.ORIGIN)), List.of()).compile();
+                new VehicleBlueprint.Entry("motor", TestParts.motor("m", 50, 5000, 3000, 0.01, 0.9, 10), Mount.ORIGIN, List.of(Binding.of("throttle", "throttle"))),
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(1, 1, 1), 0, false, 1, MassSpec.given(1000)), Mount.ORIGIN)), List.of()).compile();
         VehicleState st = v.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
         VehicleEnvironment env = VehicleEnvironment.calm(-100, WATER, AIR);
         double top = 3000 * Math.PI / 30;
@@ -229,13 +229,192 @@ class VehicleTest {
         assertEquals(0, rotor + body, 1e-6 * rotor, "rotor " + rotor + " body " + body);
     }
 
+    /** A driver and a flywheel through a shaft that is or is not a freewheel, on a body too heavy to turn. */
+    private static Vehicle clutch(boolean freewheel) {
+        return new VehicleBlueprint("clutch", List.of(
+                new VehicleBlueprint.Entry("engine", TestParts.flywheel("e", 0.5, true), Mount.ORIGIN, List.of(Binding.of("torque", "torque"))),
+                new VehicleBlueprint.Entry("rotor", TestParts.flywheel("r", 2.0, false), Mount.at(new Vec3d(0, 1, 0))),
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(1, 1, 1), 0, false, 1, MassSpec.given(1e7)), Mount.ORIGIN)),
+                List.of(new Connection.Shaft("engine", "rotor", 2, 1, freewheel))).compile();
+    }
+
+    @Test void aFreewheelDrivesButLetsTheDrivenSideOverrun() {
+        for (boolean freewheel : new boolean[]{false, true}) {
+            Vehicle v = clutch(freewheel);
+            assertEquals(freewheel ? 2 : 1, v.trains());
+            VehicleState st = v.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
+            VehicleEnvironment env = VehicleEnvironment.calm(-100, WATER, AIR);
+            // driving with 10 N m for 1 s: engine 0.5 kg m^2 plus the rotor (2) through 2:1 (0.5), so 1 kg m^2
+            for (int i = 0; i < 200; i++) {
+                st.setBody(new RigidBodyState(st.body().position(), Vec3d.ZERO, Orientation.IDENTITY, Vec3d.ZERO));
+                VehicleDynamics.step(v, st, env, Map.of("torque", 10.0), Vec3d.ZERO, List.of(), null, i * DT, DT);
+            }
+            assertEquals(10, st.rotorSpeed(0), 0.05, "engine speed after a second");
+            assertEquals(5, st.rotorSpeed(1), 0.03, "the rotor turns at half");
+            // braking the engine: a freewheel lets the rotor keep its speed, a plain shaft slows it too
+            for (int i = 200; i < 300; i++) {
+                st.setBody(new RigidBodyState(st.body().position(), Vec3d.ZERO, Orientation.IDENTITY, Vec3d.ZERO));
+                VehicleDynamics.step(v, st, env, Map.of("torque", -10.0), Vec3d.ZERO, List.of(), null, i * DT, DT);
+            }
+            if (freewheel) {
+                assertEquals(5, st.rotorSpeed(1), 1e-9, "the rotor overruns");
+                assertEquals(0, st.rotorSpeed(0), 0.05, "the engine slows alone (0.5 kg m^2)");
+            } else {
+                assertEquals(st.rotorSpeed(0) / 2, st.rotorSpeed(1), 1e-9);
+                assertEquals(5, st.rotorSpeed(0), 0.05, "both slow (1 kg m^2)");
+            }
+        }
+        // driving again, the freewheel picks the rotor up when the engine catches up with it
+        Vehicle v = clutch(true);
+        VehicleState st = v.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
+        st.setTrainSpeed(1, 4);
+        VehicleEnvironment env = VehicleEnvironment.calm(-100, WATER, AIR);
+        for (int i = 0; i < 400; i++) {
+            st.setBody(new RigidBodyState(st.body().position(), Vec3d.ZERO, Orientation.IDENTITY, Vec3d.ZERO));
+            VehicleDynamics.step(v, st, env, Map.of("torque", 5.0), Vec3d.ZERO, List.of(), null, i * DT, DT);
+        }
+        assertEquals(st.rotorSpeed(0) / 2, st.rotorSpeed(1), 1e-9, "engaged");
+        assertTrue(st.rotorSpeed(1) > 4.5);
+    }
+
+    @Test void aSpinningRotorResistsTheBodyTurningGyroscopically() {
+        Vehicle v = new VehicleBlueprint("gyro", List.of(
+                new VehicleBlueprint.Entry("wheel", TestParts.flywheel("w", 3.0, false), Mount.ORIGIN),
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(2, 1, 1), 0, false, 1, MassSpec.given(500)), Mount.ORIGIN)), List.of()).compile();
+        VehicleState st = v.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
+        st.setTrainSpeed(0, 100);
+        // yawing at 0.5 rad/s about +y with the wheel's momentum along +x: the body needs -(omega x H) = +z, 150 N m,
+        // taken in the drift with the rotation (it shows as the inertia exchange)
+        RigidBodyProperties p = v.properties();
+        Vec3d angularMomentum = p.inertia().apply(new Vec3d(0, 0.5, 0));
+        st.setBody(new RigidBodyState(st.body().position(), Vec3d.ZERO, Orientation.IDENTITY, angularMomentum));
+        assertEquals(0.5, st.body().angularVelocity(p).y(), 1e-6);
+        VehicleDynamics.Result r = VehicleDynamics.step(v, st, VehicleEnvironment.calm(-100, WATER, AIR), Map.of(), Vec3d.ZERO, List.of(), null, 0, DT);
+        assertEquals(150, r.inertia().torque().z(), 1.0, "gyroscopic couple " + r.inertia().torque());
+    }
+
+    /**
+     * A 500 kg box carrying a 3 kg m^2 wheel at 1000 rad/s (its momentum over the box's inertia about 14 rad/s), free of
+     * torques and tumbling a little: the body's own rotational energy and the system's momentum stay. Taken as an
+     * explicit force, the wheel's couple gained about a quarter of a percent of that energy every step (a helicopter's
+     * rotor on its fuselage is the same ratio).
+     */
+    @Test void aFreeGyrostatKeepsItsMomentumAndEnergy() {
+        Vehicle v = new VehicleBlueprint("gyrostat", List.of(
+                new VehicleBlueprint.Entry("wheel", TestParts.flywheel("w", 3.0, false), Mount.ORIGIN),
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(2, 1, 1), 0, false, 1, MassSpec.given(500)), Mount.ORIGIN)), List.of()).compile();
+        VehicleState st = v.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
+        st.setTrainSpeed(0, 1000);
+        RigidBodyProperties p = v.properties();
+        st.setBody(new RigidBodyState(st.body().position(), Vec3d.ZERO, Orientation.IDENTITY, p.inertia().apply(new Vec3d(0.2, 0.1, 0.1))));
+        java.util.function.Supplier<Vec3d> total = () -> st.body().angularMomentum().add(st.body().orientation().rotate(Vec3d.X.scale(3.0 * st.rotorSpeed(0))));
+        double energy = 0.5 * st.body().angularMomentum().dot(st.body().angularVelocity(p));
+        Vec3d momentum = total.get();
+        for (int i = 0; i < 2000; i++) {
+            VehicleDynamics.step(v, st, VehicleEnvironment.calm(-100, WATER, AIR), Map.of(), Vec3d.ZERO, List.of(), null, i * DT, DT);
+        }
+        assertEquals(1000, st.rotorSpeed(0), 1e-9, "nothing turns the wheel");
+        assertEquals(energy, 0.5 * st.body().angularMomentum().dot(st.body().angularVelocity(p)), 0.02 * energy, "the body's rotational energy");
+        assertEquals(0, total.get().subtract(momentum).length(), 1e-6 * momentum.length(), "the momentum of body and wheel " + total.get() + " vs " + momentum);
+    }
+
+    /**
+     * A part on another part's mount point: the host's placement, then the point, then the offset (in the point's frame);
+     * chains follow; unknown parts or points are design issues; the attachment survives JSON.
+     */
+    @Test void partsAttachToMountPoints() {
+        Map<String, Mount> points = Map.of("top", new Mount(new Vec3d(1, 2, 0), 90, 0, 0), "tip", Mount.at(new Vec3d(0, 0, 3)));
+        Vehicle v = new VehicleBlueprint("attached", List.of(
+                new VehicleBlueprint.Entry("host", TestParts.host("h", 100, points), new Mount(new Vec3d(10, 0, 0), 0, 0, 0)),
+                new VehicleBlueprint.Entry("second", TestParts.host("s", 10, points), Mount.on("host", "top", Mount.at(new Vec3d(1, 0, 0)))),
+                new VehicleBlueprint.Entry("third", TestParts.ballast("t", 1), Mount.on("second", "tip"))), List.of()).compile();
+        // host at (10,0,0); its "top" at (11,2,0) turned 90 deg about +Y, so the point's +X is the vehicle's -Z
+        Vehicle.Installed second = v.installed().get(1), third = v.installed().get(2);
+        assertEquals(11, second.mount().position().x(), 1e-9);
+        assertEquals(2, second.mount().position().y(), 1e-9);
+        assertEquals(-1, second.mount().position().z(), 1e-9);
+        assertEquals(90, second.mount().yawDeg(), 1e-9);
+        // the second's "tip" (0,0,3) in its frame turned 90 deg about +Y: +Z goes to +X
+        assertEquals(14, third.mount().position().x(), 1e-9);
+        assertEquals(-1, third.mount().position().z(), 1e-9);
+        // unknown point and part
+        DesignException missing = assertThrows(DesignException.class, () -> new VehicleBlueprint("bad", List.of(
+                new VehicleBlueprint.Entry("host", TestParts.host("h", 100, points), Mount.ORIGIN),
+                new VehicleBlueprint.Entry("x", TestParts.ballast("x", 1), Mount.on("host", "nose")),
+                new VehicleBlueprint.Entry("y", TestParts.ballast("y", 1), Mount.on("nobody", "top"))), List.of()).compile());
+        assertEquals(2, missing.issues().stream().filter(i -> i.kind() == DesignIssue.Kind.INVALID).count(), missing.issues().toString());
+        // JSON keeps the attachment
+        Mount m = Mount.on("host", "top", new Mount(new Vec3d(1, 2, 3), 10, 20, 30));
+        assertEquals(m, Mount.fromJson(Fields.of(Json.parse(Json.write(m.toJson())), "mount")));
+        // angles survive a round trip through a rotation
+        Mount turned = new Mount(new Vec3d(1, 2, 3), 35, -20, 50);
+        Mount back = Mount.of(turned.position(), turned.rotation());
+        assertEquals(35, back.yawDeg(), 1e-9); assertEquals(-20, back.pitchDeg(), 1e-9); assertEquals(50, back.rollDeg(), 1e-9);
+    }
+
+    /** A float body of modules: floats at its displacement, carries less with a low sill, and has its air drag in flight. */
+    @Test void aBodyFloatsAndFlies() {
+        var vee = new dev.mcmod.aerocore.api.body.SectionShape.Chined(1.1, 0.8, 0, 25, 5);
+        java.util.function.DoubleFunction<dev.mcmod.aerocore.api.body.BodyShape> shape = sill -> new dev.mcmod.aerocore.api.body.BodyShape(vee.scaled(0.05), List.of(
+                new dev.mcmod.aerocore.api.body.BodyModule("bow", 1.5, vee, 2, 0, Double.POSITIVE_INFINITY),
+                new dev.mcmod.aerocore.api.body.BodyModule("middle", 4, vee, 1, 0, sill),
+                new dev.mcmod.aerocore.api.body.BodyModule("stern", 1.5, vee, 1, 0, Double.POSITIVE_INFINITY)));
+        double mass = 900;
+        double[] wet = new double[2], height = new double[2];
+        for (int k = 0; k < 2; k++) {
+            Vehicle v = new VehicleBlueprint("float", List.of(new VehicleBlueprint.Entry("body", TestParts.body("b" + k, shape.apply(k == 0 ? Double.POSITIVE_INFINITY : 0.12), mass), Mount.ORIGIN)), List.of()).compile();
+            assertTrue(((dev.mcmod.aerocore.api.vehicle.part.BodyPart) v.installed().get(0).part()).planing(), "a vee bottom planes");
+            VehicleState st = v.newState(new Vec3d(0, 0.1, 0), Orientation.IDENTITY, DT);
+            VehicleEnvironment env = VehicleEnvironment.calm(0, WATER, AIR);
+            VehicleDynamics.Result r = null;
+            for (int i = 0; i < (int) (25 / DT); i++) { r = VehicleDynamics.step(v, st, env, Map.of(), Vec3d.Y.scale(-G), List.of(), null, i * DT, DT); }
+            wet[k] = r.diagnostics().get("body").get("wetVolumeM3");
+            height[k] = v.origin(st.body()).y();
+            // settled as the planing hull test's dropped boat is (PlaningDynamicsTest)
+            Vec3d vel = st.body().velocity();
+            assertTrue(Math.abs(vel.y()) < 0.02 && Math.hypot(vel.x(), vel.z()) < 0.08, "at rest: " + vel);
+        }
+        assertEquals(mass / WATER.densityKgPerM3(), wet[0], 0.03 * mass / WATER.densityKgPerM3(), "closed: floats on its displacement");
+        // open amidships from 12 cm above the keel: the water there carries nothing, so it floats deeper on the bow and stern
+        assertEquals(mass / WATER.densityKgPerM3(), wet[1], 0.03 * mass / WATER.densityKgPerM3(), "open: still afloat");
+        assertTrue(height[1] < height[0] - 0.02, "and lower: " + height[1] + " against " + height[0]);
+        // in the air, well clear of the water, at 50 m/s
+        var b = shape.apply(Double.POSITIVE_INFINITY);
+        Vehicle v = new VehicleBlueprint("flying", List.of(new VehicleBlueprint.Entry("body", TestParts.body("c", b, mass), Mount.ORIGIN)), List.of()).compile();
+        VehicleState st = v.newState(new Vec3d(0, 100, 0), Orientation.IDENTITY, DT);
+        st.setBody(new RigidBodyState(st.body().position(), new Vec3d(50, 0, 0), Orientation.IDENTITY, Vec3d.ZERO));
+        VehicleDynamics.Result r = VehicleDynamics.step(v, st, VehicleEnvironment.calm(0, WATER, AIR), Map.of(), Vec3d.ZERO, List.of(), null, 0, DT);
+        double expected = 0.5 * AIR.densityKgPerM3() * 50 * 50 * new dev.mcmod.aerocore.api.body.BodyAerodynamics(b, 0).zeroLiftDragAreaM2(50,
+                new dev.mcmod.aerocore.api.aero.Wing.Air(AIR.densityKgPerM3(), AIR.dynamicViscosityPaS(), AIR.speedOfSoundMps()));
+        assertEquals(expected, r.diagnostics().get("body").get("airDragN"), 0.01 * expected);
+    }
+
+    @Test void aWingLiftsAndItsAileronsRoll() {
+        Vehicle v = new VehicleBlueprint("glider", List.of(
+                new VehicleBlueprint.Entry("wing", TestParts.wing("w", 10, 1.2), new Mount(Vec3d.ZERO, 0, 4, 0), List.of(Binding.of("aileron", "roll"))),
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(4, 1, 1), 0, false, 1, MassSpec.given(300)), Mount.ORIGIN)), List.of()).compile();
+        VehicleState st = v.newState(new Vec3d(0, 100, 0), Orientation.IDENTITY, DT);
+        st.setBody(new RigidBodyState(st.body().position(), new Vec3d(40, 0, 0), Orientation.IDENTITY, Vec3d.ZERO));
+        VehicleEnvironment env = VehicleEnvironment.calm(-100, WATER, AIR);
+        VehicleDynamics.Result r = VehicleDynamics.step(v, st, env, Map.of("roll", 0.0), GRAVITY, List.of(), null, 0, DT);
+        double q = 0.5 * AIR.densityKgPerM3() * 40 * 40 * 12;
+        double cl = r.load(AppliedForce.Kind.LIFT).force().y() / q;
+        assertTrue(cl > 0.5 && cl < 0.85, "4 deg on a 2412 wing of aspect ratio 8.3: CL " + cl);
+        Vec3d com = v.properties().centerOfMassLocal();
+        assertEquals(0, r.load(AppliedForce.Kind.LIFT).torque().x(), 1e-3 * q, "no roll");
+        st.setBody(new RigidBodyState(new Vec3d(0, 100, 0), new Vec3d(40, 0, 0), Orientation.IDENTITY, Vec3d.ZERO));
+        VehicleDynamics.Result rolled = VehicleDynamics.step(v, st, env, Map.of("roll", 1.0), GRAVITY, List.of(), null, 0, DT);
+        assertTrue(rolled.load(AppliedForce.Kind.LIFT).torque().x() > 0.01 * q, "roll to starboard " + rolled.load(AppliedForce.Kind.LIFT).torque() + " com " + com);
+        assertTrue(rolled.diagnostics().get("wing").get("liftN") > 0);
+    }
+
     // ----- control surfaces and boxes -----
 
     @Test void rudderPushesTheSternToPortAndTheRaceStrengthensIt() {
-        PartDesign rudder = new ControlSurfaceDesign("r", 0.22, 0.32, 35, true, 0.15, MassSpec.solid(Material.STEEL));
+        PartDesign rudder = TestParts.surface("r", 0.22, 0.32, 35, 0.15, Rudder.lowAspectPolar(0.22, 0.32));
         Vehicle v = new VehicleBlueprint("r", List.of(
                 new VehicleBlueprint.Entry("rudder", rudder, Mount.at(new Vec3d(-2, -0.3, 0)), List.of(Binding.of("deflection", "rudder"))),
-                new VehicleBlueprint.Entry("body", new BoxDesign("b", new Vec3d(4, 0.5, 1), 0, false, 1, MassSpec.given(1000)), Mount.ORIGIN)), List.of()).compile();
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(4, 0.5, 1), 0, false, 1, MassSpec.given(1000)), Mount.ORIGIN)), List.of()).compile();
         VehicleEnvironment env = VehicleEnvironment.calm(1, WATER, AIR);
         VehicleState st = v.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
         st.setBody(new RigidBodyState(st.body().position(), new Vec3d(3, 0, 0), Orientation.IDENTITY, Vec3d.ZERO));
@@ -246,7 +425,7 @@ class VehicleTest {
         // A horizontal surface (rolled 90 deg) makes vertical force instead.
         Vehicle flat = new VehicleBlueprint("e", List.of(
                 new VehicleBlueprint.Entry("elevator", rudder, new Mount(new Vec3d(-2, -0.3, 0), 0, 0, 90), List.of(Binding.of("deflection", "pitch"))),
-                new VehicleBlueprint.Entry("body", new BoxDesign("b", new Vec3d(4, 0.5, 1), 0, false, 1, MassSpec.given(1000)), Mount.ORIGIN)), List.of()).compile();
+                new VehicleBlueprint.Entry("body", TestParts.box("b", new Vec3d(4, 0.5, 1), 0, false, 1, MassSpec.given(1000)), Mount.ORIGIN)), List.of()).compile();
         VehicleState fs = flat.newState(Vec3d.ZERO, Orientation.IDENTITY, DT);
         fs.setBody(new RigidBodyState(fs.body().position(), new Vec3d(3, 0, 0), Orientation.IDENTITY, Vec3d.ZERO));
         Wrench vertical = VehicleDynamics.step(flat, fs, env, Map.of("pitch", 0.5), Vec3d.ZERO, List.of(), null, 0, DT).load(AppliedForce.Kind.LIFT);
@@ -258,7 +437,7 @@ class VehicleTest {
     @Test void aClosedBoxFloatsAtItsArchimedesDraft() {
         // 2 x 1 x 1 m box of 800 kg in fresh water: draft (800 - 2 rho_air) / ((rho_w - rho_air) 2) = 0.4004 m.
         Vehicle v = new VehicleBlueprint("box", List.of(new VehicleBlueprint.Entry("box",
-                new BoxDesign("b", new Vec3d(2, 1, 1), 1.05, true, 4, MassSpec.given(800)), Mount.ORIGIN)), List.of()).compile();
+                TestParts.box("b", new Vec3d(2, 1, 1), 1.05, true, 4, MassSpec.given(800)), Mount.ORIGIN)), List.of()).compile();
         VehicleEnvironment env = VehicleEnvironment.calm(0, WATER, AIR);
         double rhoAir = AIR.densityKgPerM3(), draft = (800 - rhoAir * 2) / ((WATER.densityKgPerM3() - rhoAir) * 2);
         for (double offset : new double[]{0, 0.01, -0.02}) {

@@ -1,6 +1,5 @@
 package dev.mcmod.aerocore.api.engine;
 
-import dev.mcmod.aerocore.api.vehicle.SampleEngines;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -12,6 +11,15 @@ class TurbojetTest {
     private static final Fuel SEITZMAN_FUEL = new Fuel("kerosene 42.8", 12, 23, 0, 42.8e6, 360e3, 15, 15, 800, Fuel.GASOLINE_FLAME);
     private static final Turbojet.Design SEITZMAN = new Turbojet.Design(25, 70.6, 0.90, 1773, 0.98, 0.99, 0.90, 0.995, 0, 0.97, false, 1, 0.98,
             Turbojet.Inlet.PITOT, SEITZMAN_FUEL);
+
+    /** The cycle of a J85-class turbojet: pressure ratio 8 at 20 kg/s, T4 1250 K, lightly cooled turbine (3 % bleed). */
+    private static final Turbojet.Design J85_CLASS = new Turbojet.Design(8, 20, 0.87, 1250, 0.95, 0.98, 0.88, 0.99, 0.03, 0.98, false, 1, 0.98,
+            Turbojet.Inlet.PITOT, Fuel.KEROSENE);
+    /** The cycle of a model turbojet: one centrifugal stage to 2.2 at 0.23 kg/s, T4 950 K, uncooled; it exhausts subsonically. */
+    private static final Turbojet.Design MODEL = new Turbojet.Design(2.2, 0.23, 0.75, 950, 0.94, 0.95, 0.80, 0.98, 0, 0.98, false, 1, 0.97,
+            Turbojet.Inlet.PITOT, Fuel.KEROSENE);
+
+    private static Turbojet.Sizing sized(Turbojet.Design d) { return Turbojet.size(d, Turbojet.Flight.sea(0)); }
 
     private static Turbojet.Design engine(double pressureRatio, double airflow, double t4) {
         return new Turbojet.Design(pressureRatio, airflow, 0.87, t4, 0.95, 0.98, 0.88, 0.99, 0, 0.98, false, 1, 0.99, Turbojet.Inlet.PITOT, Fuel.KEROSENE);
@@ -58,7 +66,7 @@ class TurbojetTest {
 
     @Test void theEquilibriumAtTheDesignTemperatureIsTheDesignPoint() {
         for (Turbojet.Sizing s : new Turbojet.Sizing[]{Turbojet.size(SEITZMAN, new Turbojet.Flight(288, 100000, 0)),
-                SampleEngines.turbojet().sizing(), SampleEngines.modelTurbojet().sizing()}) {
+                sized(J85_CLASS), sized(MODEL)}) {
             Turbojet.Point d = s.point(), e = Turbojet.equilibrium(s, s.condition(), s.design().turbineInletK(), Double.NaN);
             assertEquals(1, e.speedFraction(), 1e-6);
             assertEquals(d.pressureRatio(), e.pressureRatio(), 1e-6 * d.pressureRatio());
@@ -66,7 +74,7 @@ class TurbojetTest {
             assertEquals(d.thrustN(), e.thrustN(), 1e-5 * d.thrustN());
             assertEquals(d.compressorPowerW(), d.turbinePowerW(), 1e-6 * d.compressorPowerW(), "the spool balances");
         }
-        assertFalse(SampleEngines.modelTurbojet().sizing().point().nozzleChoked(), "the model jet exhausts subsonically");
+        assertFalse(sized(MODEL).point().nozzleChoked(), "the model jet exhausts subsonically");
     }
 
     @Test void realTurbojetsAtSeaLevelStatic() {
@@ -94,7 +102,7 @@ class TurbojetTest {
     }
 
     @Test void theRunningLinesPassThroughTheDesignPointAndRiseWithSpeed() {
-        Turbojet.Sizing s = SampleEngines.turbojet().sizing();
+        Turbojet.Sizing s = sized(J85_CLASS);
         Turbojet.RunningLines lines = Turbojet.runningLines(s);
         assertEquals(0, lines.mach()[0]);
         assertTrue(lines.mach().length >= 8, "lines up to Mach " + lines.mach()[lines.mach().length - 1]);
@@ -109,13 +117,13 @@ class TurbojetTest {
         }
         assertTrue(line.speed()[0] < 0.45, "the line reaches low power: " + line.speed()[0]);
         // the model jet's unchoked nozzle gains pressure ratio from ram: at the same corrected speed it passes more air
-        Turbojet.RunningLines model = Turbojet.runningLines(SampleEngines.modelTurbojet().sizing());
+        Turbojet.RunningLines model = Turbojet.runningLines(sized(MODEL));
         assertTrue(model.at(0.6).airflowAt(0.9) > 1.02 * model.at(0).airflowAt(0.9));
         assertTrue(model.lines()[0].speed()[0] < 0.5, "a low pressure ratio engine has a running line too: " + model.lines()[0].speed()[0]);
     }
 
     @Test void quasiSteadyBalancesOnTheRunningLineAndOverFuellingHeadsForSurge() {
-        for (Turbojet.Sizing s : new Turbojet.Sizing[]{SampleEngines.turbojet().sizing(), SampleEngines.modelTurbojet().sizing()}) {
+        for (Turbojet.Sizing s : new Turbojet.Sizing[]{sized(J85_CLASS), sized(MODEL)}) {
             Turbojet.RunningLines lines = Turbojet.runningLines(s);
             for (Turbojet.Flight f : new Turbojet.Flight[]{Turbojet.Flight.sea(0), Turbojet.Flight.sea(100)}) {
                 for (double n : new double[]{0.7, 1.0}) {
@@ -137,7 +145,7 @@ class TurbojetTest {
     }
 
     @Test void aStoppedEngineMakesNoThrustAndAConvergentDivergentNozzleHelpsAtHighPressureRatio() {
-        Turbojet.Sizing s = SampleEngines.turbojet().sizing();
+        Turbojet.Sizing s = sized(J85_CLASS);
         Turbojet.Point still = Turbojet.quasiSteady(s, Turbojet.runningLines(s), Turbojet.Flight.sea(0), 0, 0);
         assertEquals(0, still.thrustN(), 1e-9);
         // Seitzman's design point exhausts at 7 times ambient: expanding it further gains thrust

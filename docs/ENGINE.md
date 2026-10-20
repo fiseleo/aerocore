@@ -4,6 +4,14 @@
 火星塞與噴油嘴，以及配氣、供油、點火、潤滑、冷卻系統。0.18 把這些做成各自獨立設計的元件，組合成一具四行程火花點火引擎零件
 （`aerocore:piston_engine`），經動力軸驅動螺旋槳（之後是變速箱與輪子）。0.19 的噴射引擎見 [JET.md](JET.md)。
 
+**0.20 起的分工**：使用者決定「AeroCore 是計算 API」。元件設計（參數、檢查、JSON、質量估計）、`PistonEngineDesign` 與它執行時的控制規則
+（起動、怠速旁通、斷油、暖車）都搬到 hdfv（`dev.mcmod.hdfv.part.engine`，類型 `hdfv:piston_engine`）。
+AeroCore 留下下列計算，本文件其餘章節照原樣說明整具引擎：
+- 循環與標定：`EngineCycle`、`Dyno`、`Friction`。
+- 幾何與強度：`PistonGeometry`（壓縮比、氣門排列、燃燒室、火焰行程、曲軸系慣量）、`EngineStrength`（活塞頂、連桿）。
+- MAP 建立器：`EngineMap`。
+- 執行時關係：`EngineRuntime`（扭力、背壓、濾清器、歧管充放）、`ValveFlow.injectorFlow`、`HeatTransfer.finnedCoreRejection`（散熱器）。
+
 ## 元件與參數
 
 每個元件是一份玩家自己的藍圖（`EngineComponent`）：參數自由、自己檢查不合物理的值、標示外推、依幾何與材料估質量（也可以直接給質量）。
@@ -124,14 +132,15 @@ Patton、Nitschke、Heywood（SAE 890836，1989）的元件模型，用 Sandoval
 | `nearlyInstantAdiabaticCombustionGivesTheFuelAirOttoEfficiency` | 絕熱瞬間燃燒的功對獨立算的燃料－空氣 Otto 循環（0.6 % 內） |
 | `frictionOfAV6IsInSandovalsRangeAndRoughlyDoublesWhenCold` | 3.0 L V6 於 2000 rpm 的 fmep 與冷熱比（Sandoval 圖 4-15：約 90 kPa、約 2.1 倍） |
 | `aWarmFourValveEngineHasTextbookEfficiencyAndBreathing` | 指示效率 0.33～0.44、VE 0.82～1.05、殘餘 2～10 %、最高壓力 50～100 bar |
-| `EngineDesignTest.theSampleEngineIsValidAndItsBlueprintRoundTrips` | 範例引擎有效、JSON 往返 |
+| （hdfv）`EngineDesignTest.theSampleEngineIsValidAndItsBlueprintRoundTrips` | 範例引擎有效、JSON 往返 |
 | `compressionRatioComesFromChamberGasketDeckAndCrown` | 壓縮比隨凸頂、缸面切削改變（手算）；切過床墊即撞汽缸蓋 |
 | `partsThatDoNotFitEachOtherAreRejected` | 活塞大於缸徑、連桿不合曲柄銷、直噴配進氣道噴油嘴 |
 | `valvesMustFitTheBoreAndInclinationMakesRoom` | 35.5／30.5 mm 氣門在 86 mm 缸徑：平行放不下、40° 夾角放得下（手算） |
 | `theSampleEngineHasAProductionLikeFullLoadCurve` | 範例 2.0 L：最大 BMEP 10～13.5 bar、45～80 kW/L、全負荷最低 BSFC 240～320 g/kWh |
 | `itStartsIdlesRevsToItsLimiterSlowsAndStops` | 起動、怠速 ±300 rpm、全油門到斷油轉速、升溫、收油回落、關火停止、內部狀態存檔 |
 | `aColdEngineFightsMoreFriction` | 15 °C 的摩擦超過 90 °C 的 1.5 倍 |
-| GameTest `engineBoatStartsItsEngineAndDrivesAhead` | 範例引擎船：MAP 建好後自己起動、部分油門推船前進、3:1 齒輪 |
+| `EngineCalculationsTest`（AeroCore，0.20） | 壓縮比、凸頂與削缸面（手算）；35.5／30.5 mm 氣門在 86 mm 缸徑的排列；半球與平頂燃燒室面積、火焰行程的閉式解；活塞頂與連桿強度式；扭力、背壓、濾清器、歧管穩態；MAP 雙線性內插 |
+| （hdfv）GameTest `engineBoatStartsItsEngineAndDrivesAhead` | 範例引擎船：MAP 建好後自己起動、部分油門推船前進、3:1 齒輪 |
 
 範例引擎（86 × 86 mm、壓縮比 11、四氣門雙凸輪、進氣可變正時、350 mm 歧管、95 RON）：最大扭力約 206 Nm／4400 rpm、最大功率約 125 kW／7600 rpm，
 同級量產引擎約 190～200 Nm、140～150 kW；高轉的功率偏低。
@@ -144,3 +153,16 @@ Patton、Nitschke、Heywood（SAE 890836，1989）的元件模型，用 Sandoval
 - 增壓（渦輪、機械增壓）、柴油、轉子引擎、二行程尚未支援。
 - 火星塞間隙、熱值、電極材料、點火能量、潤滑系統的供油量與油溫分層、結構疲勞（只算連桿與活塞頂的估計強度）都還沒有模型。
 - 質量是幾何估計；元件材料性質是常溫手冊值，未計溫度降低的強度。
+
+## 壓縮點火與渦輪增壓（0.26）
+
+- 柴油汽缸是同一個曲軸角模擬，`Spec.compressionIgnition` 非 null 時：吸入的是空氣（直噴、無節氣門，lambda 是負載），
+  Conditions 的點火提前角是噴油開始；著火延遲用 Hardenberg–Hase（SAE 790493，Heywood 式 10.37，TDC 狀態以 n = 1.35 推算，
+  低於 13 bar 不著火）；燃燒是 Watson 的預混加擴散兩段（SAE 800029，Heywood 14.4.3，以 125° 正規化）；沒有爆震積分。
+- `Dyno` 對柴油先找最大扭矩的噴油時刻，再延後到峰值壓力不超過結構限制。
+- `DieselMap`：轉速×增壓比×當量比的三維圖，每點的排氣背壓由引擎（例如它的渦輪增壓器）依該點的流量修正一次。
+- `Turbocharger`：壓縮機用 `Turbomachinery` 的多變壓縮功；葉輪轉速給的最大壓比是滑移限制的 Euler 功；渦輪當孔口（排氣 R 287、γ 1.33）
+  加等熵效率；洩壓閥打開時只給壓縮機需要的功率；中冷器以有效度冷卻；`maxBoost` 是洩壓閥全關時渦輪撐得住的增壓。
+- 驗證（`DieselTest`）：Hardenberg–Hase 對手算 3.951°；Watson 的形狀與積分；85×88 mm、壓縮比 17 的汽缸在 2000 rpm、當量比 0.6：
+  指示平均有效壓力 8.1 bar、指示效率 45.6 %、噴油 8° BTDC、著火延遲 2.5°、峰壓 70 bar、排氣 840 K；增壓 2 倍時 IMEP 約 1.6～2.4 倍；
+  渦輪與壓縮機的功率平衡。

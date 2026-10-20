@@ -1,7 +1,8 @@
 package dev.mcmod.aerocore.api.engine;
 
 /**
- * Sub-models of a spark-ignition cycle: in-cylinder heat transfer, burn rate and knock.
+ * Sub-models of the engine cycle: in-cylinder heat transfer, burn rate and knock; for compression ignition (0.26)
+ * ignition delay and Watson's diesel burn (see the methods).
  * <ul>
  * <li>Heat transfer: Woschni, SAE 670931 (1967), as given by Heywood (1988) eq. 12.19-12.20:
  *   h = 3.26 B^-0.2 p^0.8 T^-0.55 w^0.8 (W/m^2 K; B m, p kPa, T K, w m/s), w = C1 S_p + C2 (V_d T_r / (p_r V_r)) (p - p_mot),
@@ -62,5 +63,62 @@ public final class Combustion {
     /** Douaud-Eyzat auto-ignition delay, seconds (p in Pa, T in K). */
     public static double ignitionDelay(double octane, double pressurePa, double temperatureK) {
         return 17.68e-3 * Math.pow(octane / 100, 3.402) * Math.pow(pressurePa / 101325, -1.7) * Math.exp(3800 / temperatureK);
+    }
+
+    // ---------------------------------------------------------------- compression ignition (0.26)
+
+    /** Watson's normalizing combustion duration, crank degrees. */
+    public static final double DIESEL_DURATION_DEG = 125;
+
+    /**
+     * Ignition delay of a diesel spray, crank degrees: Hardenberg and Hase, SAE 790493 (1979), as given by Heywood
+     * (1988) eq. 10.37: (0.36 + 0.22 S_p) exp[E_A (1 / (R T) - 1 / 17190) (21.2 / (p - 12.4))^0.63], E_A = 618840 /
+     * (CN + 25) J/mol, with the charge's temperature (K) and pressure (bar) at TDC (polytropic compression, n = 1.35).
+     * Below 13 bar the correlation's pressure term blows up: the charge does not light.
+     */
+    public static double dieselIgnitionDelayDeg(double meanPistonSpeed, double temperatureK, double pressurePa, double cetane) {
+        double bar = pressurePa / 1e5;
+        if (bar <= 13) { return Double.POSITIVE_INFINITY; }
+        double ea = 618840 / (Math.max(cetane, 1) + 25);
+        double arg = ea * (1 / (8.3143 * temperatureK) - 1 / 17190.0) * Math.pow(21.2 / (bar - 12.4), 0.63);
+        return (0.36 + 0.22 * meanPistonSpeed) * Math.exp(arg);
+    }
+
+    /**
+     * The share of a diesel's fuel burned premixed (Watson, Pilley and Marzouk, SAE 800029, 1980, as given by
+     * Heywood section 14.4.3): 1 - 0.926 phi^0.37 / tau_id^0.26 with tau_id the ignition delay in ms; a longer delay
+     * lets more fuel mix before it lights. Kept within 0.02-0.95.
+     */
+    public static double premixedFraction(double phi, double delayMs) {
+        return Math.clamp(1 - 0.926 * Math.pow(Math.max(phi, 1e-3), 0.37) / Math.pow(Math.max(delayMs, 1e-3), 0.26), 0.02, 0.95);
+    }
+
+    /**
+     * Watson's diesel burn, the fraction burned at tau (time since ignition over the 125-degree duration): a premixed
+     * part 1 - (1 - tau^C1)^C2 and a diffusion part 1 - exp(-C3 tau^C4), weighted by the premixed fraction; C1 = 2 +
+     * 1.25e-8 (tau_id N)^2.4 (ms, rpm), C2 = 5000, C3 = 14.2 / phi^0.644, C4 = 0.79 C3^0.25.
+     */
+    public record DieselBurn(double premixed, double c1, double c3, double c4) {
+        public static final double C2 = 5000;
+
+        public static DieselBurn of(double phi, double delayMs, double rpm) {
+            double c3 = 14.2 / Math.pow(Math.max(phi, 1e-3), 0.644);
+            return new DieselBurn(premixedFraction(phi, delayMs), 2 + 1.25e-8 * Math.pow(delayMs * rpm, 2.4), c3, 0.79 * Math.pow(c3, 0.25));
+        }
+
+        /** Fraction burned at tau. */
+        public double burned(double tau) {
+            if (tau <= 0) { return 0; }
+            double t = Math.min(tau, 1);
+            return premixed * (1 - Math.pow(1 - Math.pow(t, c1), C2)) + (1 - premixed) * (1 - Math.exp(-c3 * Math.pow(t, c4)));
+        }
+
+        /** d(burned)/d(tau). */
+        public double rate(double tau) {
+            if (tau <= 0 || tau >= 1) { return 0; }
+            double premixedRate = C2 * Math.pow(1 - Math.pow(tau, c1), C2 - 1) * c1 * Math.pow(tau, c1 - 1);
+            double diffusionRate = c3 * c4 * Math.pow(tau, c4 - 1) * Math.exp(-c3 * Math.pow(tau, c4));
+            return premixed * premixedRate + (1 - premixed) * diffusionRate;
+        }
     }
 }

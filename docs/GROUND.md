@@ -1,6 +1,7 @@
-# 地面載具：輪胎、滾動阻力與軟地面（0.16，`GroundContact`、`GroundSurfaces`）
+# 地面載具：輪胎、滾動阻力與軟地面（0.16，`GroundContact`、`GroundSurfaces`；0.24 地面查詢 `api.ground`）
 
-給之後的陸上載具使用的物理 API。遊戲裡還沒有可駕駛的陸上載具，0.16 先提供模型、方塊對應與 `/aerocore ground` 查詢。
+給陸上載具使用的物理 API。0.16 提供模型、方塊對應與 `/aerocore ground` 查詢；0.24 加入車輪用的地面射線（本頁末），
+輪胎、車輪與懸吊見 [WHEELS.md](WHEELS.md)（0.24 的 `Tyre` 由尺寸與胎壓算出剛性與曲線，下面 0.16 的固定係數 `GroundContact.tyreForces` 照舊保留）。
 
 ## 輪胎（Magic Formula）
 
@@ -63,3 +64,16 @@
 - 轎車輪在乾沙：下陷 0.100 m、壓實阻力 0.29 倍載重（Wong：沙 0.15～0.3）、牽引力以摩擦為主；硬土滾動阻力介於 0.03～0.1（Wong 中硬土 0.08）。
 - Janosi–Hanamoto 剪力隨位移增加。
 - GameTest：沙、冰、草、雪、石頭對應到正確的地面。
+
+## 地面查詢（0.24，`api.ground`）
+
+- `Ground.cast(from, direction, maxM)`：射線遇到的第一個地面（點、朝外的法線、距離、路面、地面的速度），沒有則 null；
+  從地面裡面開始的射線距離 0、法線取最近的面。`VehicleEnvironment.ground()`（預設沒有地面），`withGround`，`land(ground, air)`（離線用的乾地）。
+- 離線形狀：`Ground.flat`、`plane`（坡）、`split`（左右不同路面）、`boxes`（`BoxGround`：路緣、台階；`BoxGround.stairs` 是路面坡道方塊那種 1/16 m 細階梯）、
+  `nearest`（取最近的）。
+- 遊戲：`WorldGround`（neoforge）沿射線走過的方塊格（Amanatides–Woo），切每個方塊的碰撞形狀，所以半磚、樓梯、雪層、地毯、多盒形狀照實際；
+  每格也試它下面一格（柵欄、牆高 1.5 m）。路面用 `GroundSurfaces`（淋雨時濕）。未載入的區塊不是地面（不會因此載入區塊）。
+  形狀與路面每 tick 快取一次（`PartVehicle` 在 `beginTick` 清除）。
+- `/aerocore ground` 多一行：從腳上 1 m 垂直往下的車輪射線碰到的高度、坡度與路面。
+- 驗證：`GroundTest`（地板、坡、左右路面、方塊的面與內部、階梯高度與最近者）；GameTest `wheelRaysFollowBlockShapesAndSurfaces`
+  （石頭 1、半磚 0.5、四層雪 0.375、柵欄 1.5 m、冰／沙／泥土／石頭的路面、方塊側面的法線）。

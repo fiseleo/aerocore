@@ -29,7 +29,7 @@ public record DesignIssue(Kind kind, String parameter, double value, double min,
     }
 
     /** Checks that a value lies in [min, max], adding an EXTRAPOLATION issue when it does not. */
-    static void range(java.util.List<DesignIssue> issues, String parameter, double value, double min, double max, String source) {
+    public static void range(java.util.List<DesignIssue> issues, String parameter, double value, double min, double max, String source) {
         if (value < min || value > max) { issues.add(extrapolation(parameter, value, min, max, source)); }
     }
 

@@ -46,10 +46,18 @@ public final class VehicleNetwork {
     }
 
     static void register(RegisterPayloadHandlersEvent event) {
-        event.registrar("1").playToServer(ControlsPayload.TYPE, ControlsPayload.STREAM_CODEC, (payload, context) -> {
+        var registrar = event.registrar("1");
+        registrar.playToServer(ControlsPayload.TYPE, ControlsPayload.STREAM_CODEC, (payload, context) -> {
             if (!(context.player() instanceof ServerPlayer player)) { return; }
             Entity entity = player.level().getEntity(payload.entityId());
             if (entity instanceof PartVehicle vehicle && vehicle.canControl(player)) { vehicle.setControls(payload.controls()); }
+        });
+        // 0.37: loud vehicles beyond the tracking range
+        registrar.playToClient(FarSounds.FarPayload.TYPE, FarSounds.FarPayload.CODEC, (payload, context) -> FarSounds.received(payload));
+        // 0.37: a vehicle's impact, to the players tracking it
+        registrar.playToClient(VehicleContacts.ImpactPayload.TYPE, VehicleContacts.ImpactPayload.STREAM_CODEC, (payload, context) -> {
+            Entity entity = context.player().level().getEntity(payload.entityId());
+            if (entity instanceof PartVehicle vehicle) { VehicleContacts.received(vehicle, payload.impact()); }
         });
     }
 

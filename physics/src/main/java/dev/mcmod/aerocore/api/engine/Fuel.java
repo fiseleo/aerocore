@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * A spark-ignition fuel: atoms per "molecule" (C_alpha H_beta O_gamma), lower heating value, heat of vaporization
+ * A fuel: atoms per "molecule" (C_alpha H_beta O_gamma; 0.28 allows no carbon, for hydrogen), lower heating value, heat of vaporization
  * (zero for a fuel that reaches the engine as a gas), research and motor octane numbers, liquid density (for injector
  * flow; propane as the liquid under tank pressure) and its laminar burning velocity correlation.
  * <p>
@@ -40,7 +40,7 @@ public record Fuel(String name, double carbon, double hydrogen, double oxygen, d
     public Fuel {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(flameSpeed, "flameSpeed");
-        if (!(carbon > 0) || !(hydrogen >= 0) || !(oxygen >= 0)) { throw new IllegalArgumentException("Fuel needs carbon and nonnegative H, O"); }
+        if (!(carbon >= 0) || !(hydrogen >= 0) || !(oxygen >= 0) || !(carbon + hydrogen > 0)) { throw new IllegalArgumentException("Fuel needs carbon or hydrogen, and nonnegative C, H, O"); }
         if (!(lowerHeatingValueJPerKg > 0) || !(vaporizationHeatJPerKg >= 0)) { throw new IllegalArgumentException("Heating values must be positive"); }
         if (!(researchOctane > 0) || !(motorOctane > 0)) { throw new IllegalArgumentException("Octane numbers must be positive"); }
         if (!(liquidDensityKgPerM3 > 0)) { throw new IllegalArgumentException("Liquid density must be positive"); }
@@ -62,6 +62,68 @@ public record Fuel(String name, double carbon, double hydrogen, double oxygen, d
     public static final Fuel KEROSENE = new Fuel("kerosene", 12, 23, 0, 43.2e6, 360e3, 15, 15, 800, GASOLINE_FLAME);
     /** Isooctane C8H18, the 100-octane reference fuel: LHV 44.3 MJ/kg, 308 kJ/kg. */
     public static final Fuel ISOOCTANE = new Fuel("isooctane", 8, 18, 0, 44.3e6, 308e3, 100, 100, 692, new FlameSpeed(0.2632, -0.8472, 1.13, false));
+    /**
+     * Diesel fuel (0.26) as C12.3H22.2 (Heywood, appendix D, light diesel): LHV 42.8 MJ/kg (EN 590 fuels 42.6-43.0),
+     * density 840 kg/m^3, heat of vaporization about 250 kJ/kg; cetane number about 51, octane numbers about 25 and 20
+     * (it knocks at once in a spark-ignition engine).
+     */
+    public static final Fuel DIESEL = new Fuel("diesel", 12.3, 22.2, 0, 42.8e6, 250e3, 25, 20, 840, GASOLINE_FLAME);
+    /** Heavy fuel oil (0.26) as CH1.5: LHV 40.5 MJ/kg, density 980 kg/m^3 (ISO 8217 residual grades); burned in boilers and heaters. */
+    public static final Fuel FUEL_OIL = new Fuel("fuel_oil", 1, 1.5, 0, 40.5e6, 230e3, 10, 10, 980, GASOLINE_FLAME);
+    /**
+     * Hydrogen H2 (0.28), burned as a gas (liquid hydrogen is vaporized before it reaches the burner): LHV 119.96 MJ/kg,
+     * stoichiometric air-fuel ratio 34.3; density of the liquid at its normal boiling point 70.85 kg/m^3 (NIST). Its
+     * laminar burning velocity peaks near 3.0 m/s at phi 1.8 and is about 2.1 m/s at phi 1 (Dahoe, J. Loss Prev. 18
+     * (2005) 152, a review of measurements), fitted to the same quadratic as the other fuels; the exponents are
+     * Metghalchi and Keck's (a rough stand-in: hydrogen burns in jets and ramjets here, not in spark-ignition engines).
+     * Research octane above 130, motor octane about 60 (it knocks readily in an engine under load).
+     */
+    public static final Fuel HYDROGEN = new Fuel("hydrogen", 0, 2, 0, 119.96e6, 0, 130, 60, 70.85, new FlameSpeed(3.0, -1.406, 1.8, false));
+
+    /**
+     * Cetane number (0.26), how readily the fuel lights by compression: the presets' typical values (diesel 51, Jet A
+     * kerosene 45, residual fuel oil 35 (by its CCAI), gasoline and isooctane about 15, propane 5, methanol 3).
+     */
+    public double cetaneNumber() {
+        return switch (name) {
+            case "diesel" -> 51;
+            case "kerosene" -> 45;
+            case "fuel_oil" -> 35;
+            case "propane", "hydrogen" -> 5;
+            case "methanol" -> 3;
+            default -> 15;
+        };
+    }
+
+    /**
+     * Autoignition delay of the fuel in hot air (0.28), s, at static temperature T (K) and pressure p (Pa): how long a
+     * fuel-air mixture takes to light by itself, what decides whether a scramjet's combustor lights in its residence time.
+     * Hydrogen: tau = 8e-9 exp(9600 / T) / p(atm) s (Pergament's correlation as used by Huber, Schexnayder and
+     * McClinton, NASA TP-1457, 1979). Hydrocarbons: Spadaccini and TeVelde's Jet A / JP-4 fit (NASA CR-159886, 1980),
+     * tau = 1.68e-8 exp(37 780 / (1.987 T)) / p(atm) ms, global activation energy 38 kcal/mol (their data 650-1000 K, 10-30
+     * atm; the pressure exponent is uncertain, 0.9-1.8 in other work), used for every hydrocarbon here.
+     */
+    public double ignitionDelayS(double temperatureK, double pressurePa) {
+        if (!(temperatureK > 0) || !(pressurePa > 0)) { throw new IllegalArgumentException("Temperature and pressure must be positive"); }
+        double atm = pressurePa / 101325;
+        if (carbon == 0) { return 8e-9 * Math.exp(9600 / temperatureK) / atm; }
+        return 1.68e-8 * Math.exp(37780 / (1.987 * temperatureK)) / atm * 1e-3;
+    }
+
+    /** A preset by name ("gasoline" is RON 95, MON 85); null when there is none. */
+    public static Fuel byName(String name) {
+        return switch (name) {
+            case "gasoline" -> gasoline(95, 85);
+            case "methanol" -> METHANOL;
+            case "propane", "lpg" -> PROPANE;
+            case "kerosene" -> KEROSENE;
+            case "isooctane" -> ISOOCTANE;
+            case "diesel" -> DIESEL;
+            case "fuel_oil" -> FUEL_OIL;
+            case "hydrogen", "liquid_hydrogen" -> HYDROGEN;
+            default -> null;
+        };
+    }
 
     /** Mass of one "molecule" C_alpha H_beta O_gamma, kg/mol. */
     public double molarMass() { return carbon * 0.012011 + hydrogen * 0.0010079 + oxygen * 0.0159994; }

@@ -34,4 +34,6 @@ public record InertiaTensor(double xx, double yy, double zz, double xy, double x
     }
     public Vec3d applyWorld(Orientation q, Vec3d v) { return q.rotate(apply(q.inverse().rotate(v))); }
     public Vec3d solveWorld(Orientation q, Vec3d v) { return q.rotate(solve(q.inverse().rotate(v))); }
+    /** 0.30: solveWorld with q's inverse given (q.inverse(), kept by a caller that solves often with one q): the same result. */
+    public Vec3d solveWorld(Orientation q, Orientation inverse, Vec3d v) { return q.rotate(solve(inverse.rotate(v))); }
 }

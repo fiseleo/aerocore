@@ -8,3 +8,17 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+
+// Published to a Maven folder inside the workspace for mods that build against AeroCore (.\dev.ps1 publish).
+apply plugin: 'maven-publish'
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId = 'aerocore-physics'
+            from components.java
+        }
+    }
+    // build/repo in the project, not under the build directory (on this computer's disk, root build.gradle): hdfv and the
+    // other computer read it there.
+    repositories { maven { name = 'workspace'; url = rootProject.file('build/repo') } }
+}

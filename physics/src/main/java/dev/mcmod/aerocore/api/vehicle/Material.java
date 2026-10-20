@@ -29,16 +29,16 @@ public record Material(String name, double densityKgPerM3) {
         if (!Double.isFinite(densityKgPerM3)) { throw new IllegalArgumentException("Density must be finite"); }
     }
 
-    void check(List<DesignIssue> issues, String parameter) {
+    public void check(List<DesignIssue> issues, String parameter) {
         if (!(densityKgPerM3 > 0)) { issues.add(DesignIssue.invalid(parameter + ".density", "Material density must be positive")); }
     }
 
-    Map<String, Object> toJson() {
+    public Map<String, Object> toJson() {
         return Fields.object("name", name, "density", densityKgPerM3);
     }
 
     /** {"name", "density"}; a standard name alone gives its density. */
-    static Material fromJson(Object value, String path) {
+    public static Material fromJson(Object value, String path) {
         if (value instanceof String s) { return standard(s, path); }
         Fields f = Fields.of(value, path);
         String name = f.string("name", "custom");

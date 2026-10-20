@@ -1,0 +1,6 @@
+{
+  "aerocore:plain": { "texture": "minecraft:textures/block/white_concrete.png", "tile": 0.5, "gloss": 0.3, "metal": 0 },
+  "aerocore:paint": { "texture": "minecraft:textures/block/white_concrete.png", "tile": 0.5, "gloss": 0.55, "metal": 0 },
+  "aerocore:metal": { "texture": "minecraft:textures/block/white_concrete.png", "tile": 0.5, "gloss": 0.6, "metal": 1 },
+  "aerocore:rubber": { "texture": "minecraft:textures/block/white_concrete.png", "tile": 0.5, "gloss": 0.1, "metal": 0 }
+}

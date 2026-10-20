@@ -8,6 +8,9 @@ import java.util.List;
  * the spark is set for best torque (MBT, golden-section search on net IMEP), then, with knock control, retarded until
  * the end-gas knock integral at 90 % burned stays below the margin. Without knock control the spark stays at MBT
  * (capped by the ignition system's maximum advance) and the point is reported as knocking.
+ * <p>A diesel (0.26): the spark advance is the start of injection, set for best torque, then retarded until the peak
+ * pressure is within the engine's limit; knockLimited then means limited by peak pressure, knocking that even the latest
+ * injection tried exceeds it.
  */
 public final class Dyno {
     private Dyno() {}
@@ -28,7 +31,7 @@ public final class Dyno {
     public record Point(double rpm, double manifoldPressurePa, double sparkAdvanceDeg, double mbtAdvanceDeg, boolean knockLimited,
                         boolean knocking, EngineCycle.Result cycle) {}
 
-    /** Calibrates one point; exhaust back pressure from the exhaust system (Pa above ambient) and ambient pressure. */
+    /** Calibrates one point at a manifold pressure, intake temperature and exhaust port pressure (absolute, Pa). */
     public static Point operate(EngineCycle.Spec spec, double rpm, double manifoldPressurePa, double intakeTemperatureK,
                                 double exhaustPressurePa, SparkControl control) {
         EngineCycle.Conditions base = new EngineCycle.Conditions(rpm, manifoldPressurePa, intakeTemperatureK, exhaustPressurePa, 20);
@@ -46,6 +49,25 @@ public final class Dyno {
         double mbt = ra.netImep() > rb.netImep() ? a : b;
         double advance = mbt;
         boolean limited = false;
+        if (spec.diesel()) {
+            // a diesel's injection is retarded until the peak pressure is within the structure's limit (0.26)
+            double limit = spec.compressionIgnition().peakPressureLimitPa();
+            if (at.apply(mbt).peakPressurePa() > limit) {
+                limited = true;
+                double safe = -10, unsafe = mbt;
+                if (at.apply(safe).peakPressurePa() > limit) { advance = safe; }
+                else {
+                    while (unsafe - safe > 0.5) {
+                        double mid = 0.5 * (safe + unsafe);
+                        if (at.apply(mid).peakPressurePa() > limit) { unsafe = mid; } else { safe = mid; }
+                    }
+                    advance = safe;
+                }
+            }
+            EngineCycle.Result r = EngineCycle.run(spec, new EngineCycle.Conditions(rpm, manifoldPressurePa, intakeTemperatureK, exhaustPressurePa, advance),
+                    warm.warm(), 2).result();
+            return new Point(rpm, manifoldPressurePa, advance, mbt, limited, r.peakPressurePa() > limit, r);
+        }
         if (control.knockControl() && at.apply(mbt).knockMargin() >= control.knockMargin()) {
             limited = true;
             double safe = -10, unsafe = mbt;

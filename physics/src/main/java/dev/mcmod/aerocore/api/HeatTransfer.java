@@ -97,6 +97,21 @@ public final class HeatTransfer {
         double nusselt=Math.cbrt(forced*forced*forced+natural*natural*natural);
         return nusselt*fluid.thermalConductivityWPerMK()/diameterM*Math.PI*diameterM*diameterM;
     }
+    /**
+     * Heat (W) a finned core (radiator, cooling fins) at a hot temperature rejects to air passing it at a speed (m/s)
+     * over a frontal area: effectiveness-NTU with the hot side much larger than the air side,
+     * epsilon = 1 - exp(-h A / C_air) (Incropera, Fundamentals of Heat and Mass Transfer, ch. 11), the air-side
+     * coefficient from laminar flow along fins of a flow length, Nu = 0.664 Re^0.5 Pr^(1/3) (Pr 0.71, c_p 1005 J/(kg K)).
+     */
+    public static double finnedCoreRejection(double surfaceAreaM2,double frontalAreaM2,double flowLengthM,double airSpeedMps,double hotKelvin,
+                                             double airKelvin,double airDensity,double airViscosity,double airConductivity) {
+        if(hotKelvin<=airKelvin||airSpeedMps<=0){return 0;}
+        double nu=airViscosity/airDensity,re=airSpeedMps*flowLengthM/nu,pr=0.71;
+        double h=0.664*airConductivity/flowLengthM*Math.sqrt(re)*Math.cbrt(pr);
+        double cAir=airDensity*airSpeedMps*frontalAreaM2*1005;
+        double effectiveness=1-Math.exp(-h*surfaceAreaM2/cAir);
+        return effectiveness*cAir*(hotKelvin-airKelvin);
+    }
     /** Exact two finite-body exchange. Equal/opposite heat, without temperature overshoot. */
     public static Pair exchange(Body a,Body b,double conductanceWPerK,double dt) {
         Checks.nonnegative(conductanceWPerK,"Conductance");Checks.positive(dt,"Time step");

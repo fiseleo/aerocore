@@ -15,7 +15,7 @@ public final class DesignException extends IllegalArgumentException {
     public List<DesignIssue> issues() { return issues; }
 
     /** Throws when any issue is INVALID. */
-    static void throwIfInvalid(List<DesignIssue> issues) {
+    public static void throwIfInvalid(List<DesignIssue> issues) {
         if (issues.stream().anyMatch(i -> i.kind() == DesignIssue.Kind.INVALID)) { throw new DesignException(issues); }
     }
 }

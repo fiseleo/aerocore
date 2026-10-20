@@ -37,4 +37,12 @@ public final class ValveFlow {
         double a = Math.PI * boreM * boreM / 4 * (1 - Math.cos(angleRad) / Math.cos(closedRad));
         return Math.max(0, a);
     }
+
+    /**
+     * Volume flow (m^3/s) of a fuel injector held open: its static flow (m^3/s) at its rated pressure difference,
+     * scaled with the square root of the actual pressure difference (a fixed orifice, Bernoulli).
+     */
+    public static double injectorFlow(double staticFlowM3PerS, double ratedPressurePa, double pressurePa) {
+        return staticFlowM3PerS * Math.sqrt(Math.max(0, pressurePa) / ratedPressurePa);
+    }
 }

@@ -3,22 +3,18 @@ package dev.mcmod.aerocore.neoforge.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
-import dev.mcmod.aerocore.api.HullSection;
 import dev.mcmod.aerocore.api.Orientation;
-import dev.mcmod.aerocore.api.PlaningHull;
-import dev.mcmod.aerocore.api.SlenderHull;
 import dev.mcmod.aerocore.api.Vec3d;
-import dev.mcmod.aerocore.api.vehicle.BallastDesign;
-import dev.mcmod.aerocore.api.vehicle.BoxDesign;
-import dev.mcmod.aerocore.api.vehicle.ControlSurfaceDesign;
-import dev.mcmod.aerocore.api.vehicle.FloatDesign;
-import dev.mcmod.aerocore.api.vehicle.HullDesign;
-import dev.mcmod.aerocore.api.vehicle.MotorDesign;
-import dev.mcmod.aerocore.api.vehicle.PartDesign;
-import dev.mcmod.aerocore.api.vehicle.PlaningHullDesign;
-import dev.mcmod.aerocore.api.vehicle.PropellerDesign;
-import dev.mcmod.aerocore.api.vehicle.SeatDesign;
+import dev.mcmod.aerocore.api.vehicle.Part;
 import dev.mcmod.aerocore.api.vehicle.Vehicle;
+import dev.mcmod.aerocore.api.vehicle.part.BoxPart;
+import dev.mcmod.aerocore.api.vehicle.part.ControlSurfacePart;
+import dev.mcmod.aerocore.api.vehicle.part.HullPart;
+import dev.mcmod.aerocore.api.vehicle.part.MassPart;
+import dev.mcmod.aerocore.api.vehicle.part.MotorPart;
+import dev.mcmod.aerocore.api.vehicle.part.PlaningHullPart;
+import dev.mcmod.aerocore.api.vehicle.part.PropellerPart;
+import dev.mcmod.aerocore.api.vehicle.part.SpherePart;
 import dev.mcmod.aerocore.neoforge.AeroCore;
 import dev.mcmod.aerocore.neoforge.vehicle.PartVehicle;
 import dev.mcmod.aerocore.neoforge.vehicle.VehicleRegistry;
@@ -26,7 +22,6 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -40,18 +35,93 @@ import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
- * A plain look for any part-built vehicle, generated from its blueprint: lofted hulls, spheres for floats, boxes,
- * turning propellers, deflecting control surfaces. AeroCore uses it for its own vehicle type; a vehicle mod normally
- * draws its parts its own way, but may register this for its types too (new PartVehicleRenderer(context)).
+ * A plain look for any part-built vehicle, drawn part by part with the PartRenderer registered for each part's class:
+ * AeroCore's own parts as lofted hulls, spheres for floats, boxes, turning propellers and deflecting control surfaces;
+ * a vehicle mod registers renderers for its part classes, or draws its vehicles its own way. AeroCore uses it for its
+ * vehicle type; a vehicle mod may register it for its types too (new PartVehicleRenderer(context)).
  */
 @EventBusSubscriber(modid = AeroCore.MOD_ID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
 public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
-    private static final ResourceLocation TEXTURE = ResourceLocation.withDefaultNamespace("textures/block/white_concrete.png");
-    private static final int AROUND = 24, HULL = 0xffd9d6cc, BOTTOM = 0xff9b3b30, FLOAT = 0xffc9502e, BOX = 0xffb5895a, METAL = 0xff8a8f96,
-            BLADE = 0xffc8913a, MOTOR = 0xff3d4a5c, BALLAST = 0xff2f2f2f, SEAT = 0xff5a7a3a;
-    private record Quad(Vec3d a, Vec3d b, Vec3d c, Vec3d d, int color, Vec3d normal) {}
-    /** The parts that do not move, in the vehicle frame, by compiled vehicle. */
-    private static final Map<Vehicle, List<Quad>> STATIC = new WeakHashMap<>();
+    private static final ResourceLocation TEXTURE = PartMesh.TEXTURE;
+    private static final int FLOAT = 0xffc9502e, BOX = 0xffb5895a, METAL = 0xff8a8f96, BLADE = 0xffc8913a, MOTOR = 0xff3d4a5c, BALLAST = 0xff2f2f2f,
+            SEAT = 0xff5a7a3a;
+    /**
+     * 0.29: the level of detail each part was last drawn at (changes with some hysteresis, so it does not flicker);
+     * 0.30: by vehicle and part id (a compiled part is shared by every vehicle of a design, which would fight over one).
+     */
+    private static final Map<PartVehicle, Map<String, Integer>> LEVEL = new WeakHashMap<>();
+    /** Projected size (radius over distance) above which a part is drawn at level 0, and at level 1. */
+    private static final double LEVEL_0 = 0.06, LEVEL_1 = 0.02, HYSTERESIS = 1.2;
+
+    static {
+        PartRenderer.registerDefault(HullPart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) { out.loft(((HullPart) part).hull(), Double.NaN); }
+        });
+        PartRenderer.registerDefault(PlaningHullPart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) {
+                PlaningHullPart p = (PlaningHullPart) part;
+                out.loft(p.planing().hull(), p.chineBeamM() / 2 * Math.tan(Math.toRadians(p.deadriseDeg())));
+            }
+        });
+        PartRenderer.registerDefault(SpherePart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) { out.sphere(((SpherePart) part).radiusM(), FLOAT); }
+        });
+        PartRenderer.registerDefault(BoxPart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) { Vec3d s = ((BoxPart) part).sizeM(); out.box(s.scale(-0.5), s.scale(0.5), BOX); }
+        });
+        PartRenderer.registerDefault(MotorPart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) { cube(out, Math.cbrt(part.mass().massKg() / 4000) / 2, MOTOR); }   // a motor's overall density, roughly
+        });
+        PartRenderer.registerDefault(MassPart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) {
+                if (!part.seats().isEmpty()) { out.box(new Vec3d(-0.2, 0, -0.2), new Vec3d(0.2, 0.08, 0.2), SEAT); }
+                else { cube(out, Math.cbrt(part.mass().massKg() / 11340) / 2, BALLAST); }   // drawn as lead
+            }
+        });
+        // 0.30: a propeller and a control surface are one baked piece each (MeshBuilder.piece 1), turned by the renderer
+        PartRenderer.registerDefault(PropellerPart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) {
+                PropellerPart p = (PropellerPart) part;
+                double d = p.diameterM(), r = d / 2, hub = p.hubRatio() * r, chord = p.chordRatio() * d;
+                out.piece(1).box(new Vec3d(-0.15 * d, -hub, -hub), new Vec3d(0.15 * d, hub, hub), METAL);
+                PartMesh blade = new PartMesh().piece(1).box(new Vec3d(-0.01, hub, -chord / 2), new Vec3d(0.01, r, chord / 2), BLADE);
+                for (int b = 0; b < p.blades(); b++) {
+                    Orientation turn = Orientation.rotationVector(Vec3d.X.scale(2 * Math.PI * b / p.blades()))
+                            .multiply(Orientation.rotationVector(Vec3d.Y.scale(Math.atan(p.pitchRatio() / (0.7 * Math.PI)))));
+                    out.add(blade, turn, Vec3d.ZERO);
+                }
+                out.piece(0);
+            }
+
+            @Override public void animate(Part part, PartVehicle entity, String partId, int firstRotor, float partialTick, PoseStack stack, PartLayers layers, int light, Drawn drawn) {
+                if (drawn == null) { return; }
+                stack.pushPose();
+                stack.mulPose(Axis.XP.rotation((float) entity.rotorAngle(firstRotor, partialTick)));
+                layers.draw(drawn.piece(1), stack, light);
+                stack.popPose();
+            }
+        });
+        PartRenderer.registerDefault(ControlSurfacePart.class, new PartRenderer() {
+            @Override public void mesh(Part part, PartMesh out) {
+                ControlSurfacePart s = (ControlSurfacePart) part;
+                double t = s.thicknessRatio() * s.chordM() / 2;
+                out.piece(1).box(new Vec3d(-0.75 * s.chordM(), -s.spanM() / 2, -t), new Vec3d(0.25 * s.chordM(), s.spanM() / 2, t), METAL).piece(0);
+            }
+
+            @Override public void animate(Part part, PartVehicle entity, String partId, int firstRotor, float partialTick, PoseStack stack, PartLayers layers, int light, Drawn drawn) {
+                if (drawn == null) { return; }
+                ControlSurfacePart s = (ControlSurfacePart) part;
+                double angle = Math.clamp(entity.input(partId, "deflection"), -1, 1) * Math.toRadians(s.maxDeflectionDeg());
+                // Positive turns the trailing edge (aft, -x) toward +z.
+                stack.pushPose();
+                stack.mulPose(Axis.YP.rotation((float) angle));
+                layers.draw(drawn.piece(1), stack, light);
+                stack.popPose();
+            }
+        });
+    }
+
+    private static void cube(PartMesh out, double half, int color) { out.box(new Vec3d(-half, -half, -half), new Vec3d(half, half, half), color); }
 
     public PartVehicleRenderer(EntityRendererProvider.Context context) { super(context); shadowRadius = 1f; }
 
@@ -63,46 +133,128 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
         Vehicle vehicle = entity.vehicle();
         if (vehicle != null) {
             stack.pushPose();
+            // 0.36: a follower drawn with its coupling point on its leader's as that is drawn
+            Vec3d shift = entity.drawnShift(partialTick);
+            if (shift.lengthSquared() > 0) { stack.translate(shift.x(), shift.y(), shift.z()); }
             Orientation q = entity.visualOrientation(partialTick);
             stack.mulPose(new Quaternionf((float) q.x(), (float) q.y(), (float) q.z(), (float) q.w()));
             Vec3d com = vehicle.properties().centerOfMassLocal();
             stack.translate(-com.x(), -com.y(), -com.z());
-            VertexConsumer out = buffers.getBuffer(RenderType.entitySolid(TEXTURE));
-            for (Quad quad : staticMesh(vehicle)) {
-                for (Vec3d corner : new Vec3d[]{quad.a(), quad.b(), quad.c(), quad.d()}) { vertex(out, stack, corner, quad.color(), quad.normal(), light); }
-            }
+            PartLayers layers = new PartLayers().gpu(true).late(true);   // the parts' bakes drawn from the GPU (PartGpu); glass after water (0.30)
+            net.minecraft.world.phys.Vec3 at = entity.getPosition(partialTick).add(shift.x(), shift.y(), shift.z());
+            net.minecraft.world.phys.Vec3 camera = net.minecraft.client.Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
             int rotor = 0;
+            boolean beautify = Beautify.on();
+            shadowRadius = beautify ? 0 : 1f;   // 0.39: the contact shadow takes the place of Minecraft's round one
+            List<double[]> near = new ArrayList<>();   // parts' boxes (vehicle frame from the centre of mass), for the shadow
             for (Vehicle.Installed installed : vehicle.installed()) {
-                PartDesign design = installed.part().design();
-                if (design instanceof PropellerDesign p) {
+                Part part = installed.part();
+                PartRenderer renderer = PartRenderer.of(part);
+                if (renderer != null) {
                     stack.pushPose();
                     mount(stack, installed);
-                    stack.mulPose(Axis.XP.rotation((float) entity.rotorAngle(rotor, partialTick)));
-                    double r = p.diameterM() / 2, hub = p.hubRatio() * r, chord = p.chordRatio() * p.diameterM();
-                    box(out, stack, -0.15 * p.diameterM(), -hub, -hub, 0.15 * p.diameterM(), hub, hub, METAL, light);
-                    for (int b = 0; b < p.blades(); b++) {
-                        stack.pushPose();
-                        stack.mulPose(Axis.XP.rotation((float) (2 * Math.PI * b / p.blades())));
-                        stack.mulPose(Axis.YP.rotation((float) Math.atan(p.pitchRatio() / (0.7 * Math.PI))));
-                        box(out, stack, -0.01, hub, -chord / 2, 0.01, r, chord / 2, BLADE, light);
-                        stack.popPose();
+                    MeshBakery.Baked baked = MeshBakery.get(part, () -> {
+                        PartMesh local = new PartMesh();
+                        renderer.mesh(part, local);
+                        return local;
+                    }, renderer.bake(part));
+                    int partLight = light;
+                    PartRenderer.Drawn drawnNow = null;
+                    if (baked != null && baked.radius() > 0) {
+                        // where the part is in the world: its own light and how big it looks
+                        Vec3d local = installed.mount().position().add(installed.rotation().rotate(baked.centre())).subtract(com);
+                        if (beautify) { near.add(box(installed, baked, com)); }
+                        Vec3d offset = q.rotate(local);
+                        double wx = at.x + offset.x(), wy = at.y + offset.y(), wz = at.z + offset.z();
+                        partLight = lightAt(entity, wx, wy, wz, light);
+                        double dx = wx - camera.x, dy = wy - camera.y, dz = wz - camera.z;
+                        double distance = Math.max(1e-3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+                        int levelNow = level(entity, installed.id(), baked.radius() / distance, baked.levels().length - 1);
+                        var drawn = baked.level(levelNow);
+                        float[] lampLevels = new float[baked.lamps().size()];
+                        if (lampLevels.length > 0) { renderer.lamps(part, entity, installed.id(), partialTick, baked.lamps(), lampLevels); }
+                        drawnNow = new PartRenderer.Drawn(baked, levelNow, lampLevels);
+                        layers.draw(drawn, stack, partLight);
+                        layers.lamps(drawnNow, 0, stack);   // the fixed part's lamps (pieces' lamps their renderers draw)
+                        int glow = renderer.glow(part, entity, installed.id(), partialTick);
+                        if ((glow >>> 24) > 0) { layers.glow(drawn, stack, glow, true); }   // hot metal, over the solid drawing
+                    } else if (baked != null) {
+                        drawnNow = new PartRenderer.Drawn(baked, 0);
                     }
-                    stack.popPose();
-                } else if (design instanceof ControlSurfaceDesign s) {
-                    stack.pushPose();
-                    mount(stack, installed);
-                    double angle = Math.clamp(entity.input(installed.id(), "deflection"), -1, 1) * Math.toRadians(s.maxDeflectionDeg());
-                    // Positive turns the trailing edge (aft, -x) toward +z.
-                    stack.mulPose(Axis.YP.rotation((float) angle));
-                    double t = s.thicknessRatio() * s.chordM() / 2;
-                    box(out, stack, -0.75 * s.chordM(), -s.spanM() / 2, -t, 0.25 * s.chordM(), s.spanM() / 2, t, METAL, light);
+                    renderer.animate(part, entity, installed.id(), rotor, partialTick, stack, layers, partLight, drawnNow);
                     stack.popPose();
                 }
-                rotor += installed.part().rotors().size();
+                rotor += part.rotors().size();
             }
             stack.popPose();
+            layers.flush(buffers);
+            ContactShadows.Footprint f = beautify ? footprint(near) : null;
+            if (f != null) {
+                Vec3d x = q.rotate(new Vec3d(1, 0, 0));
+                if (x.x() * x.x() + x.z() * x.z() > 1e-6) {
+                    ContactShadows.draw(entity, f, at, Math.atan2(x.z(), x.x()), entity.getPosition(partialTick), stack, buffers);
+                }
+            }
         }
         super.render(entity, yaw, partialTick, stack, buffers, light);
+    }
+
+    /** 0.39: baked meshes' boxes (their farthest level's), kept while the mesh is. */
+    private static final Map<dev.mcmod.aerocore.api.mesh.PackedMesh, float[]> BOUNDS = new WeakHashMap<>();
+
+    /** A part's box in the vehicle's frame (from its centre of mass): x0, y0, z0, x1, y1, z1. */
+    private static double[] box(Vehicle.Installed installed, MeshBakery.Baked baked, Vec3d com) {
+        dev.mcmod.aerocore.api.mesh.PackedMesh far = baked.level(baked.levels().length - 1);
+        float[] b = BOUNDS.computeIfAbsent(far, dev.mcmod.aerocore.api.mesh.PackedMesh::bounds);
+        double[] out = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
+        for (int i = 0; i < 8; i++) {
+            Vec3d c = new Vec3d(b[(i & 1) == 0 ? 0 : 3], b[(i & 2) == 0 ? 1 : 4], b[(i & 4) == 0 ? 2 : 5]);
+            Vec3d v = installed.mount().position().add(installed.rotation().rotate(c)).subtract(com);
+            out[0] = Math.min(out[0], v.x()); out[1] = Math.min(out[1], v.y()); out[2] = Math.min(out[2], v.z());
+            out[3] = Math.max(out[3], v.x()); out[4] = Math.max(out[4], v.y()); out[5] = Math.max(out[5], v.z());
+        }
+        return out;
+    }
+
+    /**
+     * 0.39: the shadow's footprint: the parts near the vehicle's bottom (reaching down within 1.2 m of its lowest
+     * point: a rotor's disc, a mast, a high wing left out unless low).
+     */
+    private static ContactShadows.Footprint footprint(List<double[]> parts) {
+        double bottom = Double.POSITIVE_INFINITY;
+        for (double[] p : parts) { bottom = Math.min(bottom, p[1]); }
+        if (!Double.isFinite(bottom)) { return null; }
+        double x0 = Double.POSITIVE_INFINITY, x1 = Double.NEGATIVE_INFINITY, z0 = Double.POSITIVE_INFINITY, z1 = Double.NEGATIVE_INFINITY;
+        for (double[] p : parts) {
+            if (p[1] > bottom + 1.2) { continue; }
+            x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[3]); z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[5]);
+        }
+        if (!(x1 > x0) || !(z1 > z0)) { return null; }
+        return new ContactShadows.Footprint(x0, x1, z0, z1, bottom);
+    }
+
+    /** The packed light at a point: the block's there, or the vehicle's own where the point is inside a solid block. */
+    private static int lightAt(PartVehicle entity, double x, double y, double z, int fallback) {
+        net.minecraft.core.BlockPos pos = net.minecraft.core.BlockPos.containing(x, y, z);
+        var level = entity.level();
+        if (level.getBlockState(pos).isSolidRender(level, pos)) { return fallback; }
+        return net.minecraft.client.renderer.LevelRenderer.getLightColor(level, pos);
+    }
+
+    /** The level of detail for a part that looks a size (radius over distance), moving a level only past some hysteresis. */
+    private static int level(PartVehicle entity, String partId, double size, int last) {
+        Map<String, Integer> levels = LEVEL.computeIfAbsent(entity, e -> new java.util.HashMap<>());
+        int was = levels.getOrDefault(partId, -1), now;
+        if (was < 0) { now = size > LEVEL_0 ? 0 : size > LEVEL_1 ? 1 : 2; }
+        else {
+            now = was;
+            if (was == 0 && size < LEVEL_0 / HYSTERESIS) { now = size > LEVEL_1 ? 1 : 2; }
+            else if (was == 1 && size > LEVEL_0 * HYSTERESIS) { now = 0; }
+            else if (was == 1 && size < LEVEL_1 / HYSTERESIS) { now = 2; }
+            else if (was >= 2 && size > LEVEL_1 * HYSTERESIS) { now = size > LEVEL_0 ? 0 : 1; }
+        }
+        levels.put(partId, now);
+        return Math.min(now, last);
     }
 
     private static void mount(PoseStack stack, Vehicle.Installed installed) {
@@ -110,120 +262,6 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
         Orientation r = installed.rotation();
         stack.translate(p.x(), p.y(), p.z());
         stack.mulPose(new Quaternionf((float) r.x(), (float) r.y(), (float) r.z(), (float) r.w()));
-    }
-
-    private static synchronized List<Quad> staticMesh(Vehicle vehicle) {
-        List<Quad> cached = STATIC.get(vehicle);
-        if (cached != null) { return cached; }
-        List<Quad> quads = new ArrayList<>();
-        for (Vehicle.Installed installed : vehicle.installed()) {
-            PartDesign design = installed.part().design();
-            List<Quad> local = new ArrayList<>();
-            if (design instanceof HullDesign h) { loft(local, h.geometry(), Double.NaN); }
-            else if (design instanceof PlaningHullDesign p) {
-                PlaningHull hull = PlaningHull.fridsma(p.lengthM(), p.chineBeamM(), Math.toRadians(p.deadriseDeg()), p.depthM(), Math.min(p.stations(), 48));
-                loft(local, hull.hull(), p.chineBeamM() / 2 * Math.tan(Math.toRadians(p.deadriseDeg())));
-            } else if (design instanceof FloatDesign f) { sphere(local, f.radiusM(), FLOAT); }
-            else if (design instanceof BoxDesign b) { box(local, b.sizeM().scale(-0.5), b.sizeM().scale(0.5), BOX); }
-            else if (design instanceof MotorDesign m) {
-                double side = Math.cbrt(m.massKg() / 4000) / 2;
-                box(local, new Vec3d(-side, -side, -side), new Vec3d(side, side, side), MOTOR);
-            } else if (design instanceof BallastDesign b) {
-                double side = Math.cbrt(b.massKg() / 11340) / 2;
-                box(local, new Vec3d(-side, -side, -side), new Vec3d(side, side, side), BALLAST);
-            } else if (design instanceof SeatDesign) {
-                box(local, new Vec3d(-0.2, 0, -0.2), new Vec3d(0.2, 0.08, 0.2), SEAT);
-            }
-            for (Quad quad : local) {
-                quads.add(new Quad(installed.mount().apply(quad.a()), installed.mount().apply(quad.b()), installed.mount().apply(quad.c()),
-                        installed.mount().apply(quad.d()), quad.color(), installed.rotation().rotate(quad.normal())));
-            }
-        }
-        cached = List.copyOf(quads);
-        STATIC.put(vehicle, cached);
-        return cached;
-    }
-
-    /** Sections resampled on AROUND rays from their centroids, lofted station to station, ends closed. bottomBelow colours the bottom. */
-    private static void loft(List<Quad> quads, SlenderHull hull, double bottomBelow) {
-        List<Vec3d[]> rings = new ArrayList<>();
-        for (HullSection s : hull.sections()) { rings.add(ring(s)); }
-        double low = Double.MAX_VALUE;
-        for (HullSection s : hull.sections()) { low = Math.min(low, s.minY()); }
-        double line = Double.isNaN(bottomBelow) ? low + 0.4 * (hull.sections().get(hull.stations() / 2).maxY() - low) : bottomBelow + 1e-3;
-        for (int i = 0; i + 1 < rings.size(); i++) {
-            Vec3d[] a = rings.get(i), b = rings.get(i + 1);
-            for (int k = 0; k < AROUND; k++) {
-                int n = (k + 1) % AROUND;
-                Vec3d normal = a[n].subtract(a[k]).cross(b[k].subtract(a[k]));
-                quads.add(new Quad(a[k], a[n], b[n], b[k], 0.5 * (a[k].y() + a[n].y()) < line ? BOTTOM : HULL, unit(normal)));
-            }
-        }
-        for (int end = 0; end < 2; end++) {
-            Vec3d[] ring = rings.get(end == 0 ? 0 : rings.size() - 1);
-            Vec3d centre = Vec3d.ZERO;
-            for (Vec3d v : ring) { centre = centre.add(v.scale(1.0 / AROUND)); }
-            Vec3d normal = end == 0 ? Vec3d.X.scale(-1) : Vec3d.X;
-            for (int k = 0; k < AROUND; k++) {
-                int n = (k + 1) % AROUND;
-                Vec3d first = end == 0 ? ring[n] : ring[k], second = end == 0 ? ring[k] : ring[n];
-                quads.add(new Quad(centre, first, second, second, HULL, normal));
-            }
-        }
-    }
-
-    /** Boundary points of a convex section on rays from its centroid, from straight up turning to starboard. */
-    private static Vec3d[] ring(HullSection s) {
-        HullSection.Wet full = s.clip(1, 0, 1e9);
-        Vec3d[] ring = new Vec3d[AROUND];
-        for (int k = 0; k < AROUND; k++) {
-            double angle = 2 * Math.PI * k / AROUND, dy = Math.cos(angle), dz = Math.sin(angle), t = Double.POSITIVE_INFINITY;
-            List<double[]> v = s.vertices();
-            for (int i = 0; i < v.size(); i++) {
-                double[] p = v.get(i), q = v.get((i + 1) % v.size());
-                double ey = q[0] - p[0], ez = q[1] - p[1], denominator = dy * ez - dz * ey;
-                if (Math.abs(denominator) < 1e-12) { continue; }
-                double oy = p[0] - full.centroidY(), oz = p[1] - full.centroidZ();
-                double along = (oy * ez - oz * ey) / denominator, edge = (oy * dz - oz * dy) / denominator;
-                if (along > 0 && edge >= -1e-9 && edge <= 1 + 1e-9) { t = Math.min(t, along); }
-            }
-            ring[k] = new Vec3d(s.xM(), full.centroidY() + (Double.isFinite(t) ? t : 0) * dy, full.centroidZ() + (Double.isFinite(t) ? t : 0) * dz);
-        }
-        return ring;
-    }
-
-    private static void sphere(List<Quad> quads, double r, int color) {
-        int bands = 8, around = 16;
-        for (int i = 0; i < bands; i++) for (int j = 0; j < around; j++) {
-            Vec3d a = polar(r, i, j, bands, around), b = polar(r, i, j + 1, bands, around), c = polar(r, i + 1, j + 1, bands, around), d = polar(r, i + 1, j, bands, around);
-            quads.add(new Quad(a, d, c, b, color, unit(a.add(b).add(c).add(d))));
-        }
-    }
-
-    private static Vec3d polar(double r, int i, int j, int bands, int around) {
-        double theta = Math.PI * i / bands, phi = 2 * Math.PI * j / around;
-        return new Vec3d(r * Math.sin(theta) * Math.cos(phi), r * Math.cos(theta), r * Math.sin(theta) * Math.sin(phi));
-    }
-
-    private static void box(List<Quad> quads, Vec3d lo, Vec3d hi, int color) {
-        Vec3d[] v = {new Vec3d(lo.x(), lo.y(), lo.z()), new Vec3d(hi.x(), lo.y(), lo.z()), new Vec3d(hi.x(), hi.y(), lo.z()), new Vec3d(lo.x(), hi.y(), lo.z()),
-                new Vec3d(lo.x(), lo.y(), hi.z()), new Vec3d(hi.x(), lo.y(), hi.z()), new Vec3d(hi.x(), hi.y(), hi.z()), new Vec3d(lo.x(), hi.y(), hi.z())};
-        int[][] faces = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 4, 7, 3}, {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 7, 6, 2}};
-        Vec3d[] normals = {Vec3d.Z.scale(-1), Vec3d.Z, Vec3d.X.scale(-1), Vec3d.X, Vec3d.Y.scale(-1), Vec3d.Y};
-        for (int f = 0; f < 6; f++) { quads.add(new Quad(v[faces[f][0]], v[faces[f][1]], v[faces[f][2]], v[faces[f][3]], color, normals[f])); }
-    }
-
-    private static Vec3d unit(Vec3d v) { return v.lengthSquared() < 1e-18 ? Vec3d.Y : v.normalized(); }
-
-    private static void vertex(VertexConsumer out, PoseStack stack, Vec3d p, int color, Vec3d n, int light) {
-        out.addVertex(stack.last(), (float) p.x(), (float) p.y(), (float) p.z()).setColor(color).setUv(0, 0)
-                .setOverlay(OverlayTexture.NO_OVERLAY).setLight(light).setNormal(stack.last(), (float) n.x(), (float) n.y(), (float) n.z());
-    }
-
-    private static void box(VertexConsumer out, PoseStack s, double x0, double y0, double z0, double x1, double y1, double z1, int color, int light) {
-        List<Quad> quads = new ArrayList<>();
-        box(quads, new Vec3d(x0, y0, z0), new Vec3d(x1, y1, z1), color);
-        for (Quad q : quads) { for (Vec3d c : new Vec3d[]{q.a(), q.b(), q.c(), q.d()}) { vertex(out, s, c, q.color(), q.normal(), light); } }
     }
 
     @Override public ResourceLocation getTextureLocation(PartVehicle entity) { return TEXTURE; }

@@ -50,17 +50,45 @@ public final class EngineCycle {
                        int exhaustValves, double exhaustValveM, double exhaustThroatM, double exhaustStemM, double exhaustCd, ValveLift exhaustLift,
                        double intakeRunnerLengthM, double intakeRunnerDiameterM,
                        Fuel fuel, double lambda, double combustionEfficiency, boolean directInjection,
-                       double flameTravelM, double wallTemperatureK, double headAreaFactor, double pistonAreaFactor) {
+                       double flameTravelM, double wallTemperatureK, double headAreaFactor, double pistonAreaFactor,
+                       CompressionIgnition compressionIgnition) {
         public Spec {
             Objects.requireNonNull(crank, "crank"); Objects.requireNonNull(intakeLift, "intakeLift"); Objects.requireNonNull(exhaustLift, "exhaustLift");
             Objects.requireNonNull(fuel, "fuel");
             if (intakeValves < 1 || exhaustValves < 1) { throw new IllegalArgumentException("Need at least one intake and one exhaust valve"); }
-            if (!(lambda > 0.3 && lambda < 3)) { throw new IllegalArgumentException("Lambda must be in (0.3, 3)"); }
+            if (compressionIgnition == null ? !(lambda > 0.3 && lambda < 3) : !(lambda >= 1 && lambda <= 12)) {
+                throw new IllegalArgumentException(compressionIgnition == null ? "Lambda must be in (0.3, 3)" : "A diesel's lambda must be in [1, 12]");
+            }
             if (!(combustionEfficiency > 0 && combustionEfficiency <= 1)) { throw new IllegalArgumentException("Combustion efficiency must be in (0, 1]"); }
             if (!(flameTravelM > 0) || !(wallTemperatureK > 0)) { throw new IllegalArgumentException("Flame travel and wall temperature must be positive"); }
             if (!(intakeRunnerLengthM >= 0) || intakeRunnerLengthM > 0 && !(intakeRunnerDiameterM > 0)) { throw new IllegalArgumentException("Runner needs a positive diameter"); }
         }
+        /** A spark-ignition cylinder (as before 0.26). */
+        public Spec(CrankKinematics crank,
+                    int intakeValves, double intakeValveM, double intakeThroatM, double intakeStemM, double intakeCd, ValveLift intakeLift,
+                    int exhaustValves, double exhaustValveM, double exhaustThroatM, double exhaustStemM, double exhaustCd, ValveLift exhaustLift,
+                    double intakeRunnerLengthM, double intakeRunnerDiameterM,
+                    Fuel fuel, double lambda, double combustionEfficiency, boolean directInjection,
+                    double flameTravelM, double wallTemperatureK, double headAreaFactor, double pistonAreaFactor) {
+            this(crank, intakeValves, intakeValveM, intakeThroatM, intakeStemM, intakeCd, intakeLift, exhaustValves, exhaustValveM, exhaustThroatM,
+                    exhaustStemM, exhaustCd, exhaustLift, intakeRunnerLengthM, intakeRunnerDiameterM, fuel, lambda, combustionEfficiency,
+                    directInjection, flameTravelM, wallTemperatureK, headAreaFactor, pistonAreaFactor, null);
+        }
         boolean runner() { return intakeRunnerLengthM > 0; }
+        /** Whether it fires by compression (0.26). */
+        public boolean diesel() { return compressionIgnition != null; }
+    }
+
+    /**
+     * Compression ignition (0.26): the fuel is injected into hot compressed air (direct injection, unthrottled; the
+     * Spec's lambda is then the trapped air over the fuel injected, the load), Conditions' spark advance is the start
+     * of injection, the charge lights after Hardenberg and Hase's delay and burns as Watson's premixed and diffusion
+     * flames (Combustion); no knock. The calibration keeps the peak pressure within a limit (the engine's structure).
+     */
+    public record CompressionIgnition(double peakPressureLimitPa) {
+        public CompressionIgnition {
+            if (!(peakPressureLimitPa > 2e6)) { throw new IllegalArgumentException("Peak pressure limit must exceed 20 bar"); }
+        }
     }
 
     /** Operating point: speed, plenum states and spark advance (degrees before firing TDC). */
@@ -78,7 +106,8 @@ public final class EngineCycle {
     public record Result(double netImep, double grossImep, double pumpingMep, double inductedAirKg, double trappedAirKg, double fuelKg,
                          double residualFraction, double volumetricEfficiency, double peakPressurePa, double peakPressureDeg,
                          double knockMargin, double knockOnsetDeg, double heatToWallsJ, double exhaustTemperatureK,
-                         double burnAngle90, double burnExponent, double fuelEnergyJ, double meanPistonSpeed) {
+                         double burnAngle90, double burnExponent, double fuelEnergyJ, double meanPistonSpeed, double ignitionDelayDeg,
+                         double premixedFraction) {
         public boolean knocks() { return knockMargin >= 1; }
         /** Net indicated fuel conversion efficiency for the cylinder's displacement. */
         public double indicatedEfficiency(double displacementM3) { return fuelEnergyJ > 0 ? netImep * displacementM3 / fuelEnergyJ : 0; }
@@ -109,13 +138,15 @@ public final class EngineCycle {
         double tGuess = 800, tPortGuess = 300, exhaustT = 900;
         // per-cycle combustion parameters (set at IVC and spark)
         boolean sparked; double sparkAngle, burnAngle, exponent, freshAtSpark, fuel, pIvc, vIvc, tIvc;
+        // compression ignition: injection at sparkAngle, ignition at ignitionAngle, Watson's burn
+        final boolean ci; double ignitionAngle, delayDeg; Combustion.DieselBurn dieselBurn;
         /** Test hooks: valves held shut, no wall heat transfer. */
         boolean valvesShut, adiabatic;
         /** Length of the current step, s (for the flow limiter). */
         double stepSeconds;
 
         Simulation(Spec s, Conditions c) {
-            this.s = s; this.c = c; this.k = s.crank();
+            this.s = s; this.c = c; this.k = s.crank(); this.ci = s.diesel();
             burned = s.fuel().products(s.lambda());
             omega = c.rpm() * Math.PI / 30;
             afr = s.lambda() * s.fuel().stoichiometricAirFuel();
@@ -123,7 +154,7 @@ public final class EngineCycle {
             rAir = Gas.AIR.gasConstant();
             vd = k.displacement();
             sp = 2 * k.strokeM() * c.rpm() / 60;
-            double cooling = s.directInjection() ? 0 : s.fuel().vaporizationHeatJPerKg() / (afr + 1) / Gas.AIR.cp(c.intakeTemperatureK());
+            double cooling = s.directInjection() || ci ? 0 : s.fuel().vaporizationHeatJPerKg() / (afr + 1) / Gas.AIR.cp(c.intakeTemperatureK());
             chargeTemperature = c.intakeTemperatureK() - cooling;
             chargeEnergy = fresh.energy(chargeTemperature);
             flameScale = s.flameTravelM() / k.strokeM() / Combustion.REFERENCE_TRAVEL_OVER_STROKE;
@@ -187,7 +218,7 @@ public final class EngineCycle {
             double ivcAngle = s.intakeLift().centreRad() + s.intakeLift().durationRad() / 2;
             ivcAngle -= 4 * Math.PI * Math.floor((ivcAngle + 2 * Math.PI) / (4 * Math.PI));   // as an angle in [-360, 360) degrees
             sparkAngle = -Math.toRadians(c.sparkAdvanceDeg());
-            sparked = false; burnAngle = 0; exponent = 0; freshAtSpark = 0; fuel = 0; pIvc = 0;
+            sparked = false; burnAngle = 0; exponent = 0; freshAtSpark = 0; fuel = 0; pIvc = 0; dieselBurn = null; delayDeg = 0; ignitionAngle = 0;
             boolean closed = false;
             double trappedMass = 0, trappedBurned = 0;
             double knock = 0, knockAt90 = 0, knockOnset = Double.NaN, pSpark = 0, tSpark = 0, gammaU = 1.35;
@@ -198,9 +229,9 @@ public final class EngineCycle {
                 if (!closed && rel >= ivcAngle - 1e-9 && rel < 0) {
                     closed = true;
                     trappedMass = x[M]; trappedBurned = x[MB];
-                    double air = (x[M] - x[MB]) * (s.directInjection() ? 1 : afr / (afr + 1));
+                    double air = (x[M] - x[MB]) * (s.directInjection() || ci ? 1 : afr / (afr + 1));
                     fuel = air / afr;
-                    if (s.directInjection()) { x[M] += fuel; x[U] -= fuel * s.fuel().vaporizationHeatJPerKg(); }
+                    if (s.directInjection() || ci) { x[M] += fuel; x[U] -= fuel * s.fuel().vaporizationHeatJPerKg(); }
                     double t = cylinderTemperature(x);
                     vIvc = k.volume(theta); pIvc = x[M] * gasConstant(x[MB] / x[M]) * t / vIvc; tIvc = t;
                 }
@@ -210,10 +241,19 @@ public final class EngineCycle {
                     freshAtSpark = x[M] - x[MB];
                     pSpark = x[M] * gasConstant(y) * t / v; tSpark = t;
                     gammaU = gamma(0, t);
-                    double laminar = s.fuel().flameSpeed().at(1 / s.lambda(), t, pSpark, 0);
-                    double reference = Fuel.GASOLINE_FLAME.at(1, t, pSpark, 0);
-                    burnAngle = Combustion.burnAngle90(x[M] / v, sp, y, c.sparkAdvanceDeg()) * flameScale * Math.pow(reference / laminar, 0.85);
-                    exponent = Combustion.wiebeExponent(sp, y, c.sparkAdvanceDeg());
+                    if (ci) {
+                        // the spray lights after the delay the charge's state at TDC sets (n = 1.35 from injection)
+                        double ratio = v / k.volume(tdc);
+                        delayDeg = Combustion.dieselIgnitionDelayDeg(sp, t * Math.pow(ratio, 0.35), pSpark * Math.pow(ratio, 1.35), s.fuel().cetaneNumber());
+                        ignitionAngle = sparkAngle + Math.toRadians(Math.min(delayDeg, 200));
+                        double delayMs = delayDeg / (0.006 * c.rpm());
+                        dieselBurn = Double.isFinite(delayDeg) ? Combustion.DieselBurn.of(1 / s.lambda(), delayMs, c.rpm()) : null;
+                    } else {
+                        double laminar = s.fuel().flameSpeed().at(1 / s.lambda(), t, pSpark, 0);
+                        double reference = Fuel.GASOLINE_FLAME.at(1, t, pSpark, 0);
+                        burnAngle = Combustion.burnAngle90(x[M] / v, sp, y, c.sparkAdvanceDeg()) * flameScale * Math.pow(reference / laminar, 0.85);
+                        exponent = Combustion.wiebeExponent(sp, y, c.sparkAdvanceDeg());
+                    }
                 }
                 derivatives(x, theta, rel, d1);
                 for (int j = 0; j < N; j++) { x1[j] = x[j] + d1[j] * dtheta; }
@@ -233,7 +273,7 @@ public final class EngineCycle {
                 exhaustMass += 0.5 * (d1[N + 4] + d2[N + 4]) * dtheta;
                 exhaustEnthalpy += 0.5 * (d1[N + 5] + d2[N + 5]) * dtheta;
                 if (p > peakP) { peakP = p; peakDeg = Math.toDegrees(rel); }
-                if (closed && rel < Math.PI && !past90) {
+                if (closed && rel < Math.PI && !past90 && !ci) {
                     double tEnd = sparked ? tSpark * Math.pow(p / pSpark, (gammaU - 1) / gammaU) : 0.5 * (d1[N + 6] + d2[N + 6]);
                     knock += dtheta / omega / (KNOCK_CALIBRATION * Combustion.ignitionDelay(s.fuel().researchOctane(), p, tEnd));
                     if (sparked) {
@@ -257,7 +297,7 @@ public final class EngineCycle {
             double airDensity = c.intakePressurePa() / (rAir * c.intakeTemperatureK());
             return new Result(workNet / vd, workGross / vd, (workGross - workNet) / vd, inductedAir, trappedAir, fuel,
                     trappedMass > 0 ? trappedBurned / trappedMass : 0, inductedAir / (airDensity * vd), peakP, peakDeg, knockAt90, knockOnset,
-                    heatWalls, exhaustT, burnAngle, exponent, fuel * heatRelease, sp);
+                    heatWalls, exhaustT, burnAngle, exponent, fuel * heatRelease, sp, ci ? delayDeg : 0, ci && dieselBurn != null ? dieselBurn.premixed() : 0);
         }
 
         /**
@@ -360,7 +400,12 @@ public final class EngineCycle {
             }
             // combustion: analytic Wiebe rate per radian
             double burnRate = 0;
-            if (sparked && rel >= sparkAngle && rel < Math.PI) {
+            if (ci) {
+                if (sparked && dieselBurn != null && rel >= ignitionAngle && rel < Math.PI) {
+                    double tau = Math.toDegrees(rel - ignitionAngle) / Combustion.DIESEL_DURATION_DEG;
+                    burnRate = dieselBurn.rate(tau) / Combustion.DIESEL_DURATION_DEG * (180 / Math.PI);
+                }
+            } else if (sparked && rel >= sparkAngle && rel < Math.PI) {
                 double phi = Math.toDegrees(rel - sparkAngle) / burnAngle;
                 if (phi > 0) {
                     burnRate = Combustion.WIEBE_A * exponent * Math.pow(phi, exponent - 1) / burnAngle
@@ -372,7 +417,7 @@ public final class EngineCycle {
             if (liftI > 0 || liftE > 0) { w = 6.18 * sp; }
             else {
                 w = 2.28 * sp;
-                if (sparked && rel >= sparkAngle && pIvc > 0) {
+                if (sparked && rel >= (ci ? ignitionAngle : sparkAngle) && pIvc > 0) {
                     double pMot = pIvc * Math.pow(vIvc / v, MOTORED_EXPONENT);
                     w += 3.24e-3 * vd * tIvc / (pIvc * vIvc) * Math.max(0, p - pMot);
                 }

@@ -68,7 +68,7 @@ public final class Fields {
     public Vec3d vec(String key) { return vec(map.get(key), path + "." + key); }
     public Vec3d vec(String key, Vec3d fallback) { return has(key) ? vec(key) : fallback; }
 
-    static Vec3d vec(Object v, String where) {
+    public static Vec3d vec(Object v, String where) {
         if (!(v instanceof List<?> l) || l.size() != 3 || !(l.get(0) instanceof Number a) || !(l.get(1) instanceof Number b) || !(l.get(2) instanceof Number c)) {
             throw new IllegalArgumentException(where + ": expected [x, y, z]");
         }

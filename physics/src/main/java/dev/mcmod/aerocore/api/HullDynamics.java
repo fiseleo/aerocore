@@ -74,7 +74,13 @@ public final class HullDynamics {
      * moment arms and the angular velocity).
      */
     public static Loads loads(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity, boolean includeWeight) {
-        return assemble(s, p, model, environment, gravity, includeWeight);
+        return assemble(s, p, model, environment, gravity, includeWeight, true);
+    }
+
+    /** The same, with or without the dry part's windage (without: a body that has its own air loads, BodyPart). */
+    public static Loads loads(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity, boolean includeWeight,
+                              boolean windage) {
+        return assemble(s, p, model, environment, gravity, includeWeight, windage);
     }
 
     public static Result step(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity,
@@ -105,7 +111,7 @@ public final class HullDynamics {
     public static Prepared prepare(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity,
                                    List<AppliedForce> externalLoads, double dt) {
         Checks.positive(dt, "Time step");
-        Loads loads = assemble(s, p, model, environment, gravity, true);
+        Loads loads = assemble(s, p, model, environment, gravity, true, true);
         List<AppliedForce> forces = new ArrayList<>(loads.forces());
         Wrench external = Wrench.ZERO;
         for (AppliedForce load : externalLoads) { external = external.add(load.wrench()); forces.add(load); }
@@ -131,11 +137,12 @@ public final class HullDynamics {
      * without any added-mass reaction. World axes, torque about the COM.
      */
     public static Wrench captiveLoad(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity) {
-        Loads loads = assemble(s, p, model, environment, gravity, true);
+        Loads loads = assemble(s, p, model, environment, gravity, true, true);
         return loads.hydro().add(loads.drag()).add(loads.lift()).add(loads.excitation()).add(loads.steady());
     }
 
-    private static Loads assemble(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity, boolean includeWeight) {
+    private static Loads assemble(RigidBodyState s, RigidBodyProperties p, HullModel model, Environment environment, Vec3d gravity, boolean includeWeight,
+                                  boolean windage) {
         SlenderHull hull = model.hull();
         int n = hull.stations();
         Orientation q = s.orientation();
@@ -232,7 +239,7 @@ public final class HullDynamics {
             }
             // Windage of the dry part, at the section's centre.
             double dryHeight = Math.max(0, section.maxY() - section.minY() - (wet.piercing() ? wet.draftM() : area > 0 ? section.maxY() - section.minY() : 0));
-            if (dryHeight > 0 && rhoAir > 0) {
+            if (windage && dryHeight > 0 && rhoAir > 0) {
                 Vec3d relative = pointVelocity.subtract(water.air().velocity());
                 Vec3d f = crossFlow(relative, ey, ez, 0.5 * rhoAir * dx, WINDAGE_LATERAL * dryHeight, area > 0 ? 0 : WINDAGE_VERTICAL * 2 * section.maxHalfBreadth());
                 if (f.lengthSquared() > 0) {

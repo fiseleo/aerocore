@@ -32,6 +32,17 @@ public record Rudder(Vec3d positionLocal, double chordM, double spanM, AirfoilPo
     }
 
     /**
+     * Polar of an all-moving surface free at both ends (a fin or stabiliser): lift slope 2 pi A / (2 + sqrt(A^2 + 4))
+     * (Helmbold 1942; tends to the lifting-line value at large A and to slender-wing theory at small A), NACA 0015
+     * profile drag 0.0065, induced drag with span efficiency 0.9, stall at 15 deg blended over 10 deg (a typical thick
+     * symmetric section near Re 1e6).
+     */
+    public static AirfoilPolar freeEndsPolar(double chordM, double spanM) {
+        double aspect = spanM / chordM, slope = 2 * Math.PI * aspect / (2 + Math.sqrt(aspect * aspect + 4));
+        return new SymmetricAirfoil(slope, Math.toRadians(15), Math.toRadians(10), 0.0065, aspect, 0.9);
+    }
+
+    /**
      * Rudder load at angle (rad, clamped to +-35 deg) in water whose velocity is the fluid's. thrustN and diameterM
      * describe the propeller ahead of it (thrust 0 for none); its slipstream only acts while the thrust is positive.
      */

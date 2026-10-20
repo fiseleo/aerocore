@@ -139,5 +139,8 @@ public final class SurfaceWind {
 
         /** Direction the wind blows toward at game time t (s), rad. */
         public double direction(double t) { return prevailing + 0.7 * wander(t, directionPhase); }
+
+        /** 0.38: the prevailing direction the wind wanders about (blowing toward, rad): where an airfield's runway would point. */
+        public double prevailing() { return prevailing; }
     }
 }

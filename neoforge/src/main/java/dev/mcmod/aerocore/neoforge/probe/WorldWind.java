@@ -335,11 +335,19 @@ public final class WorldWind {
         if (below.getFluidState().is(FluidTags.WATER)) { return new Column(ground - 1 + 8 / 9.0, top, SurfaceWind.SEA, canopy); }
         double z0;
         if (canopy >= 2) { z0 = Math.clamp(0.1 * canopy, SurfaceWind.ROUGH, SurfaceWind.CHAOTIC); }
-        else if (below.is(BlockTags.SAND) || below.is(BlockTags.SNOW) || below.is(BlockTags.ICE)) { z0 = SurfaceWind.SMOOTH; }
+        else if (below.is(BlockTags.SAND) || below.is(BlockTags.SNOW) || below.is(BlockTags.ICE) || below.is(SMOOTH)) { z0 = SurfaceWind.SMOOTH; }
         else if (manMade(below)) { z0 = SurfaceWind.VERY_ROUGH; }
         else { z0 = SurfaceWind.OPEN; }
         return new Column(ground, top, z0, canopy);
     }
+
+    /**
+     * 0.38: blocks the wind meets as smooth ground (SurfaceWind.SMOOTH, like sand and snow) whatever their sound: paved
+     * surfaces (a runway, an apron). Empty in AeroCore; mods add their own (otherwise stone-sounding pavement is open
+     * ground and metal or glass sounding is a built-up area).
+     */
+    public static final net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block> SMOOTH =
+            BlockTags.create(net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(AeroCore.MOD_ID, "smooth"));
 
     private static boolean manMade(BlockState state) {
         SoundType sound = state.getSoundType();

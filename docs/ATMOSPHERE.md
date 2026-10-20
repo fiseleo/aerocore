@@ -79,3 +79,25 @@
 **目前用到**：AeroCore 物體（測試球、平台、船）的空氣負載已含垂直風。亂流產生器與地面效應是給之後的飛行器用的 API，遊戲裡還沒有飛行器。
 
 **尚未實測**：熱氣流與坡面上升氣流在遊戲裡的手感（沒有飛行器）；高處（200 m 以上）的風；多人連線時參考風的同步。
+
+## 空氣資料與一點的風（0.38）
+
+使用者 2026-10-19「加入機場塔台」（hdfv 0.20）：塔台的 ATIS、跑道的選擇與飛行員的儀表要讀到和載具感受到的同一個空氣。
+
+- **`AirData`**（純 Java，ISA）：
+  - 壓力高度（對流層 Tb/L 的冪次、11 km 以上等溫）、密度高度、QNH／QFE 互換、高度表讀數（`altimeterM(靜壓, 撥定值)`）。
+  - 音速、Mach；皮托衝壓：次音速等熵，超音速以 Rayleigh 皮托公式（正震波後的總壓）；`machFromImpact` 反解（超音速用迭代）。
+  - CAS（海平面標準大氣下產生同一衝壓的速度）↔ TAS、EAS。
+  - 風分量：頂風（正）與側風（正：從右）；羅盤方位北是 −Z、東是 +X；風的「來向」＝去向 + 180°。
+- **陣風的峰值**：`WindGusts.runningExtremes(序列, 視窗)`；`WorldAir.peakGustMps` 在一段時間（例如十分鐘）每 0.5 s 取樣、以平均時間（3 s）滑動平均後取最大。
+  陣風是時間的確定函數，所以過去的值算得出來，不必存。10 m/s 平均風十分鐘的 1 s、3 s、60 s 峰值約 12.0、11.8、10.5 m/s（測試值）。
+- **盛行風**：`SurfaceWind.Synoptic.prevailing()`；風向繞它擺動 ±40°，週期最長 1 小時，所以使用中的跑道會換頭（hdfv 的 `RunwayChoice` 有遲滯）。
+- **`WorldAir.at`**（遊戲端，兩端都能用）：一點的平均風、陣風、垂直風、海拔、溫度、氣壓、密度、能見度。有自己的風的海域先用海域的風
+  （`WaveRegion.meanWind`、`gust`，高度依 `SeaWind.speedAt`），否則用 `WorldWind`：和 `PartVehicle` 的空氣負載一致。
+  溫度、氣壓、密度是 ISA（世界沒有天氣氣壓，所以 ATIS 的 QNH 一直是 1013 hPa，和物理一致）。
+- **能見度**（`WorldAir.visibilityM`，顯示與 ATIS 的規則，不是物理）：晴 20 km、雨 5 km、雷雨 1.5 km，依雨與雷的程度內插。
+- **地表**：方塊標籤 `#aerocore:smooth` 的方塊算 SMOOTH 粗糙度（跑道與停機坪上的風不被當成草地或建築）。
+
+**驗證**：`AirDataTest`（ISA 反算 1e-6 m、QNH 往返、海平面 CAS＝TAS、10 km 的表值、超音速皮托、風分量的正負、吹向東時來向 270）、
+`WindGustsTest`（峰值確定且不小於平均、平均時間越短越大）、`SurfaceWindTest`（長時間平均風向接近盛行風）；GameTest `airAtAPointIsWhatVehiclesFeel`
+（海域內外的風各自等於海域與 `WorldWind`）。

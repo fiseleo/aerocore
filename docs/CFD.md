@@ -15,7 +15,7 @@ IntelliJ 選 **CFD Water Experiment** 或 **CFD Air Experiment**；或在專案�
 ```
 
 參數依序為 `water|air`、步數（1～200000，預設12000）、可選輸出目錄。
-相對輸出路徑以 `cfd` 模組目錄為基準。預設輸出在 `cfd/build/experiments/<介質>/`，
+相對輸出路徑以 `cfd` 模組目錄為基準。預設輸出在 `cfd/build/experiments/<介質>/`（2026-10-18 起建置輸出在本機，CFD 結果仍在專案裡這個位置；見 LOCAL_RUNTIME.md），
 相同介質的下一次執行會覆寫該目錄內同名輸出；保留多次實驗時指定不同目錄。
 
 | 檔案 | 內容 |

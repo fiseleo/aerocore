@@ -1,8 +1,28 @@
 plugins { id 'base' }
 
+// Build outputs on this computer's disk (%USERPROFILE%\.mcmod\build\aerocore-<checkout>\<project>), not in the network folder:
+// GameTests and development games load AeroCore's class and resource files and the Minecraft JARs from the build folders
+// at every start, each file a few round trips over the network drive (Tailscale), minutes when it falls back to a relay
+// (2026-10-18, as hdfv). The two computers sharing the folder also stop overwriting each other's outputs. One folder per
+// checkout (a hash of its path), so worktrees do not share one. -Paerocore_local_build=false keeps them in the project.
+// The Maven folder hdfv and the other computer build against stays in the project, build/repo (physics and neoforge).
+def localBuild = providers.gradleProperty('aerocore_local_build').getOrElse('true') != 'false'
+def checkout = java.security.MessageDigest.getInstance('SHA-256').digest(rootProject.projectDir.canonicalPath.toLowerCase(Locale.ROOT).getBytes('UTF-8'))
+        .encodeHex().toString().substring(0, 8)
+def localBuildRoot = new File(System.getProperty('user.home'), ".mcmod/build/${rootProject.name}-${checkout}")
+
 allprojects {
     group = 'dev.mcmod.aerocore'
     version = rootProject.mod_version
+    if (localBuild) { layout.buildDirectory = new File(localBuildRoot, project == rootProject ? 'root' : project.name) }
+}
+
+tasks.register('showBuildDirectories') {
+    def where = allprojects.collectEntries { [(it.path): it.layout.buildDirectory.get().asFile] }
+    doLast {
+        where.each { path, dir -> println "${path}: ${dir}" }
+        println "Published Maven folder: ${rootProject.file('build/repo')}"
+    }
 }
 
 subprojects {

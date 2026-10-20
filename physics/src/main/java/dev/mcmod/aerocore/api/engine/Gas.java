@@ -8,7 +8,7 @@ import java.util.Map;
  * every kelvin from 200 to 4000 K, so a cycle simulation can go from energy to temperature cheaply. Sensible means
  * relative to 298.15 K: u_s(T) = sum n_i (h_i(T) - h_i(298.15)) - R (T - 298.15). Immutable.
  */
-public final class Gas {
+public final class Gas implements dev.mcmod.aerocore.api.gasdynamics.Thermo {
     private static final int T_MIN = 200, T_MAX = 4000;
     private static final double T_REF = 298.15;
 

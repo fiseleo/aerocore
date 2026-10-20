@@ -6,8 +6,8 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Readers of part designs by type id. AeroCore registers its own ("aerocore:float" and so on); a mod adds its part
- * types with register() before reading blueprints that use them (ids namespaced by the mod, "modid:part").
+ * Readers of part designs by type id. AeroCore has no part types of its own: a mod adds its part types with register()
+ * before reading blueprints that use them (ids namespaced by the mod, "modid:part").
  * Compiled parts are cached by their design's JSON, so the same design (the same hull on every boat of a class, on the
  * server and each client) is compiled once.
  */
@@ -17,20 +17,6 @@ public final class PartTypes {
     private static final Map<String, Part> COMPILED = java.util.Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<String, Part> eldest) { return size() > CACHE; }
     });
-
-    static {
-        register(FloatDesign.TYPE, FloatDesign::read);
-        register(HullDesign.TYPE, HullDesign::read);
-        register(PlaningHullDesign.TYPE, PlaningHullDesign::read);
-        register(PropellerDesign.TYPE, PropellerDesign::read);
-        register(ControlSurfaceDesign.TYPE, ControlSurfaceDesign::read);
-        register(BoxDesign.TYPE, BoxDesign::read);
-        register(MotorDesign.TYPE, MotorDesign::read);
-        register(BallastDesign.TYPE, BallastDesign::read);
-        register(SeatDesign.TYPE, SeatDesign::read);
-        register(PistonEngineDesign.TYPE, PistonEngineDesign::read);
-        register(JetEngineDesign.TYPE, JetEngineDesign::read);
-    }
 
     private PartTypes() {}
 

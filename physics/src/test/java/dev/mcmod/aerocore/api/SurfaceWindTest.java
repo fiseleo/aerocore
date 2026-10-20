@@ -84,4 +84,15 @@ class SurfaceWindTest {
         assertTrue(maxStep / 200 < Math.toRadians(1e-2), "Slow: " + maxStep);
         assertNotEquals(new SurfaceWind.Synoptic(1).direction(0), new SurfaceWind.Synoptic(2).direction(0));
     }
+
+    @Test void theWindWandersAboutItsPrevailingDirection() {
+        // 0.38: over 10 hours the mean direction is the prevailing one (where an airfield points its runway)
+        for (long seed : new long[]{1, 42, -7}) {
+            SurfaceWind.Synoptic s = new SurfaceWind.Synoptic(seed);
+            double sx = 0, sz = 0;
+            for (double t = 0; t < 36_000; t += 10) { sx += Math.cos(s.direction(t)); sz += Math.sin(s.direction(t)); }
+            double mean = Math.atan2(sz, sx), off = Math.atan2(Math.sin(mean - s.prevailing()), Math.cos(mean - s.prevailing()));
+            assertEquals(0, Math.toDegrees(off), 5, "seed " + seed);
+        }
+    }
 }

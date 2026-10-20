@@ -252,6 +252,8 @@ public final class WaveRadiation {
         private final double[][] distance, history;
         private final double[] radii, reference, instant;
         private double[][][] kernels;
+        /** 0.30: kernels zero at every lag (skipped by verticalForces). */
+        private boolean[][] zero;
         private int head;
 
         public Memory(List<Vec3d> floatPositionsLocal, double dt) {
@@ -269,10 +271,31 @@ public final class WaveRadiation {
             reference = new double[floats];
             instant = new double[floats];
             kernels = new double[floats][floats][];
+            zero = new boolean[floats][floats];
             rebuild(true);
         }
         public double timeStep() { return dt; }
         public double[] effectiveRadii() { return radii.clone(); }
+
+        /**
+         * 0.31: takes over another memory of the same floats (same time step and float layout): its recorded velocities,
+         * radii and kernels, so that this one goes on exactly as that one would (a vehicle restyled in place). The kernels
+         * are shared (read-only); the arrays that hold them are this memory's own.
+         */
+        public void copyFrom(Memory other) {
+            if (other.dt != dt || other.floats != floats || other.count != count || !java.util.Arrays.deepEquals(other.distance, distance)) {
+                throw new IllegalArgumentException("A radiation memory can only take over one of the same floats");
+            }
+            for (int i = 0; i < floats; i++) {
+                System.arraycopy(other.history[i], 0, history[i], 0, count);
+                kernels[i] = other.kernels[i].clone();
+                zero[i] = other.zero[i].clone();
+            }
+            System.arraycopy(other.radii, 0, radii, 0, floats);
+            System.arraycopy(other.reference, 0, reference, 0, floats);
+            System.arraycopy(other.instant, 0, instant, 0, floats);
+            head = other.head;
+        }
 
         /**
          * Upward radiation force on each float (N) for the given water density, from the recorded vertical velocities;
@@ -284,6 +307,8 @@ public final class WaveRadiation {
             for (int i = 0; i < floats; i++) {
                 double sum = 0;
                 for (int j = 0; j < floats; j++) {
+                    // 0.30: a kernel that is zero everywhere (a dry float: no waterplane) adds nothing; skipped
+                    if (zero[i][j]) { continue; }
                     double[] k = kernels[i][j], w = history[j];
                     // Trapezoid over n = 0 .. count-1 with w at head - n (wrapping once), summed in that order; the
                     // index runs down without a modulo per element (the hot loop of every floating body).
@@ -414,6 +439,16 @@ public final class WaveRadiation {
                 }
             }
             kernels = next;
+            // 0.30: which kernels are zero at every lag (a float with no waterplane radiates nothing), to skip them
+            boolean[][] none = new boolean[floats][floats];
+            for (int i = 0; i < floats; i++) {
+                for (int j = 0; j < floats; j++) {
+                    boolean allZero = true;
+                    for (double v : next[i][j]) { if (v != 0) { allZero = false; break; } }
+                    none[i][j] = allZero;
+                }
+            }
+            zero = none;
         }
     }
 }

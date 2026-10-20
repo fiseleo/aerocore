@@ -1,8 +1,15 @@
 package dev.mcmod.aerocore.api.engine;
 
+import dev.mcmod.aerocore.api.engine.GasPath.Mix;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+
+import static dev.mcmod.aerocore.api.engine.GasPath.burnerExit;
+import static dev.mcmod.aerocore.api.engine.GasPath.corrected;
+import static dev.mcmod.aerocore.api.engine.GasPath.nozzle;
+import static dev.mcmod.aerocore.api.engine.GasPath.retained;
 
 /**
  * Single-spool turbojet: inlet, compressor, combustor, turbine and a fixed nozzle, with variable gas properties (air
@@ -33,7 +40,8 @@ import java.util.Objects;
  * of the corrected flow entering them (Saravanamuttoo et al., Gas Turbine Theory, pressure-loss factor; the burner's
  * hot share is held at its design fraction): a slowly turning spool loses almost nothing, so it can light and run up.
  * Cooling air (a fraction of compressor delivery) bypasses burner and turbine and rejoins before the nozzle. Supersonic inlets: a pitot inlet loses a normal shock;
- * an external-compression ramp inlet follows MIL-E-5008B, 1 - 0.075 (M - 1)^1.35 (as given by Mattingly).
+ * an external-compression ramp inlet follows MIL-E-5008B, 1 - 0.075 (M - 1)^1.35 to Mach 5 (as given by Mattingly). The
+ * gas path pieces (gas, burner, ducts, nozzles) are GasPath's, which the turbofan and the free turbine share.
  * A convergent-divergent nozzle separates when its exit would be below 0.4 of ambient (Summerfield's criterion) and
  * then exhausts at ambient.
  */
@@ -44,7 +52,6 @@ public final class Turbojet {
     public static final double T_REF = 288.15, P_REF = 101325;
     /** Lowest corrected speed (fraction of design) the running line table holds. */
     public static final double MIN_LINE_SPEED = 0.35;
-    private static final double SEPARATION = 0.4;
 
     public enum Inlet { PITOT, RAMP }
 
@@ -83,121 +90,11 @@ public final class Turbojet {
     public static double inletRecovery(Design d, double mach) { return inletRecovery(d, mach, 1); }
     /** Inlet total pressure recovery at a flight Mach number and a corrected airflow (fraction of design): the duct loses with the square of it. */
     public static double inletRecovery(Design d, double mach, double flowFraction) {
-        double r = retained(d.inletRecovery(), flowFraction);
-        if (mach <= 1) { return r; }
-        if (d.inlet() == Inlet.RAMP) { return r * Math.max(0.05, 1 - 0.075 * Math.pow(mach - 1, 1.35)); }
-        double g = 1.4, m2 = mach * mach;
-        double shock = Math.pow((g + 1) * m2 / ((g - 1) * m2 + 2), g / (g - 1)) * Math.pow((g + 1) / (2 * g * m2 - (g - 1)), 1 / (g - 1));
-        return r * shock;
+        return GasPath.inletRecovery(d.inletRecovery(), d.inlet(), mach, flowFraction);
     }
-
-    /** Gas that is a mass blend of air and stoichiometric products: lean products of a fuel-air ratio f. */
-    static final class Mix {
-        final double share, r;   // mass fraction of stoichiometric products
-        final Gas products;
-        Mix(Fuel fuel, double fuelAirRatio) {
-            double afr = fuel.stoichiometricAirFuel();
-            share = Math.clamp(fuelAirRatio * (1 + afr) / (1 + fuelAirRatio), 0, 1);
-            products = stoichiometric(fuel);
-            r = share * products.gasConstant() + (1 - share) * Gas.AIR.gasConstant();
-        }
-        double h(double t) { return share * products.enthalpy(t) + (1 - share) * Gas.AIR.enthalpy(t); }
-        double phi(double t) { return share * products.entropyFunction(t) + (1 - share) * Gas.AIR.entropyFunction(t); }
-        double cp(double t) { return share * products.cp(t) + (1 - share) * Gas.AIR.cp(t); }
-        double tAtH(double h) {
-            double t = 1000;
-            for (int i = 0; i < 40; i++) { double step = (h(t) - h) / cp(t); t -= step; if (Math.abs(step) < 1e-7) { break; } }
-            return t;
-        }
-        double tAtPhi(double phi) {
-            // Newton in ln T: phi is nearly linear there (phi ~ cp ln T), so it cannot overshoot below zero
-            double y = Math.log(1000);
-            for (int i = 0; i < 40; i++) {
-                double t = Math.exp(y), step = (phi(t) - phi) / cp(t);
-                y -= step;
-                if (Math.abs(step) < 1e-10) { break; }
-            }
-            return Math.exp(y);
-        }
-        /** Static state where the flow is sonic, from total temperature: {T*, p* / pt, mass flux / pt (s/m)}. */
-        double[] sonic(double tt) {
-            double lo = 0.5 * tt, hi = tt, ht = h(tt);
-            for (int i = 0; i < 50; i++) {
-                double t = 0.5 * (lo + hi), v2 = 2 * (ht - h(t)), cp = cp(t), a2 = cp / (cp - r) * r * t;
-                if (v2 > a2) { lo = t; } else { hi = t; }
-            }
-            double t = 0.5 * (lo + hi), pr = Math.exp(-(phi(tt) - phi(t)) / r), v = Math.sqrt(Math.max(0, 2 * (ht - h(t))));
-            return new double[]{t, pr, pr / (r * t) * v};
-        }
-        /** Mass flux over total pressure (s/m) of flow expanding from total temperature tt by a total-to-static pressure ratio; sonic at most. */
-        double flux(double tt, double pressureRatio) {
-            double[] star = sonic(tt);
-            if (1 / pressureRatio <= star[1]) { return star[2]; }
-            double[] e = expand(tt, 1, 1 / pressureRatio);
-            return 1 / pressureRatio / (r * e[0]) * e[1];
-        }
-        /** Static temperature and speed after expanding from (tt, pt) to p. */
-        double[] expand(double tt, double pt, double p) {
-            double t = tAtPhi(phi(tt) - r * Math.log(pt / p));
-            return new double[]{t, Math.sqrt(Math.max(0, 2 * (h(tt) - h(t))))};
-        }
-    }
-
-    /** Pressure retained by a duct that keeps r at design, at a corrected flow (fraction of design): the loss goes with the dynamic head. */
-    static double retained(double designRetention, double flowFraction) {
-        return Math.max(0.3, 1 - (1 - designRetention) * flowFraction * flowFraction);
-    }
-    /** Flow corrected to the reference state, kg/s: w sqrt(T / T_REF) / (p / P_REF). */
-    static double corrected(double flow, double tt, double pt) { return flow * Math.sqrt(tt / T_REF) * P_REF / pt; }
-
-    private static final java.util.Map<Fuel, Gas> STOICHIOMETRIC = new java.util.concurrent.ConcurrentHashMap<>();
-    static Gas stoichiometric(Fuel fuel) { return STOICHIOMETRIC.computeIfAbsent(fuel, f -> f.products(1)); }
 
     /** Fuel-air ratio (per kilogram of burner air) that heats air from T3 to T4 in a burner of efficiency eta (fuel at 298 K). */
-    public static double fuelAirRatio(Fuel fuel, double t3, double t4, double eta) {
-        Gas s = stoichiometric(fuel), a = Gas.AIR;
-        double afr = fuel.stoichiometricAirFuel();
-        double f = (a.enthalpy(t4) - a.enthalpy(t3)) / (eta * fuel.lowerHeatingValueJPerKg() - (1 + afr) * s.enthalpy(t4) + afr * a.enthalpy(t4));
-        return Math.max(0, f);
-    }
-    /** Burner exit temperature for a fuel-air ratio (inverse of fuelAirRatio), K. */
-    static double burnerExit(Fuel fuel, double t3, double f, double eta) {
-        Mix m = new Mix(fuel, f);
-        return m.tAtH((Gas.AIR.enthalpy(t3) + f * eta * fuel.lowerHeatingValueJPerKg()) / (1 + f));
-    }
-
-    /** Nozzle exit for gas (mix) at nozzle total (tt, pt) into ambient p0 through throat a8 (and exit a9): {mass flow, exit speed, exit pressure, exit area, choked 0/1}. */
-    static double[] nozzle(Mix m, double tt, double pt, double p0, double a8, boolean cd, double areaRatio) {
-        // No outflow (a stopped spool, whose fixed-fraction losses leave the tailpipe below ambient): the exit sits at ambient.
-        if (pt <= p0) { return new double[]{0, 0, p0, a8, 0}; }
-        double[] star = m.sonic(tt);
-        double pStar = star[1] * pt;
-        if (p0 >= pStar) {   // unchoked: subsonic to ambient at the throat
-            double[] e = m.expand(tt, pt, Math.min(p0, pt));
-            double flux = Math.min(p0, pt) / (m.r * e[0]) * e[1];
-            return new double[]{flux * a8, e[1], Math.min(p0, pt), a8, 0};
-        }
-        double flow = star[2] * pt * a8;
-        if (!cd || areaRatio <= 1.0000001) {
-            double[] e = m.expand(tt, pt, pStar);
-            return new double[]{flow, e[1], pStar, a8, 1};
-        }
-        // supersonic exit at the area ratio: mass flux falls to flux* / ratio below p*
-        double target = star[2] * pt / areaRatio, lo = 1e-4 * pt, hi = pStar;
-        for (int i = 0; i < 60; i++) {
-            double p = Math.sqrt(lo * hi);
-            double[] e = m.expand(tt, pt, p);
-            double flux = p / (m.r * e[0]) * e[1];
-            if (flux > target) { hi = p; } else { lo = p; }
-        }
-        double p9 = Math.sqrt(lo * hi);
-        if (p9 < SEPARATION * p0) {   // the jet separates and leaves at ambient
-            double[] e = m.expand(tt, pt, p0);
-            return new double[]{flow, e[1], p0, a8 * areaRatio, 1};
-        }
-        double[] e = m.expand(tt, pt, p9);
-        return new double[]{flow, e[1], p9, a8 * areaRatio, 1};
-    }
+    public static double fuelAirRatio(Fuel fuel, double t3, double t4, double eta) { return GasPath.fuelAirRatio(fuel, t3, t4, eta); }
 
     /** One operating point. Temperatures and pressures are totals at stations 2 (compressor face), 3, 4, 5 (after cooling air rejoins). */
     public record Point(double thrustN, double fuelKgPerS, double airflowKgPerS, double pressureRatio, double tt2, double pt2, double tt3, double tt4,
@@ -222,7 +119,7 @@ public final class Turbojet {
     public static Sizing size(Design d, Flight flight) {
         double tt2 = flight.totalTemperature(), pt2 = flight.totalPressure() * inletRecovery(d, flight.mach());
         Gas air = Gas.AIR;
-        double t3 = air.temperatureAtEntropy(air.entropyFunction(tt2) + air.gasConstant() * Math.log(d.pressureRatio()) / d.compressorEfficiency());
+        double t3 = Turbomachinery.compressorExitTemperature(d.pressureRatio(), d.compressorEfficiency(), tt2);
         double wc = air.enthalpy(t3) - air.enthalpy(tt2);
         double c = d.coolingBleed(), f = fuelAirRatio(d.fuel(), t3, d.turbineInletK(), d.burnerEfficiency());
         double pt4 = d.burnerPressureRatio() * d.pressureRatio() * pt2;
@@ -488,7 +385,7 @@ public final class Turbojet {
         Gas air = Gas.AIR;
         double tt2 = flight.totalTemperature(), theta = tt2 / T_REF, n = Math.max(0, speedFraction) / Math.sqrt(theta);
         double pc = line.pressureRatioAt(n), face = line.airflowAt(n);
-        double t3 = air.temperatureAtEntropy(air.entropyFunction(tt2) + air.gasConstant() * Math.log(pc) / d.compressorEfficiency());
+        double t3 = Turbomachinery.compressorExitTemperature(pc, d.compressorEfficiency(), tt2);
         double s0 = line.firstSpeed();
         // the running line's burner fuel-air ratio: corrected fuel over corrected airflow, times theta
         double f = face > 0 ? line.fuelAt(n) * theta / (face * (1 - d.coolingBleed())) : 0;

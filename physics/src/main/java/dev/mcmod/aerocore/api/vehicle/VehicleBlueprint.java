@@ -57,6 +57,35 @@ public record VehicleBlueprint(String name, List<Entry> parts, List<Connection> 
     /** The compiled vehicle; throws DesignException when check() or the assembly finds INVALID issues. */
     public Vehicle compile() { return Vehicle.compile(this); }
 
+    /** What is left of a blueprint without some parts, and the ids that went (VehicleBlueprint.without). */
+    public record Split(VehicleBlueprint rest, List<String> removed) {}
+
+    /**
+     * This blueprint without some parts (0.28: cast off): the parts attached to their mount points go with them (at any
+     * depth), and the connections to any part that went are dropped. The rest keep their mounts.
+     */
+    public Split without(java.util.Collection<String> ids) {
+        Set<String> gone = new HashSet<>(ids);
+        for (boolean grew = true; grew; ) {
+            grew = false;
+            for (Entry e : parts) {
+                if (!gone.contains(e.id()) && e.mount().attached() && gone.contains(e.mount().attachPart())) { gone.add(e.id()); grew = true; }
+            }
+        }
+        List<Entry> rest = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        for (Entry e : parts) { if (gone.contains(e.id())) { removed.add(e.id()); } else { rest.add(e); } }
+        List<Connection> kept = new ArrayList<>();
+        for (Connection c : connections) {
+            boolean touches = switch (c) {
+                case Connection.Shaft sh -> gone.contains(sh.from()) || gone.contains(sh.to());
+                case Connection.Slipstream sl -> gone.contains(sl.propeller()) || gone.contains(sl.surface());
+            };
+            if (!touches) { kept.add(c); }
+        }
+        return new Split(new VehicleBlueprint(name, rest, kept), removed);
+    }
+
     public Entry part(String id) {
         for (Entry e : parts) { if (e.id().equals(id)) { return e; } }
         return null;

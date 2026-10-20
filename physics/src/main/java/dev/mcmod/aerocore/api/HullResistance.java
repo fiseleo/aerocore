@@ -32,11 +32,13 @@ public final class HullResistance {
     /**
      * Holtrop and Mennen (1982) form factor 1 + k1 = c13 {0.93 + c12 (B/L_R)^0.92497 (0.95 - C_P)^-0.521448
      * (1 - C_P + 0.0225 lcb)^0.6906}, c13 = 1 + 0.003 C_stern (-10 V-shaped, 0 normal, +10 U-shaped sections).
-     * Regression range about 3.9 < L/B < 15, 2.1 < B/T < 4, 0.55 < C_P < 0.85; C_P is held below 0.9 here.
+     * Regression range about 3.9 < L/B < 15, 2.1 < B/T < 4, 0.55 < C_P < 0.85; C_P is held within 0.3 to 0.9 and lcb within
+     * +-6 % here (since AeroCore 0.23: a hull cut down to a sliver had lcb -25 %, a negative run length and a NaN form factor).
      */
     public static double holtropFormFactor(double length, double beam, double draft, double prismatic, double lcbPercent, double sternShape) {
         Checks.positive(length, "Length"); Checks.positive(beam, "Beam"); Checks.positive(draft, "Draft");
         double cp = Math.clamp(prismatic, 0.3, 0.9), ratio = draft / length;
+        lcbPercent = Math.clamp(lcbPercent, -6, 6);
         double c12 = ratio > 0.05 ? Math.pow(ratio, 0.2228446) : ratio > 0.02 ? 48.20 * Math.pow(ratio - 0.02, 2.078) + 0.479948 : 0.479948;
         double runLength = length * runLengthRatio(cp, lcbPercent);
         double fullness = Math.max(1e-3, 1 - cp + 0.0225 * lcbPercent);

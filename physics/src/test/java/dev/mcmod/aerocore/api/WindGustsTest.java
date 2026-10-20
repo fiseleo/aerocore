@@ -57,4 +57,23 @@ class WindGustsTest {
         g.sample(12, 100, 0, a); g.sample(12, 110, 120, b);
         assertArrayEquals(a, b, 1e-9);
     }
+
+    @Test void aReportsGustIsTheHighestThreeSecondMean() {
+        // 0.38: running means of a known series
+        double[] steps = {1, 1, 1, 7, 7, 7, 1, 1, 0, 0};
+        assertArrayEquals(new double[]{7, 1.0 / 3}, WindGusts.runningExtremes(steps, 3), 1e-12);
+        assertArrayEquals(new double[]{2.6, 2.6}, WindGusts.runningExtremes(steps, 99), 1e-12, "a window longer than the series: its mean");
+        assertArrayEquals(new double[]{7, 0}, WindGusts.runningExtremes(steps, 1), 1e-12);
+        // over the synthesised gusts (the sea's): shorter averages give higher peaks, and the 10 min peak 3 s gust at
+        // 10 m/s is a couple of m/s above the mean (Wieringa's gust factor over water, about 1.25; see the test above)
+        WindGusts gusts = new WindGusts(11);
+        double u = 10, dt = 0.25;
+        double[] speed = new double[(int) (600 / dt)], g = new double[2];
+        for (int i = 0; i < speed.length; i++) { gusts.sample(u, 1000 + i * dt, 0, g); speed[i] = Math.hypot(u + g[0], g[1]); }
+        double three = WindGusts.runningExtremes(speed, (int) (3 / dt))[0], one = WindGusts.runningExtremes(speed, (int) (1 / dt))[0];
+        double minute = WindGusts.runningExtremes(speed, (int) (60 / dt))[0];
+        System.out.printf("10 min at 10 m/s: highest 1 s %.2f, 3 s %.2f, 60 s %.2f m/s%n", one, three, minute);
+        assertTrue(one >= three && three >= minute);
+        assertTrue(three > 1.1 * u && three < 1.5 * u);
+    }
 }

@@ -17,6 +17,22 @@ public final class RigidBodyDynamics {
         public PointMass { Objects.requireNonNull(offset); Checks.nonnegative(massKg, "Added mass"); }
     }
     /**
+     * A damper along one line (0.24): at a world offset from the COM it pushes with -c (d . u - u_ref) d, u the point's
+     * velocity, d a unit world direction, c >= 0 in N s/m and u_ref the speed along d it pulls the point toward (the
+     * ground's, for a tyre's slip or a suspension's damping against it). Taken implicitly like a point drag, but only
+     * along d.
+     */
+    public record LineDamper(Vec3d offset, Vec3d direction, double coefficient, double referenceSpeed) {
+        public LineDamper {
+            Objects.requireNonNull(offset); Objects.requireNonNull(direction);
+            direction = direction.normalized();
+            Checks.nonnegative(coefficient, "Damping");
+            if (!Double.isFinite(referenceSpeed)) { throw new IllegalArgumentException("Reference speed must be finite"); }
+        }
+        /** The force it makes on a point moving at velocity (N, world). */
+        public Vec3d force(Vec3d velocity) { return direction.scale(-coefficient * (direction.dot(velocity) - referenceSpeed)); }
+    }
+    /**
      * One implicit velocity update for load W, point drag C and added mass Ma:
      * (M + Ma + C dt) nu1 = (M + Ma) nu0 + dt W + C dt u_f, with nu = (v, omega) and Ma = sum m_i J_i^T J_i,
      * J_i nu = v + omega x r_i. The added mass therefore resists changes of point velocity implicitly, which
@@ -85,6 +101,14 @@ public final class RigidBodyDynamics {
      */
     public static RigidBodyState implicitVelocity(RigidBodyState s, RigidBodyProperties p, Wrench load, double[][] addedMass,
                                                   List<PointDrag> points, List<PointMass> added, double dt) {
+        return implicitVelocity(s, p, load, addedMass, points, added, List.of(), dt);
+    }
+    /**
+     * The same with line dampers (0.24) as well: each adds c dt g^T g to the matrix and c dt u_ref g^T to the right side,
+     * g = (d, r x d) the row that gives the point's speed along d. With no dampers it is the overload above exactly.
+     */
+    public static RigidBodyState implicitVelocity(RigidBodyState s, RigidBodyProperties p, Wrench load, double[][] addedMass,
+                                                  List<PointDrag> points, List<PointMass> added, List<LineDamper> dampers, double dt) {
         Checks.positive(dt, "Time step");
         RigidBodyState kicked = kick(s, p, load, dt);
         double[][] a = massMatrix(s, p);
@@ -114,6 +138,15 @@ public final class RigidBodyDynamics {
             double speed = kicked.velocity().add(kickedOmega.cross(r)).subtract(point.fluidVelocity()).length();
             accumulate(a, b, jacobian(r), (point.linearResistance() + point.quadraticResistance() * speed) * dt, values(point.fluidVelocity()));
         }
+        for (LineDamper damper : dampers) {
+            Vec3d d = damper.direction(), m = damper.offset().cross(d);
+            double[] g = {d.x(), d.y(), d.z(), m.x(), m.y(), m.z()};
+            double w = damper.coefficient() * dt;
+            for (int row = 0; row < 6; row++) {
+                b[row] += w * g[row] * damper.referenceSpeed();
+                for (int col = 0; col < 6; col++) { a[row][col] += w * g[row] * g[col]; }
+            }
+        }
         double[] velocity = solvePositiveDefinite(a, b);
         return new RigidBodyState(s.position(), new Vec3d(velocity[0], velocity[1], velocity[2]), s.orientation(),
                 p.inertia().applyWorld(s.orientation(), new Vec3d(velocity[3], velocity[4], velocity[5])));
@@ -124,10 +157,14 @@ public final class RigidBodyDynamics {
      * The added masses are held at their start-of-step body positions for this step; with none it is drift().
      */
     public static RigidBodyState driftWithPointMasses(RigidBodyState s, RigidBodyProperties p, List<PointMass> added, double dt) {
+        return driftWithPointMasses(s,p,added,Vec3d.ZERO,dt);
+    }
+    /** driftWithPointMasses() of a gyrostat: spinning rotors with the angular momentum spin (body frame), see drift(s, p, spin, dt). */
+    public static RigidBodyState driftWithPointMasses(RigidBodyState s, RigidBodyProperties p, List<PointMass> added, Vec3d spin, double dt) {
         double extra=0;
         Vec3d moment=Vec3d.ZERO;
         for(PointMass m:added) {extra+=m.massKg();moment=moment.add(m.offset().scale(m.massKg()));}
-        if(extra==0) {return drift(s,p,dt);}
+        if(extra==0) {return drift(s,p,spin,dt);}
         double total=p.massKg()+extra;
         Orientation q=s.orientation(),inverse=q.inverse();
         Vec3d c=moment.scale(1/total),cBody=inverse.rotate(c);
@@ -136,7 +173,7 @@ public final class RigidBodyDynamics {
         RigidBodyProperties system=new RigidBodyProperties(total,p.centerOfMassLocal().add(cBody),inertia);
         Vec3d omega=s.angularVelocity(p);
         RigidBodyState virtual=new RigidBodyState(s.position().add(c),s.velocity().add(omega.cross(c)),q,inertia.applyWorld(q,omega));
-        RigidBodyState drifted=drift(virtual,system,dt);
+        RigidBodyState drifted=drift(virtual,system,spin,dt);
         Orientation q1=drifted.orientation();
         Vec3d omega1=drifted.angularVelocity(system),c1=q1.rotate(cBody);
         return new RigidBodyState(drifted.position().subtract(c1),drifted.velocity().subtract(omega1.cross(c1)),q1,p.inertia().applyWorld(q1,omega1));
@@ -207,21 +244,32 @@ public final class RigidBodyDynamics {
     }
     /** Torque-free drift keeps world angular momentum fixed; midpoint orientation includes gyroscopic motion. */
     public static RigidBodyState drift(RigidBodyState s, RigidBodyProperties p, double dt) {
-        Checks.positive(dt, "Time step");
-        Orientation q = driftRotation(s.orientation(), s.angularMomentum(), p.inertia(), dt, 0);
-        return new RigidBodyState(s.position().add(s.velocity().scale(dt)), s.velocity(), q, s.angularMomentum());
+        return drift(s, p, Vec3d.ZERO, dt);
     }
-    private static Orientation driftRotation(Orientation initial, Vec3d momentum, InertiaTensor inertia, double dt, int depth) {
-        Vec3d omega = inertia.solveWorld(initial, momentum);
+    /**
+     * Torque-free drift of a gyrostat: rotors spinning inside the body carry the angular momentum spin (body frame,
+     * held through the step). The world momentum of body and rotors together is kept, so the rotors' gyroscopic couple
+     * is taken with the rotation at the step's midpoint rather than as an explicit force (which, with a rotor's momentum
+     * large against the body's inertia, as a helicopter's, gained energy every step). The state holds the body's own
+     * momentum before and after.
+     */
+    public static RigidBodyState drift(RigidBodyState s, RigidBodyProperties p, Vec3d spin, double dt) {
+        Checks.positive(dt, "Time step");
+        Vec3d total = s.angularMomentum().add(s.orientation().rotate(spin));
+        Orientation q = driftRotation(s.orientation(), total, spin, p.inertia(), dt, 0);
+        return new RigidBodyState(s.position().add(s.velocity().scale(dt)), s.velocity(), q, total.subtract(q.rotate(spin)));
+    }
+    private static Orientation driftRotation(Orientation initial, Vec3d momentum, Vec3d spin, InertiaTensor inertia, double dt, int depth) {
+        Vec3d omega = inertia.solveWorld(initial, momentum.subtract(initial.rotate(spin)));
         for (int i=0; i<24; i++) {
             Orientation midpoint = initial.advanceWorld(omega, dt/2);
-            Vec3d next = inertia.solveWorld(midpoint, momentum);
+            Vec3d next = inertia.solveWorld(midpoint, momentum.subtract(midpoint.rotate(spin)));
             if (next.subtract(omega).length()*dt < 1e-12) { return initial.advanceWorld(next, dt); }
             omega = next;
         }
         if (depth >= 10) { throw new IllegalArgumentException("Rotation step failed to converge; reduce time step or angular momentum"); }
-        Orientation half = driftRotation(initial,momentum,inertia,dt/2,depth+1);
-        return driftRotation(half,momentum,inertia,dt/2,depth+1);
+        Orientation half = driftRotation(initial,momentum,spin,inertia,dt/2,depth+1);
+        return driftRotation(half,momentum,spin,inertia,dt/2,depth+1);
     }
     private static double[] values(Vec3d v) { return new double[]{v.x(),v.y(),v.z()}; }
     private static double[] solvePositiveDefinite(double[][] a, double[] b) {

@@ -59,6 +59,20 @@ public final class SprayRenderer {
 
     private SprayRenderer() {}
 
+    /**
+     * 0.30: one droplet thrown from a point with a velocity (m/s), falling back through a still surface's height (a
+     * rotor's downwash, a wheel splashing): flies as the bow spray's do, a random size of drop, within the same budget.
+     */
+    public static void emit(double x, double y, double z, double vx, double vy, double vz, double floorY) {
+        if (DROPLETS.size() >= MAX_DROPLETS) { return; }
+        Droplet d = new Droplet();
+        d.x = x; d.y = y; d.z = z; d.px = x; d.py = y; d.pz = z;
+        d.vx = vx; d.vy = vy; d.vz = vz; d.floor = floorY;
+        double size = RANDOM.nextDouble();
+        d.fall = size < 0.5 ? FALL_SMALL + (FALL_MEDIUM - FALL_SMALL) * 2 * size : FALL_MEDIUM + (FALL_LARGE - FALL_MEDIUM) * (2 * size - 1);
+        DROPLETS.add(d);
+    }
+
     @SubscribeEvent public static void tick(ClientTickEvent.Post event) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) { DROPLETS.clear(); return; }

@@ -35,27 +35,33 @@ double reynolds = detail.flow().reynoldsNumber();
 
 ## 作為另一個 NeoForge Mod 的前置
 
-開發期間可將遊戲用 JAR 放在載具專案的 `libs/`，在其 Gradle 相依設定加入：
+AeroCore 發佈到工作區裡的 Maven 資料夾（`AeroCore\build\repo`），有改動時在 AeroCore 執行 `.\dev.ps1 build publish`。
+載具 Mod 的 Gradle 設定：
 
 ```groovy
+repositories { maven { url = file('../AeroCore/build/repo').toURI() } }
 dependencies {
-    implementation files('libs/aerocore-neoforge-1.21.1-0.19.0.jar')
+    // 純 Java 模組（不依賴 Minecraft）只在編譯與測試時用 physics JAR
+    compileOnly 'dev.mcmod.aerocore:aerocore-physics:0.22.1'
+    testImplementation 'dev.mcmod.aerocore:aerocore-physics:0.22.1'
+    // NeoForge 模組依遊戲 JAR（已含 physics API）
+    implementation 'dev.mcmod.aerocore:aerocore-neoforge-1.21.1:0.22.1'
 }
 ```
 
+遊戲 JAR 的發佈不帶依賴；執行時不要再放 physics JAR，同一個套件出現兩次會讓 NeoForge 的模組層衝突。
 在載具 Mod 的 `META-INF/neoforge.mods.toml` 宣告依賴；將 `your_vehicle_mod` 改成實際 Mod ID：
 
 ```toml
 [[dependencies.your_vehicle_mod]]
 modId="aerocore"
 type="required"
-versionRange="[0.19.0,0.20.0)"
+versionRange="[0.22.1,0.23.0)"
 ordering="AFTER"
 side="BOTH"
 ```
 
-玩家安裝 AeroCore 的遊戲用 JAR 和載具 Mod。不要再將 physics JAR 額外打包到載具 Mod，
-以免出現重複類別。API 仍在 0.x 階段，後續次版本可能調整接口。
+玩家安裝 AeroCore 的遊戲用 JAR 和載具 Mod。API 仍在 0.x 階段，後續次版本可能調整接口。
 
 ## Minecraft 單位
 
@@ -476,7 +482,8 @@ List<ContactSolver.BodyResult> results = ContactSolver.solveAll(bodies, contacts
 ```
 
 `BodyResult.staticFrictionW` 是與方塊接觸的摩擦功率（交給呼叫者分配），`pairFrictionW` 是與其他物體摩擦功率的一半。
-Minecraft 端的 `BodyWorld` 就是這樣每 tick 一起推進平台、測試船與測試球。
+Minecraft 端的 `BodyWorld` 就是這樣每 tick 一起推進平台、測試船與測試球。0.22.1 起一個物體的呼叫丟例外時，`BodyWorld` 只把那個物體拿掉
+（`CoupledBody.physicsFailed`），其他物體照常推進；見〈0.22.1 相容性變更〉。
 
 ## 0.10 相容性變更
 
@@ -643,53 +650,550 @@ Rowboat.Result r = Rowboat.step(state, crew, oars, water, ownWake, new Rowboat.A
   `WaveRegion.meanWind`／`gust`／`windAt`／`windDrift(level, ...)`／`drawnWaves`；`WaveRegions.at(level, x, z)` 回傳含該點風的 `Local`（`wind10`、`gust`）；
   `SeaSurface.waterVelocity` 多 `level` 參數；`WaveSurfaceRenderer.surfaceMask`。
 
-## 零件化載具（0.17）
+## 零件化載具（0.17；0.20 起零件設計在載具 Mod）
 
-載具 Mod 用零件藍圖組出載具，AeroCore 算物理。完整說明、零件參數與驗證見 [零件化載具](VEHICLE_PARTS.md)。
+載具 Mod 定義自己的零件設計，AeroCore 算物理：通用框架（藍圖、組裝、`VehicleDynamics`、狀態與存檔）與零件的執行時受力
+（`api.vehicle.part`）。完整說明與驗證見 [零件化載具](VEHICLE_PARTS.md)。
 
 ```java
-// 1. 零件藍圖（玩家設計的參數；check() 列出不合物理與外推的值）
-PartDesign hull = HullDesign.tapered("my hull", 8, 1.0, -0.6, 0.6, 1.0, 2, 17, 2500, MassSpec.shell(Material.ALUMINIUM, 0.005));
-PartDesign screw = new PropellerDesign("screw", 0.45, 3, 0.65, 1.0, 0.18, 0.1, MassSpec.solid(Material.BRONZE));
-PartDesign motor = new MotorDesign("motor", 150, 25000, 3000, 0.02, 0.92, 45);
-List<DesignIssue> warnings = screw.check();             // EXTRAPOLATION：超出 B 系列範圍等
+// 1. 載具 Mod 的零件設計：參數、檢查、JSON；compile() 交給 AeroCore 的執行時零件
+public record MyFloat(String name, double radiusM, MassSpec mass) implements PartDesign {
+    public static final String TYPE = "mymod:float";
+    @Override public String type() { return TYPE; }
+    @Override public List<DesignIssue> check() {
+        List<DesignIssue> issues = new ArrayList<>();
+        if (!(radiusM > 0)) { issues.add(DesignIssue.invalid("radiusM", "Radius must be positive")); }
+        return issues;
+    }
+    @Override public Part compile() {
+        DesignException.throwIfInvalid(check());
+        return new SpherePart(this, radiusM, mass.resolve(t -> MassShapes.sphere(radiusM, t)));
+    }
+    @Override public Map<String, Object> parameters() { return Fields.object("radiusM", radiusM, "mass", mass.toJson()); }
+}
+PartTypes.register(MyFloat.TYPE, f -> new MyFloat(f.string("name", "float"), f.number("radiusM"), MassSpec.fromJson(f.child("mass"))));
 
 // 2. 載具藍圖：安裝位置、控制綁定、連接
-VehicleBlueprint boat = new VehicleBlueprint("my boat", List.of(
-        new VehicleBlueprint.Entry("hull", hull, Mount.ORIGIN),
-        new VehicleBlueprint.Entry("motor", motor, Mount.at(new Vec3d(-2.5, 0, 0)), List.of(Binding.of("throttle", "throttle"))),
-        new VehicleBlueprint.Entry("screw", screw, Mount.at(new Vec3d(-4.2, -0.45, 0)))),
-        List.of(new Connection.Shaft("motor", "screw", 2, 0.97)));
-String json = boat.toJsonText();                         // 存檔、網路、分享；VehicleBlueprint.fromJsonText(json) 讀回
+VehicleBlueprint raft = new VehicleBlueprint("raft", List.of(
+        new VehicleBlueprint.Entry("left", new MyFloat("float", 0.5, MassSpec.shell(Material.STEEL, 0.004)), Mount.at(new Vec3d(0, 0, -1))),
+        new VehicleBlueprint.Entry("right", new MyFloat("float", 0.5, MassSpec.shell(Material.STEEL, 0.004)), Mount.at(new Vec3d(0, 0, 1)))),
+        List.of());
+String json = raft.toJsonText();                         // 存檔、網路、分享；VehicleBlueprint.fromJsonText(json) 讀回
 
-// 3. 離線（測試台）：編譯、在靜水中推進
-Vehicle v = boat.compile();                              // 不合物理時拋 DesignException（issues() 附路徑）
-v.warmUp();                                              // 建船體與螺旋槳的表（約 1 s，可在背景執行緒）
-VehicleState s = v.newState(new Vec3d(0, 0, 0), Orientation.IDENTITY, 0.005);
+// 3. 離線（測試台）：編譯、推進
+Vehicle v = raft.compile();                              // 不合物理時拋 DesignException（issues() 附路徑）
+v.warmUp();                                              // 建船體、螺旋槳、引擎的表（可在背景執行緒）
+VehicleState s = v.newState(Vec3d.ZERO, Orientation.IDENTITY, 0.005);
 VehicleEnvironment calm = VehicleEnvironment.calm(0.3, FluidState.FRESH_WATER_20C, Atmosphere.atAltitude(0, Vec3d.ZERO).fluid());
-for (int i = 0; i < 2000; i++) {
-    VehicleDynamics.Result r = VehicleDynamics.step(v, s, calm, Map.of("throttle", 1.0), Vec3d.Y.scale(-9.80665), List.of(), null, i * 0.005, 0.005);
-}
-double speed = s.body().velocity().length();             // 極速；s.diagnostics() 有各零件的推力、扭矩、阻力等
+VehicleDynamics.Result r = VehicleDynamics.step(v, s, calm, Map.of(), Vec3d.Y.scale(-9.80665), List.of(), null, 0, 0.005);
 ```
+
+執行時零件（`dev.mcmod.aerocore.api.vehicle.part`，建構子收物理量與擁有它的設計）：
+
+| 類別 | 受力 |
+| --- | --- |
+| `SpherePart` | 浮筒：`FloatingBodyDynamics.sphereLoads`、繞射、輻射點 |
+| `HullPart` | 排水船體／潛航體：`HullDynamics.loads`；表面船體帶薄船尾浪（`wake()`） |
+| `PlaningHullPart` | 滑行船體：`PlaningDynamics.loads`；壓力片尾浪 |
+| `PropellerPart` | 螺旋槳：`PropellerSolver`，四象限模型由 `PropellerModels.fourQuadrant` |
+| `ControlSurfacePart` | 全動控制面：`Rudder.load`，極曲線 `Rudder.lowAspectPolar` 或 `Rudder.freeEndsPolar`，在螺旋槳尾流中 |
+| `BoxPart` | 方塊體：逐格浮力與投影面積阻力 |
+| `MotorPart` | 電動馬達：`ElectricMotor` 包絡 |
+| `MassPart` | 純質量，可帶座位 |
+
+引擎這類有控制規則的零件，由載具 Mod 自己實作 `Part`，物理呼叫 `api.engine`（`EngineMap`、`EngineRuntime`、`Turbojet`…）。
 
 遊戲中：
 
 ```java
 // 生成（伺服器）
 PartVehicle entity = VehicleRegistry.PART_VEHICLE.get().create(level);   // 或載具 Mod 自己註冊的 EntityType<PartVehicle 子類>
-entity.setBlueprint(boat, origin, orientation);
+entity.setBlueprint(raft, origin, orientation);
 level.addFreshEntity(entity);
 // 操作：伺服器 entity.setControls(Map.of("throttle", 0.5))；客戶端 VehicleNetwork.send(entity, Map.of(...))（canControl 決定是否接受）
 ```
 
-- 新的零件類型：實作 `PartDesign`（record、`toJson`）與 `Part`（`loads(PartStep)` 寫入受力），以 `PartTypes.register("modid:part", reader)` 註冊。
+- 新的零件類型：實作 `PartDesign`（record、`toJson`），`compile()` 回傳 AeroCore 的執行時零件或自己的 `Part`
+  （`loads(PartStep)` 寫入受力），在 Mod 建構時以 `PartTypes.register("modid:part", reader)` 註冊（讀存檔前就要登記）。
   `PartStep` 提供載具狀態、環境、輸入、轉子轉速；`partState()`／`partProperties()` 讓以零件自身座標寫的模型裝在任意位置都能用。
+- 尾浪：零件的 `wake()` 回傳 `WakeSource`（`ThinShip`／`Planing`），`PartVehicle` 取第一個有尾浪的零件；尾浪的計算與畫面在 AeroCore。
+- 外觀：客戶端以 `PartRenderer.register(零件或設計的類別, renderer)` 登記（`mesh` 畫靜態網格，`animate` 畫轉子與舵面），
+  `PartMesh` 有方塊（可旋轉）、八角點的六面體（`hexahedron`，錐形樑）、球、任意軸的圓柱與圓錐（`cylinder`）、
+  旋轉體（`lathe`：輪廓繞軸，平滑法線，輪廓點可各有顏色）、沿路徑的管子（`tube`：彎管、彈簧、皮帶，可封閉；路徑工具 `bezier`、`helix`、`circle`）、
+  擠出輪廓（`extrude`：凸輪、曲柄臂）、兩列點之間的面片（`sheet`：葉片、散熱片）、船體放樣、把另一個網格旋轉平移後加入（`add`）、
+  外框（`bounds`），以及以平面切開（`clipped`：保留平面一側，跨越的面沿平面切開，剖視圖用）。
+  曲面每個角有自己的法線（平滑著色），也可有自己的顏色（`Quad.normals`、`Quad.colors`）。
+  顏色的 alpha 小於 0xff 的面可另用半透明的渲染類型畫（`emit(..., translucent)`），世界中的載具一律不透明。
+  `PartMesh.TEXTURE` 是畫零件用的白色材質。AeroCore 已登記自己的執行時零件。
 - 載具 Mod 繼承 `PartVehicle` 可以改 `canControl`、`usesDefaultControls`（關掉 AeroCore 的品管用按鍵）、`interact`；
   畫面自己畫，或註冊 `PartVehicleRenderer`。
 - 控制通道名稱自由（綁定決定），`PartVehicle.input(partId, role)` 在客戶端給動畫用的輸入值，`rotorAngle(rotor, partialTick)` 給轉子角度。
+- 物理例外（0.22.1）：零件的 `loads`、漂移、接觸求解在某台載具上丟出 `RuntimeException` 時，只有那台停住：
+  停在本子步開始時的姿態、速度與角動量為零、傳動軸停轉、零件內部狀態回到初始值，之後不再推進；
+  記錄一次 ERROR（實體 ID、藍圖名稱、位置、例外與堆疊），`fault()` 回傳原因（階段＋例外），隨存檔保存。
+  伺服器與其他載具照常運作。`resume()`（指令 `/aerocore vehicle resume`）讓它從靜止重新開始；原因沒排除就會再停一次。
+  零件仍應保持有限、有界（例如 `SectionPolar` 從不丟例外）：停用是保護，不是正常結果。
+
+## 0.38 相容性變更
+
+使用者 2026-10-19 要「加入機場塔台」（hdfv 0.20：塔台、跑道燈與標線、ATIS、起降許可、世界生成的機場）。只新增：物理逐位元不變（`VehicleTest` 1e-9），
+沒有選用新鍵的材質畫面逐像素不變。燈與著色見 [RENDERING.md](RENDERING.md)〈大量固定燈（0.38）〉〈選用的材質著色（0.38）〉，空氣資料見 [ATMOSPHERE.md](ATMOSPHERE.md)〈空氣資料與一點的風（0.38）〉。
+
+- 新套件 `api.light`（純 Java）：
+  - `LightSignal`（`steady`、`flash(週期, 亮, 起點)`、`sequence(週期, 序號, 數量)`（進場順閃燈：每盞每週期亮一次、序號往跑道頭）、`alternate(週期, 亮, 顏色…)`
+    （機場燈標的白綠交替）；`level(t)`、`peak(從, 到)`（一幀之間有沒有亮過：短閃不會被幀率吃掉）、`colour(t, 本色)`）。只看遊戲時間，各客戶端一致。
+  - `SectorColours`（依仰角或方位分色，邊界羽化；`papi(設定角, 過渡角, 紅, 白)`）。
+  - `FieldLamp`（位置、軸、水平與垂直涵蓋角、仰角、光強 cd、顏色、分色、訊號、迴路、燈罩大小；`omni`、`beam`、`with`、`coverage`、`colour(向眼, t)`）。
+  - `Allard`（Koschmieder 消光 3/MOR、`illuminanceLux`、`thresholdLux(背景亮度)`：log Et = −5.7 + 0.64 log B、`rangeM`；`NIGHT_BACKGROUND`、`DAY_BACKGROUND`）。
+- 新類別 `api.AirData`（純 Java）：ISA 的壓力高度與密度高度、QNH／QFE 與高度表讀數、音速與 Mach、皮托衝壓（次音速等熵、超音速 Rayleigh）、CAS↔TAS、EAS、
+  頂風與側風（`components(風的去向, 航向)`）、羅盤方位（北是 −Z）、風的來向（`bearingFromDeg`）。
+- `WindGusts.runningExtremes(序列, 視窗)`：一段陣風的滑動平均的最大與最小（ATIS 的十分鐘最大陣風）。
+- `SurfaceWind.Synoptic.prevailing()`：盛行風的去向。
+- 遊戲端：
+  - `probe/WorldAir`（兩端）：`at(Level, x, y, z)` 回傳 `Air`（平均風、陣風、垂直風、海拔、溫度、氣壓、密度、能見度；`wind()`），和 `PartVehicle` 感受到的相同
+    （有自己的風的海域先用海域的風）；`peakGustMps(…, 視窗秒, 平均秒)`；`prevailingTowardRad(種子, 維度)`；`visibilityM(Level)`（天氣規則：晴 20 km、雨 5 km、雷雨 1.5 km）。
+  - 方塊標籤 `#aerocore:smooth`（預設空）：載具 Mod 的鋪面加進去，地表粗糙度算 SMOOTH。
+  - `vehicle/VehicleTracks`：`Track`（id、實體號、位置、速度、姿態、地面高、接觸、ready、擁有者、駕駛、藍圖、質量；機頭、航向、航跡、地速、垂直速度、離地高、相對空氣的速度）、
+    `of(PartVehicle)`、`near(ServerLevel, 中心, 半徑)`（走 `BodyWorld`，近的在前）、`groundBelow`。
+  - `PartVehicle.touching()`：上一個 tick 有沒有接觸（讀接觸統計，不加浮點運算）。
+- 客戶端：
+  - `client/FieldLamps`：`put(維度, 擁有者, 燈)`、`remove`、`circuit(擁有者, 迴路, 亮度)`、`count`、`clear`（登出自動清）；每幀在 `PartLate` 一批畫完，
+    自己的著色器 `rendertype_aerocore_field_lamp`（加色、不吃霧、不丟低 alpha），最遠 8 km，超過遠裁切面的燈沿視線拉近並等比放大。`PartStats` 多一行 field lights。
+  - `PartFinishes`：材質的選用鍵 `shading`（2：套用 `tint` 與 `glossScale`）、`normal`（切線空間法線貼圖，B 通道是凹陷）、`normalStrength`、`glass: "reflective"`、`farGlass`。
+  - 零件著色器多 `Sampler3`、`PartSurface3`、`PartTint`。
+  - 開發指令 `/aerocoredev lamps grid <n> <間距>|clear`。
+
+## 0.37 相容性變更
+
+使用者 2026-10-18 要「加入聲音」（hdfv 0.19，全部程式合成）。只新增：物理與舊的方法逐位元不變（`VehicleTest` 1e-9），詳見 [ACOUSTICS.md](ACOUSTICS.md)。
+
+- 新套件 `api.acoustics`（純 Java）：DSP 與分析（`Voice`、`Noise`、`Filters`、`DelayLine`、`Oscillator`、`Modal`、`Mix`、`Dsp`、`Spectrum`、`Wav`），
+  傳播與聽者（`Propagation`、`SourceTrack`、`SonicBoom`、`RoomAcoustics`、`Surface`、`Transmission`、`Loudness`），聲源（`PistonEngineNoise`、`TurbineNoise`、
+  `RotorNoise`、`MotorNoise`、`TyreNoise`、`FlowNoise`、`WaterNoise`、`ImpactNoise`、`GasJetNoise`、`ProcessNoise`、`Horn`）。每個聲源：`Spec`、`State`、`set`、
+  `soundPowerDb`，`TurbineNoise`、`RotorNoise`、`MotorNoise`、`PistonEngineNoise` 有 `spec()`。
+- `ContactSolver.BodyResult` 多 `touches`（`Touch`：位置、法向、接近速度、法向衝量、滑動速度、另一物體、材料）；舊的五參數建構子保留（空清單）。
+- 遊戲端：
+  - `vehicle/VehicleContacts`：`Impact`、`Scrape`、`listen`、`material`；伺服器事件 `PartVehicle.Contacted`、客戶端的撞擊封包。
+  - `PartVehicle.velocity()`（客戶端是同步的真實速度）、`scrape()`、`seenBy(ServerPlayer)`。
+  - `vehicle/FarSounds`：`Signature`、`Far`、`provide`、`rangeM`、`heard`、`age`。
+- 客戶端 `client/sound`：
+  - 聲音：`RuntimeSounds`（`id`、`define`、`defined`、`undefine`）、`SynthInstance`（`streamed`、`buffered`、`at`、`volume`、`pitch`、`relative`、`finish`）、
+    `LiveSound`（`streamed`、`looped`、`update`、`stop`、`reservedStreams`）。
+  - 引擎的掛鉤：`SoundHooks`（`executor`、`generation`、`freeStreams`、`audible`、`subtitle`）。
+  - EFX 與聽者：`Efx`（`Path`、`want`、`available`、`room`、`path`）、`Listening`（`room`、`reverb`、`scan`、`between`、`occlusion`、`airHf`）。
+  - 開發指令 `/aerocoredev sound`。
+- AutoShot 的 `mark <文字>`：在記錄寫一行，對時用。
+- 雙端 `ChunkUnloadMixin`：關閉世界時的區塊卸載不再卡住（見 AGENTS.md）。
+
+## 0.36 相容性變更
+
+使用者 2026-10-18 要 hdfv 做平頭牽引車與鵝頸低底板拖車（「做鉸接拖車」）。新增兩台載具之間的鉸接；舊的方法與數字逐位元不變
+（`CouplingTest.withoutJointsTheSolveAndTheSeparationAreAsBefore` 比對舊的 `solveAll`、`separateAll`），詳見 [COUPLING.md](COUPLING.md)。
+
+- `api.vehicle.Coupling` record：`kind`（`BALL`、`FIFTH_WHEEL`）、`leaderPoint`、`followerPoint`（各自的模型座標）、`pitchAxis`（前車）、`yawAxis`（後車）、
+  `pitchLimitRad`、`yawLimitRad`（PI 為不限）、`rollLimitRad`（0 鎖住、0～PI/2 有間隙、PI/2 以上自由）、`rollStiffnessNmPerRad`（無限大為剛性）、`rollDampingNms`、
+  `captureM`、`forwarded`（後車照抄的控制頻道）、`collide`；`fifthWheel`、`ball`、`with…`、`geometry`（兩個姿態下的偏移、間隙、軸與三個角）、`toJson`／`fromJson`／`parse`／`write`。
+- `ContactSolver`：`Joint(leader, follower, coupling)`、`JointResult`（後車在接點受的力與限位的力矩、起始的三個角與間隙）、`Solution`；
+  新多載 `solveAll(bodies, contacts, joints, dt)` 與 `separateAll(bodies, contacts, joints)`。舊的兩個方法改由它們以空清單呼叫，結果逐位元相同。
+- `TestTrack`：`ConvoyDriver`、`ConvoySample`、`hitchedOrigin`、`convoy`（離線的牽引車與拖車）。
+- `LegPart.Telescope(strokeM, timeS)` 與十參數建構子：`retract` 讓支柱縮起（有載重也動）；`WheelCorner.loads` 多一個 `mountLiftM` 多載（0 時逐位元相同）。
+- `FrameAnalysis.standardCases(frame, carried, wheels, pins, groundYM, gravity)`：`pins` 是另一台車撐住的節點（拖車主銷），像輪子一樣承重、
+  煞車與轉彎時按比例承受水平力（力臂 0），不會是掉進溝的那個；沒有 pins 時與舊方法逐位元相同。
+- 遊戲端：`PartVehicle.couple`／`uncouple`／`uncoupleAll`／`leader`／`followers`／`coupling`／`couplingForceN`／`articulationRad`／`drawnShift`；
+  `Couplings`（`Result`、`Reason`、`Coupled`、`Uncoupled` 事件、`PATIENCE_TICKS`、`BREAK_M`）；`CoupledBody` 多五個預設方法（`leaderId`、`leaderCoupling`、`followerIds`、
+  `carried`、`groupWaits`）；`BodyWorld` 把連在一起的載具當一組；`/aerocore vehicle couple|uncouple`。存檔多 `Coupling`、`Towing` 兩個標籤（沒連結時不寫）。
+
+## 0.35.1 相容性變更
+
+hdfv 0.16 的改裝廠發現範例轎車的溫和套件在 200 km/h 有 4.0 kN（車底通道 2.96 kN），比量產賽道車整台還多；車底對量產車資料重新校準
+（見 BODY.md〈車用空氣套件〉的 0.35.1 段與驗證表）。簽名不變，沒有套件的機體逐位元不變；有 `Underbody` 的套件數字變了：
+
+- `RoadAero.Underbody.sealing` 的意義：側裙封住「側面漏氣面積」的比例，剩下的開口 b / (b + `LEAK` L (1 − sealing))
+  （0.34 是在開著與全封之間線性內插）。側裙只在輪拱之間或離地還有縫時，呼叫端要按比例給小一點（hdfv 乘側裙長度占車底的比例）。
+- 新常數 `K_WHEELS` 1.0（前輪對車底流動的損失）、`WHEEL_RECOVERY` 0.4（後輪尾流後擴散器剩下的回收）、`ROUGH_RECOVERY` 0.3（粗糙車底後的擴散器）；
+  `SMOOTH` 0.03 → 0.045（量產車的平整底板）、`DAM_WAKE` −0.5 → −0.3，且擋風板的分離區取代那一段的車底壓力（0.34 是疊加）。
+- 典型的變化：hdfv 範例轎車的溫和套件 4.0 → 1.78 kN（車底 2.96 → 0.75 kN）；開著側面的擴散器與平整底板約少 80 %，6 cm 擋風板少一半；尾翼、唇、外掛件不變。
+
+## 0.35 相容性變更
+
+使用者 2026-10-18「加入所有機加工機器」（hdfv 0.17）。只在 `api.manufacture` 加新類別，既有的類別、方法與數字不變。
+
+- `ToolLife`：`lifeS`、`speedForLifeMps`、`fit`（兩點求 n 與 C）、`Taylor` record、`maxProductionLifeS`、`minCostLifeS`；常數 `N_HSS`、`N_CARBIDE`、`N_CERAMIC`、
+  `C_HSS_STEEL`…（Groover 表 23.2，C 是一分鐘壽命的速度，m/s）。
+- `Grinding`：`removalRate`、`powerW`、`wheelWearM3`、`surfaceS`、`cylindricalS`、`plungeS`、`throughfeedMps`、`centrelessS`。
+- `Finishing`：`prestonMps`、`prestonS`、`honingS`、`crosshatchRad`、`strokingMps`。
+- `GearCutting`：`approachM`、`hobRevPerS`、`hobbingS`、`shapingS`、`shavingS`、`profileGrindingS`。
+- `Broaching`：`cuttingTeeth`、`engagedTeeth`、`forceN`、`strokeS`。
+- `Sawing`：`feedMps`、`powerLimitedFeedMps`、`hacksawFeedMps`、`cutS`、`kerfKg`。
+- `Threading`：`tappingS`、`singlePointS`、`threadMillingS`、`inFeedRollingS`、`flatDieS`。
+- `Riveting`：`lengthM`、`squeezeForceN`（用 `Forming.upsetForceN`）。
+- `Edm`：`removalRate`（Weller）、`sinkS`、`electrodeWearM3`、`kerfM`、`wireFeedMps`、`wireUsedM`、`drillS`、`powerW`。
+- `Ecm`：`specificRemoval`、`removalRate`、`feedMps`、`gapM`、`machineS`。
+- `ThermalCutting`：`meltJPerKg`、`withOxygenJPerKg`、`speedMps`、`cutS`、`arcW`；`IRON_OXIDATION_J_PER_KG`。
+- `Waterjet`：`jetMps`、`waterM3PerS`、`hydraulicW`、`abrasiveMps`、`removalRate`、`cutMps`。
+- `Gases`：`Gas`（空氣、氮、氧、氬）、`chokedKgPerS`、`choked`、`cylinderKg`、`isothermalJ`。
+- `AirSeparation`：成分常數、`minimumJPerKg`、`plantJPerKg`、`airKg`。
+
+## 0.34 相容性變更
+
+使用者 2026-10-18「加入載具調整系統 可以有自由外觀和大小」（hdfv 0.16：改裝廠，改造型、大小、空氣套件、輪圈、調校、車燈）。
+沒有空氣套件的機體與不改裝的載具，物理逐位元不變。
+
+- 改裝換車：
+  - `VehicleState.refitted(Vehicle next[, ToDoubleFunction<String> densityKgPerM3])` 回傳 `Refitted(state, spilledKg)`：
+    物理可以完全不同（質量、零件內部狀態、傳動、油箱）。車子停在原地：車架原點與姿態不變、速度歸零。
+  - 依零件 id 帶過：內部狀態與顯示值（數量相同才帶，否則那個零件從頭開始）、轉子轉速、`supply`、還在的零件的待拋棄。
+  - 油箱依 id 帶過，截在新容量內（密度由呼叫端給；不給時照 `refuel`：`Fuel.byName`，不認得的用 1000）。
+    放不下的與沒了的油箱的油列在 `spilledKg`；新的油箱是空的（改裝不生油）。波浪記憶重新開始。
+  - `PartVehicle.refit(VehicleBlueprint next[, densities])`：換上編譯好的新藍圖與上面的狀態，清掉故障、待處理的步驟與顯示的力，
+    座位少了的乘客從後面下車，零件的表在背景重建；回傳截掉的油（null：藍圖編譯不過，什麼都沒改）。
+  - 之後 `VehicleState` 加欄位時，`refitted` 也要考慮（同 `restyled`、`placed`）。
+- 車用空氣套件 `body.RoadAero`（見 BODY.md〈車用空氣套件〉）：
+  - 元件：`Underbody`（車底通道：擴散器、側裙封住的比例、擋風板、分流板、平整底板）、`RearWing`（倒裝的尾翼，查表）、
+    `Fence`（擾流板唇）、`Bluff`（只有阻力的外掛件；`CD_TUBE`、`CD_BLUFF`、`CD_SHIELDED`）。
+  - `loads(air, density, heights)`：車身座標的氣流與各點離地高度 → 力、對原點的力矩、下壓力、阻力。`warmUp()` 先建尾翼的表。
+  - `BodyPart` 多一個帶 `RoadAero` 的建構子：每步從車底的前端與擴散器起點往下投地面射線，力以 `LIFT` 加上；診斷值 `kitDownforceN`、`kitDragN`。
+  - `Wing.solve(speed, alpha, beta, air, inputs, inducedFactor, previous)`：誘導速度乘上一個因數（地面與端板），給表用。
+  - `RoadAero.endplateFactor(h, b)`：Hoerner 的端板等效展弦比。
+
+## 0.33.1 開發用視窗
+
+使用者 2026-10-18「我在打lol 的時候 開minecraft 都在第2個螢幕 還有把不要搶滑鼠」。只影響開發環境（`FMLEnvironment.production` 為 false），
+沒有 API 或物理變更。
+
+- 系統屬性 `aerocore.window.monitor=<n>`（`client.DevWindow`）：遊戲視窗建立時隱藏、放在第 n 個螢幕（GLFW 的順序，1 是主螢幕）的工作區中央，
+  再不取得焦點地顯示（`DevWindowMixin`：`GLFW_VISIBLE`、`GLFW_FOCUSED`、`GLFW_FOCUS_ON_SHOW` 關、`GLFW_POSITION_X/Y`，建構子結尾 `glfwShowWindow`）；
+  遊戲一開始就知道自己沒有焦點（`DevWindowFocusMixin`：原版建好視窗後直接當成有焦點，世界開好時 `grabMouse` 就會鎖滑鼠）。
+  有人點進視窗時才取得焦點、鎖滑鼠，和平常一樣。沒有第 n 個螢幕時開在主螢幕中央，仍不取焦點。選項是全螢幕時先以視窗建立
+  （GLFW 建立全螢幕視窗一定顯示並取得焦點），之後原版的切換在視窗所在的螢幕變成全螢幕。
+- AeroCore 與 hdfv 的 client 執行（`runClient`、hdfv 的 `runClient2`）帶 `-Daerocore.window.monitor=2`（Gradle 屬性 `dev_window_monitor`，預設 2，0 照原樣開），
+  並在啟動前把該執行資料夾的 `config/fml.toml` 設成 `earlyWindowControl = false`：NeoForge 的早期載入視窗在任何 Mod 執行前就開在主螢幕中央並取得焦點，
+  沒有設定能改。關掉後沒有 NeoForge 的載入進度畫面，載入時改由原版的載入畫面顯示。視窗被早期視窗建立時，記錄會警告。
+- `AutoShot`：`monitor` 的預設是上面的螢幕（計畫寫的優先，`size` 之後照樣置中）；計畫執行中不留滑鼠：點進視窗或在有焦點時關掉畫面而鎖住的滑鼠，
+  下一個 tick 就放開。步驟本來就不需要焦點（按鍵直接 `setDown`、截圖讀畫面緩衝）。
+
+## 0.33 相容性變更
+
+使用者 2026-10-17「底盤也要高度自由化」（hdfv 0.15：玩家設計的底盤零件、車軸自由擺放、硬點懸吊、車高與離地，車架剛性也進物理）。
+沒有車架、沒有硬點表、沒有氣壓彈簧的載具，物理逐位元不變（`VehicleTest` 1e-9）。
+
+- 車架（見 FRAME.md）：
+  - `FrameTwist(stationX, twistNmPerRad)`（`between`、`chain`）：零件 `frame()` 回傳它就會扭；它的前 N 個內部狀態是各站扭角。
+    一台載具最多一個，要正著裝（不能轉）。`Vehicle.flex()` 給各站在載具座標的位置與質量分配。
+  - `FramePart(design, mass, mountPoints, seats, frame, issues)`：梯形大樑、管架、脊骨式底盤；`BodyPart` 多一個帶 `FrameTwist` 的建構子（承載式車身）。
+  - `Part.probes()`、`probe(PartStep)`；`PartStep.corner`、`keep`／`kept`、`flexing`、`flexLift`、`flexRate`；`FrameFlex.solve`、`shape`、`at`。
+  - `WheelCorner.probe`、帶 `Probe` 的 `loads`；`WheelCorner.Carry` 多了 `flexRateMps`（建構它的程式要補一個值）。
+  - 設計時的結構計算 `api.frame`（`Section`、`FrameMaterial`、`Frame`、`FrameSolver`、`FrameAnalysis`、`FrameDisconnectedException`），
+    承載式車身的 `BodyStructure.torsion`（`Torsion`）。`api.frame.Frame` 是梁模型，`api.vehicle.FrameTwist` 是交給物理的站點扭轉剛度。
+- 懸吊：
+  - `api.wheel.kinematics`：`Hardpoints`（雙 A 臂、麥花臣、多連桿、拖曳臂、整體軸；`fromSimple`）、`KinematicTable`（`of`、`at`、`hubOffset`、
+    `onUpright`、`steeringAxis`、`rollCentreHeightM`）、`LinkageLockException`。
+  - `Suspension` 多兩個建構子（運動學表；再加 `Levelling`），`kinematics()`、`levelling()`，`force(c, scale)`、`rate(c, scale)`、帶 scale 的 `step`。
+  - `Spring` 多了第六個值 `polytropic`（舊的五個值的建構子照用，油氣支柱的 1.12）；`Spring.air`、`AIR_POLYTROPIC`、`Suspension.Levelling`。
+  - `AxlePart` 有調高閥時多 `ride_height` 輸入與兩個內部狀態；`levelling()`。
+  - `AxlePart.Steering` 的第三個值改為到零轉向線的有號距離（負值：後輪轉向）；正值時結果不變。
+- `Clearance.of(底面點, 車輪)`：最小離地間隙與位置、接近角、離去角、每對相鄰軸之間的通過角（SAE J1100 的切胎斜坡）。
+
+## 0.32 相容性變更
+
+使用者 2026-10-17 選「先補 0.13 的驗證」（hdfv 0.14：組裝室推出的車不再被加滿油、多人連線測試）。只有新增；既有物理數字不變。
+
+- 載具：
+  - `VehicleState.placed(origin, q)`：同一台載具放到別處、靜止（和 `Vehicle.newState` 的擺法相同），保留車上的東西：
+    軸轉速（怠速的引擎繼續轉）、內部狀態、顯示值、油箱與供油、待拋棄的零件。波浪輻射記憶重新開始（和 `separate` 一樣）。
+  - `BodyShape.outlineAt(x)`、`overhang(points)`、`overhang(min, max, q, at, step)` 與 `BodyShape.Overhang`：零件放不放得進機體
+    （頂、兩舷、前、後各穿出多少；截面以下算在裡面，底部是開的）。hdfv 0.14 的引擎室規則用它。
+  - `PartVehicle.place(origin, q)`（伺服器）：用 `placed` 把載具放到別處；`setBlueprint` 則會把油箱加滿到設計值、零件從頭開始。
+    沒有載具時回傳 false。不要在子步中呼叫。
+- 開發用 `AutoShot`：
+  - 第一行可以是 `server <位址>`（只接受 `localhost`、`127.0.0.1`，可加連接埠）取代 `world`：以開發玩家身分連上本機的伺服器，測多人連線。
+    連上伺服器時 `cmd` 不能用（沒有自己的伺服器），改用 `client`（以管理員身分）。伺服器關掉或連線中斷、連不上時，遊戲照 `quit` 關掉；
+    計畫執行中出現的暫停選單（伺服器上視窗失去焦點時）會被關掉，以免蓋住截圖。位址用 `127.0.0.1`：`localhost` 在這台電腦先解析成 IPv6 的 `::1`，
+    只聽 127.0.0.1 的伺服器會拒絕連線。
+  - `key <名稱> on|off|tap`：除了 forward、back 等移動鍵，也接受任何按鍵設定的名稱（例如 `key.hdfv.shift_up`）；`tap` 按下兩個 tick 並算一次點擊。
+
+## 0.31 相容性變更
+
+使用者 2026-10-17「加入痛車」（hdfv 0.13：玩家上傳圖片當貼紙、烤漆房重漆）。只有新增；既有物理數字不變。
+
+- 客戶端：
+  - `PartFinishes.define(id, look, texture)`、`undefine(id)`、`defined(id)`：執行時的材質（遊戲中做的貼圖），資源重載後仍在，同 id 時蓋過檔案的。
+    `look.texture()` 是貼圖登記的鍵（用自己的命名空間）。拿掉後，仍用這個 id 的網格畫成白色，所以畫著時要保持定義。
+  - `RuntimeTexture(NativeImage, clamp)`、`replace(image)`：mip、可選的邊緣 clamp，留著圖片供重載再上傳；換圖不必重新烘焙。
+  - 零件著色器把貼圖 alpha 當光澤（0.5～1）與 `cutout` 門檻：貼紙的透明像素寫 0、不透明寫 128＋127×光澤，材質設 `cutout`（見 RENDERING.md）。
+- 載具：
+  - `VehicleState.restyled(next)`：同一台載具換了外觀（重漆、貼紙）的狀態，運動相關的一切照原樣接過來（剛體、軸轉速、內部狀態、顯示值、
+    油箱、波浪輻射記憶、上一步的負載），之後逐位元照原本的走。質量性質、零件（id、順序、狀態與顯示值數、轉子）、軸系、油箱或浮筒點不同時丟
+    `IllegalArgumentException`。
+  - `WaveRadiation.Memory.copyFrom(other)`：接過同樣浮筒的記憶。
+  - `PartVehicle.replaceBlueprint(blueprint)`（伺服器）：只改外觀的藍圖，保留位置與運動；不能編譯或物理不同時回傳 false、不改任何東西。
+    零件的表在背景重建，建好前原地等待。不要在子步中呼叫。
+
+## 0.30 相容性變更
+
+使用者 2026-10-15「機器 載具 也用blender 做」（hdfv 0.12：機器與載具，完整內裝、燈、可動件、地面與水面效果）。既有物理數字不變；
+新功能預設關閉。見 [RENDERING.md](RENDERING.md)、[WHEELS.md](WHEELS.md)、[WING.md](WING.md)。
+
+- `api.mesh`：`MeshBuilder` 的 `CABIN`、`CLEAR`、`LAMP`、`NEAR`、`LAMP_ID`、`PIECE` 與筆 `cabin`、`clear`、`levels`、`lamp`、`piece`；
+  `Quad.near()`、`lamp()`、`piece()`、`seeThrough()`；`lamps()`、`addLamp`；`Lamp`；`SurfaceCut`；`MeshBaker.pieces`、`hasPieces`；
+  `PackedMesh.Group` 多了 `lamp`（舊的 5 參數建構子照舊）。玻璃與半透明的四邊形不再擋遮蔽射線、不算覆蓋。
+- 物理：`WheelCorner.EXTRA`、`after(..., extra)`、`free(...)`；`AxlePart` 與 `LegPart` 的顯示值往後加；`LegPart.Retraction` 與新建構子
+  （舊的照舊＝固定）；`RotorPart.SHOWN`（7 個顯示值）、`AirPropellerPart` 一個顯示值；`PartStep.shown(i)`、`shownCount()`、`stepped(...)`；
+  `api.aero.Downwash`。
+- 客戶端：
+  - `PartRenderer.Drawn`、`animate(..., Drawn)`、`lamps(...)`、`registerDefault`（AeroCore 自己的零件改用它）。
+  - `MeshBakery.Spec` 的 `maxVoxelM`（4 參數建構子照舊）與 `voxel(m)`；`Baked` 的 `pieces`、`lamps`、`piece(p, level)`。
+  - `PartLayers.late(boolean)`、`lamps(drawn, piece, stack)`；`PartLate`、`LampRenderer`、`GroundMarks`、`RotorWash`、`SprayRenderer.emit`。
+  - `finishes.json` 的 `clearcoat`、`flip`、`cutout`、`fresnel`，零件著色器的 `PartSurface` z、w 與 `PartSurface2`。
+
+## 0.29 相容性變更
+
+使用者 2026-10-15 要求 3D 模型更逼真（hdfv 0.11／0.12：所有引擎與機器、幾何細節、材質貼圖、光影、世界中的效果，用 Blender 做細節零件與貼圖）。
+物理數字全部不變；只有繪製工具與下列新增。見 [RENDERING.md](RENDERING.md)。
+
+- 新套件 `api.mesh`（純 Java）：`MeshBuilder<M>`（形狀、UV、筆）、`Mesh`、`Finish`、`MeshOps`、`ObjReader`、`ObjWriter`、
+  `AmbientOcclusion`、`PackedMesh`、`MeshBaker`。
+- `PartMesh` 改成 `MeshBuilder<PartMesh>` 的子類別：`PartMesh.Quad` 就是 `MeshBuilder.Quad`，多了 `uv`、`finish`、`tags` 三個元件
+  （8 參數與 6 參數建構子照舊）；`add(other, rotation, offset)` 收任何 `MeshBuilder`；`emit(...)` 照舊以白色混凝土、UV (0, 0) 畫。
+  0.28 的形狀幾何不變（`MeshCompatTest`）。
+- `api.engine.Plume`（尾焰形狀與顏色）、`api.engine.Blackbody`。
+- 客戶端：`PartRenderer.bake(part)`、`PartRenderer.animate(..., PartLayers, light)`（預設轉給舊的 VertexConsumer 形式）、`PartLayers`、
+  `MeshBakery`、`PartFinishes`（`finishes.json`）、`FinishTexture`、`PartRenderTypes`、`PartShading`、`PartShader`、`PartLighting`、
+  `PartStats`（`AutoShot` 的 `fps` 步驟印出）、`PlumeRenderer`、`RotorBlur`、開發用 `/aerocoredev parts ...`。
+- `PartRenderer.glow(...)`（熱的面發光，預設 0）；`PartVehicle.partPoint`、`partDirection`（零件上一點在世界的位置）。
+- `MeshBuilder.STAND_IN`（遠處的替身）；`PartLayers.gpu(boolean)`（世界中的網格走 GPU 快取 `PartGpu`）；零件著色器多了 `PartPose`、`PartNormalMat`、
+  `PartLight` 三個 uniform（預設值等於舊行為）。
+- `PartVehicleRenderer` 的零件網格改在背景烘焙（第一次出現晚幾幀才畫），有細節層級、每個零件取自己的光、剔除看不見的面。
+- 第一個用戶端設定 `aerocore-client.toml` 的 `partShading`（AUTO／SHADER／VANILLA）。
+
+## 0.28 相容性變更
+
+使用者 2026-10-14 說「下一步」：衝壓、超燃衝壓、脈衝噴射，加上後燃器、渦輪衝壓、固體火箭助推器、氫燃料與極高速載具（hdfv 0.10）。
+既有的數字不變（`TurbojetTest`、`TurbofanTest` 與所有既有測試照過），只有下列改動。
+
+- 新套件：
+  - `api.gasdynamics`（[GASDYNAMICS.md](GASDYNAMICS.md)）：`Thermo`、`GasState`、`PerfectGas`、`NormalShock`、`ObliqueShock`、
+    `ConicalShock`、`Rayleigh`、`Fanno`、`ThermalFlow`、`QuasiOneD`、`SurfacePressure`、`AeroHeating`。
+  - `api.propellant`（[ROCKET.md](ROCKET.md)）：`Propellant`、`SolidRocket`。
+  - `api.storage`（[HYDROGEN.md](HYDROGEN.md)）：`Hydrogen`、`Insulation`、`PressureVessel`。
+- 引擎（`api.engine`）：
+  - 新類別 `SupersonicInlet`、`Ramjet`、`Reheat`、`TurboRamjet`（[RAMJET.md](RAMJET.md)）、`Scramjet`（[SCRAMJET.md](SCRAMJET.md)）、
+    `Pulsejet`（[PULSEJET.md](PULSEJET.md)）。
+  - `Fuel`：允許無碳燃料，新增 `Fuel.HYDROGEN`；`byName("hydrogen"/"liquid_hydrogen")`；`ignitionDelayS(T, p)`。
+  - `Gas` 與 `GasPath.Mix` 實作 `Thermo`。
+- 載具框架：
+  - `Part.Tank` 多最後一個元件 `own`（五參數建構子照舊＝`false`）：自有油箱只供給它的零件，有自有油箱的零件只從它們取。
+  - `PartStep.jettison()`：零件要求被拋棄。
+  - `VehicleState.takeJettisons()`、`VehicleState.separate(next)`：剩下的部分保持位置與運動，零件狀態與油箱依 id 轉過去。
+  - `VehicleState.setInternal(partId, i, value)`：遊戲在步與步之間設定零件的內部狀態（保養，例如換掉脈衝噴射磨損的閥片）；不接受非有限值。
+  - `VehicleBlueprint.without(ids)` → `Split(rest, removed)`：掛在被拋零件掛載點上的零件一起走。
+  - `VehicleDynamics.Prepared` 多最後一個元件 `jettisons`。
+- 機體與機翼：
+  - `BodyAerodynamics.zeroLiftDragAreaM2` 在臨界馬赫數（`criticalMach()`）以上加入跨音速與超音速壓力阻力
+    （`supersonicPressureDragAreaM2`、`warmUp`）；次音速的數字不變。
+  - `BodyPart` 回報 `noseTemperatureK`、`skinTemperatureK`。
+  - `Wing` 在 Mach 1 以上淡出誘導速度、加入翼尖馬赫錐損失（`Wing.machConeShare`）；次音速不變。
+  - 見 [HIGH_SPEED.md](HIGH_SPEED.md)。
+- 遊戲端：
+  - `PartVehicle.castOff(ids)` 與事件 `PartVehicle.Jettisoned`（被拋的零件、位置、方向、速度、油箱內容）。
+  - 快速載具（`FAST_MPS` 以上）的碰撞走廊、路徑區塊票、`CoupledBody.stepsWhereLoaded`、客戶端外推。
+  - 區塊沒好時載具暫停並保留速度（0.27 以前歸零）。
+
+## 0.27 相容性變更
+
+使用者 2026-10-14 要求石油工業要有 GUI 配置、製程條件改變收率（hdfv 0.9）。只有新增，既有的常數、方法與數字不變。
+
+- `Conversion.fcc(riserOutletC)`（480～560 °C）、`Conversion.reformer(researchOctane)`（95～104）、`Conversion.steamCracking(feed, coilOutletC)`
+  （`"naphtha"` 或 `"lpg"`，800～860 °C）：在名義點（530 °C、98、835 °C）回傳原本的 `FCC`、`REFORMER`、`NAPHTHA_CRACKER`／`PROPANE_CRACKER`；
+  範圍外拋 `IllegalArgumentException`。常數 `NOMINAL_RISER_C`、`NOMINAL_OCTANE`、`NOMINAL_COIL_C` 與各範圍。
+- `Distillation.heaterJPerKg(crude, flashC)`、`heaterFuelShare(crude, flashC, heatingValue, efficiency)`；原本的方法＝在 `FLASH_C`。
+- `Reservoir.chokedRate(productivityIndex, depthM, oilDensity, chokeBoreM, producedM3)`（`chokeBoreM` ≤ 0＝沒有油嘴＝`naturalRate` 對 0 井口壓力）；
+  `CHOKE_DISCHARGE` 0.85。
+- 衝壓、超燃、脈衝噴射順延到 0.28。
+
+## 0.26 相容性變更
+
+使用者 2026-10-13 要求機床要電或動力、CNC 多方塊、柴油引擎、石油工業與載具加油（hdfv 0.8）。
+
+- 新套件 `api.power`（見 [POWER.md](POWER.md)）：`ElectricMachine`、`Battery`、`Cable`、`Belt`、`Shafting`、`SteamEngine`、`HumanPower`、`SolidFuel`、`PipeFlow`、`Pump`。
+- 新套件 `api.petroleum`（見 [PETROLEUM.md](PETROLEUM.md)）：`CrudeAssay`、`Distillation`、`Conversion`、`Reservoir`、`Lift`。
+- 引擎（見 [ENGINE.md](ENGINE.md) 的壓縮點火一節）：
+  - `Fuel.DIESEL`、`Fuel.FUEL_OIL`、`Fuel.byName`、`Fuel.cetaneNumber()`。
+  - `EngineCycle.Spec` 多最後一個元件 `compressionIgnition`（`EngineCycle.CompressionIgnition(peakPressureLimitPa)`，null＝火花點火）；
+    原本 23 個參數的建構子照舊（＝火花點火）。柴油的 lambda 範圍是 1～12。`EngineCycle.Result` 多 `ignitionDelayDeg`、`premixedFraction`（火花點火為 0）。
+  - `Combustion.dieselIgnitionDelayDeg`、`premixedFraction`、`DieselBurn`；`Dyno.operate` 對柴油改以峰值壓力限制噴油時刻。
+  - 新 `DieselMap`（轉速×增壓×負載＝當量比）與 `Turbocharger`（離心壓縮機、渦輪孔口、洩壓閥、中冷、匹配與最大增壓）。
+  - `EngineMap.Engine.intakeTemperature(calibrationK, pressureRatio)`（預設回傳校準溫度）：增壓汽油引擎的進氣（中冷後）溫度。
+  - `EngineRuntime.manifoldRatio` 的上限改成上游壓力對大氣的比（原本固定 1.2），增壓時歧管壓力可以超過 1.2；上游不超過大氣時結果不變。
+- 載具燃油：
+  - `Part.Tank(name, capacityM3, centre, fuel, initialKg)`、`Part.tanks()`（預設沒有）；`Vehicle.Tank`、`Vehicle.tanks()`。
+  - `PartStep.burn(fuels, kgPerS)`、`PartStep.fuelSupply()`；`VehicleState.tankKg/tankFuel/fuelKg/fuelSupply/setTank`，JSON 多 `"tanks"`（舊存檔沒有時用設計的初始油量）。
+  - 油箱裡的油是點質量加它的重量；沒有油箱的載具什麼都照舊（供油比例永遠 1）。已知誤差：接觸衝量用乾重。
+  - `VehicleDynamics.Prepared` 多最後一個元件 `burns`。
+  - 遊戲端 `PartVehicle.tankCount/tankKg/tankFuel/tankCapacityM3/refuel`，顯示用 JSON 多 `"f"`；
+    `PartVehicle.setTank(tank, fuel, kg, densityKgPerM3)`（伺服器：設定油箱內容，`""` 清空，密度由呼叫端給，例如 hdfv 自己的燃料）。
+  - `BodyPart` 多一個帶 `List<Part.Tank>` 的建構子：機體的質量不含油箱裡的油（由載具帶），排水型船身的設計水線仍算進初始油量；
+    原本的建構子＝沒有油箱。
+- 衝壓、超燃、脈衝噴射順延到 0.27。
+
+## 0.25 相容性變更
+
+使用者 2026-10-13 要求機床、CNC、焊接與組裝（hdfv 0.7）。新增套件 `api.manufacture`（見 [MANUFACTURE.md](MANUFACTURE.md)）：
+`Tolerance`（ISO 286 公差等級）、`Cutting`（車削、鑽孔、依功率的粗加工、粗糙度與精加工）、`Casting`（Chvorinov、熔化熱）、
+`Forming`（流動應力、鐓粗與平軋力、軋延功率、加熱透的時間）、`Joining`（焊道金屬、焊工時間、鉚釘與點焊數）、
+`Laminating`（積層、固化、硫化）。衝壓、超燃、脈衝噴射順延到 0.26。
+
+- `PartVehicle.warmsUp()`（protected，預設 true）與 `warmUp()` 改成 protected：子類別可以先不建零件的表（例如還在組裝室裡、
+  幾小時後才會動的載具），之後自己呼叫 `warmUp()`。沒有覆寫的載具行為不變。
+
+## 0.24 相容性變更
+
+使用者 2026-10-12 要求「車子要有前驅、後驅、4WD 和前置、中置、後置」：輪子、傳動與四驅。傳動的模型與驗證見 [DRIVETRAIN.md](DRIVETRAIN.md)。
+
+- 傳動約束（A1）：
+  - `Part.Rotor` 多一個名稱（第一個欄位；原本的三、四參數建構子照舊＝沒有名稱）與 `Rotor(name, axis, inertia, driver)`；`Part.port(name)`、
+    `Part.links()`（`Part.Link(a, b)`）、`Part.after(PartAfter)`、`Part.shownValues()`。
+  - `Connection.Shaft` 多 `fromPort`、`toPort`（七個欄位；四、五參數的建構子照舊＝第一個轉子），`Connection.Shaft.ports(...)`；
+    JSON 只在有名稱時寫 `"fromPort"`／`"toPort"`。不存在的埠、軸把一個零件 link 的兩端併進同一個軸系，都是設計錯誤。
+  - `PartStep`：`row`、`gear`、`clutch`、`hold`、`freewheel`、`differential`、`biasFriction`、`viscous`、`torquePair`、`rollingForce`、`damper`、
+    `show`、`carry`。新類別 `PartAfter`（步末的狀態、轉速、列扭矩、滾動力、內部狀態與顯示值）。
+  - `VehicleDynamics.Prepared` 多 `drive`（`VehicleDynamics.Drive`：列扭矩、滾動力、各零件的範圍、`carry`、顯示值、起始轉速、時間、
+    樞軸次數與是否退回 Gauss–Seidel）；`finish` 在接觸之後呼叫每個零件的 `after`。沒有約束列的一步數字和 0.23 完全相同。
+  - `Vehicle.Installed` 多 `firstShown`；`Vehicle.shownValues()`；`VehicleState.shown(id, i)`、`shownValues()`、`setShownValues(...)`（不存檔）。
+  - `RigidBodyDynamics.LineDamper` 與 `implicitVelocity(..., dampers, dt)`；原本的多載照舊（＝沒有線阻尼）。
+  - 滾動力與線阻尼作用在車身的力歸在 `AppliedForce.Kind.CONTACT`。
+  - `PartStep.partPoint(world)`（point 的反向）。
+- 地面（A2，[GROUND.md](GROUND.md)）：新套件 `api.ground`：`Ground`（`cast`、`Hit`、`NONE`、`flat`、`plane`、`split`、`boxes`、`nearest`）、`BoxGround`（`Box`、`stairs`）。
+  `VehicleEnvironment.ground()`（預設 `Ground.NONE`）、`withGround`、`land`。遊戲端 `WorldGround`；`PartVehicle` 的環境帶它。`/aerocore ground` 多一行射線結果。
+- 輪子（A3、A4，[WHEELS.md](WHEELS.md)）：新套件 `api.wheel`：`Tyre`（`Spec`、`Construction`、`Tread`、`Forces`）、`TyreContact`、`Suspension`（`Type`、`Geometry`、
+  `Spring`、`Damper`、`Step`）、`Brake`、`BrakeControl`、`WheelCorner`。執行時零件 `AxlePart`、`LegPart`；離線 `TestTrack`。
+- 變速與四驅（A5，[DRIVETRAIN.md](DRIVETRAIN.md)）：新套件 `api.drive`：`TorqueConverter`、`Driveline`；執行時零件 `TransmissionPart`、`TransferPart`。
+- 遊戲端：`PartVehicle.shown(partId, i, partialTick)`；同步資料 `DISPLAY` 多 `"s"`（顯示值，四捨五入到 1e-4）。
+- 2026-10-13（版本號仍是 0.24.0）：
+  - `PartStep.override(role, value)`：零件改寫自己這一步的輸入（包住別的零件時）；`input` 先看它。
+  - `TransmissionPart.STATES`、`engaged(step)`、`shifting(step)`、`cvtRatio(step)`：控制規則讀變速箱狀態。
+  - `Suspension.step(tyre, P, rate, c, ownRate, extraN, dt)`（懸吊自己的速度起算；原本的多載以 P 的速度起算）。
+    `Damper.coefficient` 改成割線（孔口 K|ċ|，以前是切線 2K|ċ|），並迭代到這一步的速度：孔口阻尼的支柱更硬（落震行程約少兩成），線性避震器不變。
+
+## 0.23 相容性變更
+
+使用者 2026-10-11 要求「機倉也要高自由度 像模塊一樣」「車身 船身 也是」：機身、船身、車身由模組串成。模型、驗證與限制見 [BODY.md](BODY.md)。
+
+- `api.body`（新套件）：
+  - `SectionShape`：`Rounded`（`ellipse`）、`Chined`、`Cabin`，`outline()`、`scaled`、`raised`；`convex(points)`。
+  - `BodyModule(name, lengthM, rear, fullness, stepM, sillM)`，`straight(...)`。
+  - `BodyShape(nose, modules)`：`stations()`、`moduleFrontX`／`moduleRearX`、`bottomAt`／`topAt`／`widthAt`／`centreAt`、`particulars()`、
+    `hull()`、`waterHull()`（開口切掉）、`planingHull()`、`hardChined()`。
+  - `BodyAerodynamics(shape, extraDragAreaM2)`：`loads(velocity, omega, air)`、`zeroLiftDragAreaM2`、`slantLiftAreaM2`，以及各分項的靜態式。
+  - `BodyStructure`：`masses(shape, modules)`、`analyze(...)`、`bottomPressurePa`、`plateThicknessM`。
+- `api.vehicle.part.BodyPart`：機體的執行時零件（空氣負載加滑行或排水型的水動力、掛載點、座位）；診斷 `airspeedMps`、`airDragN`、`airLiftN`、`airSideN`。
+  排水型時阻力係數的設計水線取機體質量，但不超過密封容積一半的水（會沉的機體也建得出來）。
+- `api.vehicle.TowingTank`：`rest`、`tow`、`run`（給定靜止狀態的一趟）、`heel`、`trimDeg`；任何載具在靜水中的拖曳（阻力、空氣阻力、縱傾、升沉、
+  縱傾擺幅、`lost`）與扶正力臂 GZ。
+- 掛載點：
+  - `Part.mountPoints()`（預設沒有）。
+  - `Mount` 多 `attachPart`、`attachPoint`（六個欄位；四參數的建構子照舊＝不接）：`Mount.on(part, point)`、`on(part, point, offset)`、
+    `attached()`、`detached()`、`then(inner)`、`Mount.of(position, rotation)`；JSON 多 `"attach": {"part", "point"}`（舊藍圖沒有＝不接）。
+  - `Vehicle` 組裝時把接上的掛載點解成座標（宿主的位置，再掛載點，再偏移）；不存在的零件、掛載點與互相接成環是設計問題。
+- 滑行：
+  - `PlaningHull.of(hull, length, keelY[], chineHalfBeam[], deadrise[], steps[])`：任意站位，每站的底升角與斷階；`deadrise(i)`、`steps()`。
+    `PlaningHull.fridsma` 是它的特例，Fridsma 的測試數字不變。
+  - `PlaningDynamics` 有斷階（前體的艉板、後體在 Savitsky–Morabito 尾流裡）。
+  - 2D+t 的兩個行為變更（稜柱船體不受影響）：一個截面隨水往後流而縮小（離水）時，法向的 dm_a 不再給吸力；
+    側向的 m_22 從船艏往後保持最大值，不回收。往船艉收窄、或船艏朝下的船體，受力和 0.22 不同。
+  - 船底斜升係數（2026-10-12，版本號仍是 0.23.0）：`PlaningDynamics.liftFactor(deadrise, chineWettedLengthM, beamM)`、
+    `LIFT_RECOVERY`（0.13）、`MIN_LIFT_FACTOR`（0.3）。每個滑行面的法向負載（靜水壓、動力項、附加質量、法向繞射）乘這個係數，
+    所有硬舷船體在滑行時的縱傾、升沉與阻力都會變（輕載、重心偏後的船縱傾高約 1°、阻力少；Fridsma 的數字在 0.35° 內）。
+    鬚狀水花在舭乾時只到艉板（以前是 0）。`Loads`、`Diagnostics` 的欄位不變。
+- `HullDynamics.loads(..., windage)` 與 `HullPart` 的 `windage` 參數：關掉乾舷的風阻（機體自己算空氣負載）。原本的多載照舊有風阻。
+- `HullResistance.holtropFormFactor`：lcb 限在 ±6%（超出 Holtrop 的範圍時跑長度會變負）。一般船體的數字不變。
+- `BodyShape.Particulars.rearSlantDeg`：從車頂後緣到車尾頂端的連線角（三廂車的等效後窗角），不再只看最後一段；
+  最後一段就是斜面的車身（快背、Ahmed 車體）數字不變。
+- 客戶端 `PartMesh.sheet` 的法線改用對角線的外積（以前的寫法在平的平行四邊形上抵消成零，光照錯）；面的頂點順序不變。
+
+## 0.22.1 相容性變更
+
+- `CoupledBody.physicsFailed(phase, error)`：物體的物理在 `beginTick`、`prepareSubstep`、接觸、`finishSubstep`、`correctPose`、`endTick`
+  丟出 `RuntimeException` 時呼叫。`BodyWorld` 本 tick 不再推進它、其他物體照常；預設實作重新丟出（伺服器照舊當機），
+  能安全停住的物體要覆寫：從健全的狀態停下、記錄、之後 `beginTick` 回傳 false。只有 `PartVehicle` 覆寫；
+  AeroCore 的示範物體（平台、測試船、滑行艇、測試球）維持舊行為。
+- 聯合接觸求解（`solveAll`）丟例外時，`BodyWorld` 讓每個物體各自只跟方塊解一次：單獨也失敗的物體停用；
+  都沒失敗就是物體之間的接觸出錯，停用有互相接觸的物體。物體之間的穿入投影（`separateAll`）出錯時，停用該組物體。
+- `PartVehicle.fault()`、`resume()`；NBT 多一個 `Fault` 字串（舊存檔沒有＝正常）。`/aerocore vehicle info` 顯示停用與原因，新指令 `/aerocore vehicle resume`。
+- GameTest：GameTest 執行中，物體的物理失敗會讓它所屬的測試失敗（結構範圍含該物體的測試，或最近的一個；
+  例外從測試自己的 tick 丟出，`GameTestInfo` 才會回報），停用不會掩蓋物理錯誤，伺服器也不會當機。
+  故意讓物理失敗的測試在物體加上實體標籤 `BodyWorld.EXPECTED_FAULT_TAG`；`BodyWorld.owningTests(level, 位置)` 查某點屬於哪個測試。
+  載具 Mod 改依賴 0.22.1 後，它的載具 GameTest 不用改就適用。
+- 新的 mixin `GameTestTickerAccessor`（讀執行中的 GameTest）。
+
+## 0.22 相容性變更
+
+- `api.aero`（新套件）：
+  - `Airfoil`：`naca4(camber, position, thickness)`、`cst(upper, lower, teThickness)`、`cstFit`、`of(Selig 點)`；以值比較。
+  - `AirfoilAnalysis`：`analyze(alpha, reynolds)` 或 `inviscid(alpha).at(reynolds)`（同一攻角多個 Re 共用面板解）。
+  - `SectionPolar implements AirfoilPolar`：`of(airfoil)`（快取）、`sample(alpha, reynolds, mach)`、`flapped(..., FlapType, chordFraction, delta)`、
+    `liftSlope`、`zeroLiftAngle`、`maxLift`、`stallAngle`、`minimumDrag`、`criticalMachAt`。可當 `LiftingSurface` 的極曲線用。
+  - `Wing`：`Planform`、`ControlSurface`、`solve(flow[], Air, inputs, heightM, warm)`、`solve(speed, alpha, beta, Air, inputs)`、
+    `solve(speed, alpha, beta, Air, inputs, previous)`（掃攻角時從上一點的渦強度延續，收斂得和冷啟動一樣緊），
+    `Solution` 有力、力矩、型阻、每條的渦強度／攻角／升力／阻力／法向載荷／失速。
+  - `WingStructure.analyze(planform, rootT, tipT, Box, Materials, liftN)`。
+  - `AirPropeller`：`Geometry`、`sample(beta, setting, mach, reynolds)`（四象限 `PropellerCoefficients`）、`classic(J, ...)`、`tabulate(Grid)`。
+  - `HelicopterRotor`：`Geometry`、`Controls`（`fromSticks`）、`State`、`loads(...)`、`trimmed(...)`。
+- `api.vehicle.part`：`WingPart`、`AirPropellerPart`（`loads(step, setting)`）、`RotorPart`（`loads(step, Controls)`）；
+  hdfv 可以包裝它們加上自己的控制規則（調速器、增穩）。
+- `Connection.Shaft` 多一個 `freewheel` 欄位（四參數的建構子照舊）；`Vehicle.freewheels()`；JSON 的 `"freewheel": true`。
+- `PartStep.partDirection(world)`：世界向量轉到零件座標。
+- `Part.Rotor` 多一個 `momentumKgM2`（每 rad/s 的角動量；三參數的建構子照舊＝慣量）：減速箱後的輸出軸慣量是 × 減速比²，
+  角動量只 × 減速比。`VehicleDynamics` 的陀螺力矩與轉子加速時的反扭力改用它（`Vehicle.Rotor` 也多這個欄位）。
+- `VehicleDynamics` 加陀螺力矩（−ω × H）：轉動中的轉子（引擎、螺旋槳、旋翼）在機體轉向時的反力矩；原本沒有。
+  它在 `finish` 的漂移裡和轉動一起算（陀螺體），不是 `prepare` 的外力，所以顯示成慣性交換（`Result.inertia()`），不是 `THRUST`。
+- `RigidBodyDynamics.drift(s, p, spin, dt)` 與 `driftWithPointMasses(s, p, added, spin, dt)`：帶內部自旋角動量 `spin`（機體座標）的
+  無外力矩漂移，保持機體加轉子的世界角動量；原本的多載＝`spin` 為零，數字不變。
+- `HelicopterRotor.DREES_MU_MAX`（0.5）與 `TIP_LOSS_MIN`（0.9）：Drees 入流分布的前進比上限與 Prandtl 葉尖損失因子的下限。
+- 模型、驗證與限制見 [WING.md](WING.md)。
+
+## 0.21 相容性變更
+
+- `api.engine.Turbofan`：雙轉子渦扇的設計點（`size`）、平衡（`equilibrium`）、運轉線（`runningLines`）、準穩態（`quasiSteady`，
+  給兩個轉速與燃油；`solution` 暖啟動上一個解）與控制用的反解（`lineFuel`、`lineHighSpeed`、`lineLowSpeed`、`fuelForTurbineInlet`、`fuelForSurgeMargin`）；
+  `Design` 以 `Turbojet.Design` 當核心，加旁通比、風扇與增壓級壓比、風扇與低壓渦輪效率、旁通道損失、分開或混合排氣。
+- `api.engine.FreeTurbine`：自由渦輪軸引擎（燃氣產生器＋動力渦輪），同一組方法；準穩態另給動力渦輪轉速，`Point` 有軸功率與軸扭矩
+  （轉子卡住時扭矩是設計點的 2 倍）。減速齒輪箱由呼叫者處理（`Turbomachinery.gearboxEfficiency`、`gearboxOutputTorque`）。
+- `Turbomachinery` 新增 `turbineSpeedEfficiency`、`fanStagePressureRatio`、`fanStageLoading`、`relativeTipMach`、`faceMach`、
+  `gearboxEfficiency`、`gearboxOutputTorque`。
+- `Turbojet` 的公開介面與結果不變（內部改用 `GasPath`；`inletRecovery` 的斜板進氣道在 Mach 5 以上改用 MIL-E-5008B 的 800/(M⁴+935)）。
+- 模型、驗證與限制見 [TURBOFAN.md](TURBOFAN.md)。
+
+## 0.20 相容性變更
+
+使用者 2026-10-11 決定「AeroCore 是計算 API」，零件「全部搬到」載具 Mod（High Degree of Freedom Vehicles，`hdfv`）。
+
+- **移除**：
+  - 所有零件設計：0.17 的九種、0.18 的活塞引擎元件與 `PistonEngineDesign`、0.19 的噴射引擎元件與 `JetEngineDesign`。
+  - `EngineComponent`、`EngineMaterial`、`SampleBlueprints`、`SampleEngines`。
+  - 指令 `/aerocore vehicle samples`，以及載具 GameTest。
+  - 這些都在 hdfv（類型 ID `hdfv:*`）。`PartTypes` 不再有內建類型；存檔裡 `aerocore:*` 的載具在沒有提供該類型的 Mod 時無法編譯，會原地不動（既有行為）。
+- **新的執行時零件**：`api.vehicle.part` 的 `SpherePart`、`HullPart`、`PlaningHullPart`、`PropellerPart`、`ControlSurfacePart`、`BoxPart`、
+  `MotorPart`、`MassPart`。受力程式從原本的設計搬來，結果不變（`VehicleTest` 1e-9 對照照舊通過）。
+- **新的計算 API**（從零件設計抽出）：
+  - `api.engine.PistonGeometry`：餘隙容積、壓縮比、氣門排列、燃燒室面積、火焰行程、曲軸系慣量。
+  - `api.engine.EngineStrength`：活塞頂壓力上限、連桿轉速上限。
+  - `api.engine.EngineMap`：MAP 建立器，標定政策當參數。
+  - `api.engine.EngineRuntime`：扭力、排氣背壓、濾清器壓降、歧管充放。
+  - `api.engine.Turbomachinery`：壓縮機功與出口溫度（`Turbojet` 共用）、滑移係數、級負荷、進口面積與流率、轉盤應力、冷卻葉片溫度、轉子扭力。
+  - `ValveFlow.injectorFlow`、`HeatTransfer.finnedCoreRejection`、`Rudder.freeEndsPolar`。
+  - `api.ElectricMotor`、`api.PropellerModels`。
+- **框架開放**：
+  - `DesignIssue.range`、`DesignException.throwIfInvalid`、`Material.check`／`toJson`／`fromJson`、`Fields.vec(Object, String)` 改成 public。
+  - `Shapes` 改名為公開的 `MassShapes`。
+  - `Part.wake()` 與 `WakeSource`。
+  - 客戶端 `PartRenderer`／`PartMesh` 登記制，取代 `PartVehicleRenderer` 依設計類別的分支。
+- **發佈**：`maven-publish` 輸出到 `build/repo`（`aerocore-physics`、`aerocore-neoforge-1.21.1`）。
+- `Dyno.operate` 的註解改正：排氣壓力是絕對壓力。
 
 ## 0.19 相容性變更
+
+（0.20 起，下列零件設計、範例與 `/aerocore vehicle spawn jetboat` 都移到 hdfv。）
 
 - `api.engine.Turbojet`：單軸渦輪噴射的設計點（`size`）、非設計點平衡（`equilibrium`）、依飛行馬赫數的運轉線（`runningLines`）、
   準穩態（`quasiSteady`）與控制用的反解（`lineFuel`、`fuelForTurbineInlet`、`fuelForSurgeMargin`），可離線呼叫（測試台、設計畫面）。
@@ -703,6 +1207,8 @@ level.addFreshEntity(entity);
 - 活塞引擎與其他零件的行為不變。
 
 ## 0.18 相容性變更
+
+（0.20 起，下列引擎元件、`PistonEngineDesign`、範例都移到 hdfv。）
 
 - 新套件 `dev.mcmod.aerocore.api.engine`：`Species`／`Gas`（NASA 多項式氣體）、`Fuel`、`CrankKinematics`、`ValveLift`、`ValveFlow`、`Combustion`
   （Woschni、Bonatesta 燃燒角、Douaud–Eyzat）、`EngineOil`、`Friction`（Patton／Sandoval）、`EngineCycle`（循環模擬）、`Dyno`（點火標定）。純 Java，可離線呼叫（測功機）。
@@ -751,7 +1257,7 @@ level.addFreshEntity(entity);
 - `Whitecaps.thresholdAtWind` 不再壓在 0.388 g 以下；碎浪比例低於 10⁻¹² 時回傳無限大。
 - `CompiledWaves.grid`／`gridSecondOrder`／`gridCoastal` 跳過振幅為 0 的分量（結果不變）。
 - Minecraft 端：`WaveSurfaceRenderer` 改用 shader `aerocore:rendertype_aerocore_sea`（`RegisterShadersEvent` 註冊，頂點格式 `NEW_ENTITY`，屬性打包見 `.vsh`）；
-  開發用 `AutoShot`（遊戲目錄有 `aerocore-autoshot.txt` 且非正式環境時，開啟名稱以 AeroCore 開頭的世界依步驟截圖後存檔離開）。
+  開發用 `AutoShot`（遊戲目錄有 `aerocore-autoshot.txt` 且非正式環境時，開啟名稱以 AeroCore 開頭的世界依步驟截圖後存檔離開；0.32 起也能連上本機的伺服器）。
 
 ## 0.14 相容性變更
 
