@@ -1,0 +1,21 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="LGPL-3.0-only"
+
+[[mods]]
+modId="aerocore_devtools"
+version="${mod_version}"
+displayName="AeroCore development tools"
+description='''
+Development only, never released: AutoShot, the development window on another monitor and the /aerocoredev commands.
+'''
+
+[[mixins]]
+config="aerocore_devtools.mixins.json"
+
+[[dependencies.aerocore_devtools]]
+modId="aerocore"
+type="required"
+versionRange="[${mod_version}]"
+ordering="AFTER"
+side="BOTH"

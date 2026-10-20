@@ -1,10 +1,15 @@
-package dev.mcmod.aerocore.neoforge.client.sound;
+package dev.mcmod.aerocore.devtools;
 
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.logging.LogUtils;
 import dev.mcmod.aerocore.api.acoustics.Voice;
-import dev.mcmod.aerocore.neoforge.AeroCore;
+import dev.mcmod.aerocore.neoforge.client.sound.LiveSound;
+import dev.mcmod.aerocore.neoforge.client.sound.RuntimeSounds;
+import dev.mcmod.aerocore.neoforge.client.sound.SoundHooks;
+import dev.mcmod.aerocore.neoforge.client.sound.SoundRecorder;
+import dev.mcmod.aerocore.neoforge.client.sound.SynthInstance;
+import dev.mcmod.aerocore.neoforge.client.sound.SynthStream;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -14,7 +19,6 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import org.slf4j.Logger;
@@ -23,7 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Development client commands for the sound hooks (0.37, not registered in production):
+ * Development client commands for the sound hooks (0.37; 0.41 in the development tools mod, never released):
  * <ul>
  * <li>/aerocoredev sound sine &lt;hz&gt;: a live test tone (a sine with a 2 Hz beat) at the player's position; several
  *     at once fill the streaming channels.</li>
@@ -34,7 +38,7 @@ import java.util.List;
  * <li>/aerocoredev sound record &lt;seconds&gt;: SoundRecorder.</li>
  * </ul>
  */
-@EventBusSubscriber(modid = AeroCore.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = AeroCoreDevtools.MOD_ID, value = Dist.CLIENT)
 public final class DevSoundCommands {
     private DevSoundCommands() {}
 
@@ -60,19 +64,18 @@ public final class DevSoundCommands {
     }
 
     @SubscribeEvent static void register(RegisterClientCommandsEvent event) {
-        if (FMLEnvironment.production) { return; }
         event.getDispatcher().register(Commands.literal("aerocoredev").then(Commands.literal("sound")
                 .then(Commands.literal("sine").then(Commands.argument("hz", DoubleArgumentType.doubleArg(20, 20000)).executes(c -> {
                     Minecraft mc = Minecraft.getInstance();
                     double hz = DoubleArgumentType.getDouble(c, "hz");
-                    ResourceLocation id = ResourceLocation.fromNamespaceAndPath(AeroCore.MOD_ID, "test_sine_" + (++made));
+                    ResourceLocation id = ResourceLocation.fromNamespaceAndPath("aerocore", "test_sine_" + (++made));
                     TESTS.add(new Test(LiveSound.streamed(id, SoundSource.NEUTRAL, sine(hz)), mc.player.position()));
                     say("sine " + hz + " Hz (" + TESTS.size() + " playing)");
                     return 1;
                 })))
                 .then(Commands.literal("click").executes(c -> {
                     Minecraft mc = Minecraft.getInstance();
-                    ResourceLocation id = RuntimeSounds.id(AeroCore.MOD_ID, "test_click");
+                    ResourceLocation id = RuntimeSounds.id("aerocore", "test_click");
                     if (!RuntimeSounds.defined(id)) {
                         float[] s = new float[Voice.RATE / 5];
                         for (int i = 0; i < s.length; i++) { double t = i / (double) Voice.RATE; s[i] = (float) (0.5 * Math.exp(-t * 40) * Math.sin(2 * Math.PI * 1200 * t)); }
@@ -99,7 +102,7 @@ public final class DevSoundCommands {
                 .then(Commands.literal("stats").executes(c -> {
                     StringBuilder b = new StringBuilder(String.format(java.util.Locale.ROOT,
                             "AeroCore sound: %d streams on the synth thread (load %.1f %%), %d free streaming channels, generation %d, %d runtime sounds (%d KB)",
-                            SynthThread.streams(), 100 * SynthThread.load(), SoundHooks.freeStreams(), SoundHooks.generation(),
+                            SoundHooks.synthStreams(), 100 * SoundHooks.synthLoad(), SoundHooks.freeStreams(), SoundHooks.generation(),
                             RuntimeSounds.count(), RuntimeSounds.bytes() / 1024));
                     for (Test t : TESTS) {
                         SynthStream s = t.sound().instance() == null ? null : t.sound().instance().stream();

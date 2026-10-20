@@ -21,8 +21,6 @@
     "CameraFogMixin",
     "ChannelAccessor",
     "CloudWindMixin",
-    "DevWindowFocusMixin",
-    "DevWindowMixin",
     "GuiAccessor",
     "LiquidBlockRendererMixin",
     "RiderTiltMixin",

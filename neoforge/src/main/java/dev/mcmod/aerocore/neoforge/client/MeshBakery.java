@@ -73,8 +73,8 @@ public final class MeshBakery {
     }
 
     private static final Map<Object, Entry> CACHE = new WeakHashMap<>();
-    /** Development switches (/aerocoredev parts): bake without occlusion, or without leaving out what cannot be seen. */
-    static volatile boolean noOcclusion, noCulling;
+    /** Development switches (/aerocoredev parts, from the development tools mod): bake without occlusion, or without leaving out what cannot be seen. */
+    public static volatile boolean noOcclusion, noCulling;
     private static volatile int generation;
 
     /**

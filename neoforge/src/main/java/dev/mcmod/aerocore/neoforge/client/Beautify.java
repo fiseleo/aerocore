@@ -22,8 +22,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class Beautify {
     private Beautify() {}
 
-    /** A development override (/aerocoredev parts beautify on|off|config), null: the setting. */
-    static volatile Boolean override;
+    /** A development override (/aerocoredev parts beautify on|off|config, from the development tools mod), null: the setting. */
+    public static volatile Boolean override;
     private static volatile Boolean last;
     private static volatile int generation;
     private static final List<Runnable> LISTENERS = new CopyOnWriteArrayList<>();

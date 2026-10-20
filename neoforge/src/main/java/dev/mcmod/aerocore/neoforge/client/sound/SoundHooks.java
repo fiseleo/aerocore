@@ -54,6 +54,10 @@ public final class SoundHooks {
     public static int generation() { return generation; }
 
     /** Free streaming channels (Minecraft has at most 8, shared with music and jukeboxes); -1 when unknown. */
+    /** The streams on the synthesis thread and the share of its time it spends rendering (0-1; 0.41: the development tools' stats). */
+    public static int synthStreams() { return SynthThread.streams(); }
+    public static double synthLoad() { return SynthThread.load(); }
+
     public static int freeStreams() {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null || mc.getSoundManager() == null) { return -1; }

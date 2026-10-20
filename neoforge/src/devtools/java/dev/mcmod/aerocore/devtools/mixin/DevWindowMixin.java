@@ -1,8 +1,8 @@
-package dev.mcmod.aerocore.neoforge.mixin;
+package dev.mcmod.aerocore.devtools.mixin;
 
 import com.mojang.blaze3d.platform.Window;
 import com.mojang.logging.LogUtils;
-import dev.mcmod.aerocore.neoforge.client.DevWindow;
+import dev.mcmod.aerocore.devtools.DevWindow;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -14,7 +14,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * Development only (DevWindow): the game's window is created hidden on the chosen monitor and shown there without
  * taking focus, so nothing appears on the primary monitor or pulls a player out of another game. Without the system
- * property, and in production, the window opens as vanilla and NeoForge make it.
+ * property the window opens as vanilla and NeoForge make it. 0.41: in the development tools mod (aerocore_devtools).
  */
 @Mixin(Window.class)
 abstract class DevWindowMixin {

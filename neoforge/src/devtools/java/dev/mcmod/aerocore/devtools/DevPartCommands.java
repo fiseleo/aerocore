@@ -1,27 +1,29 @@
-package dev.mcmod.aerocore.neoforge.client;
+package dev.mcmod.aerocore.devtools;
 
 import com.mojang.brigadier.arguments.StringArgumentType;
-import dev.mcmod.aerocore.neoforge.AeroCore;
+import dev.mcmod.aerocore.neoforge.AeroCoreClientConfig;
+import dev.mcmod.aerocore.neoforge.client.Beautify;
+import dev.mcmod.aerocore.neoforge.client.FieldLamps;
+import dev.mcmod.aerocore.neoforge.client.MeshBakery;
+import dev.mcmod.aerocore.neoforge.client.PartGpu;
 import net.minecraft.commands.Commands;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 /**
- * Development client command (0.29, not registered in production): /aerocoredev parts occlusion|culling on|off
+ * Development client command (0.29; 0.41 in the development tools mod, never released): /aerocoredev parts occlusion|culling on|off
  * switches how part meshes are baked (and bakes them again), to compare the drawing with and without each step;
  * /aerocoredev parts shading auto|shader|vanilla picks the shading for the session; /aerocoredev parts gpu on|off
  * draws baked parts from GPU buffers or writes their vertices every frame (PartGpu); 0.39: /aerocoredev parts beautify
  * on|off|config overrides the beautified shading for the session (Beautify).
  */
-@EventBusSubscriber(modid = AeroCore.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = AeroCoreDevtools.MOD_ID, value = Dist.CLIENT)
 public final class DevPartCommands {
     private DevPartCommands() {}
 
     @SubscribeEvent public static void register(RegisterClientCommandsEvent event) {
-        if (FMLEnvironment.production) { return; }
         event.getDispatcher().register(Commands.literal("aerocoredev").then(Commands.literal("parts")
                 .then(Commands.argument("what", StringArgumentType.word()).then(Commands.argument("on", StringArgumentType.word()).executes(c -> {
                     String value = StringArgumentType.getString(c, "on");
@@ -35,8 +37,8 @@ public final class DevPartCommands {
                             return 1;
                         }
                         case "shading" -> {   // auto, shader or vanilla, for this session (not saved)
-                            dev.mcmod.aerocore.neoforge.AeroCoreClientConfig.PART_SHADING.set(
-                                    dev.mcmod.aerocore.neoforge.AeroCoreClientConfig.PartShading.valueOf(value.toUpperCase(java.util.Locale.ROOT)));
+                            AeroCoreClientConfig.PART_SHADING.set(
+                                    AeroCoreClientConfig.PartShading.valueOf(value.toUpperCase(java.util.Locale.ROOT)));
                             return 1;
                         }
                         default -> { return 0; }

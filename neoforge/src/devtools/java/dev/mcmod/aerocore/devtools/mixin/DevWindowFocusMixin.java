@@ -1,6 +1,6 @@
-package dev.mcmod.aerocore.neoforge.mixin;
+package dev.mcmod.aerocore.devtools.mixin;
 
-import dev.mcmod.aerocore.neoforge.client.DevWindow;
+import dev.mcmod.aerocore.devtools.DevWindow;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;

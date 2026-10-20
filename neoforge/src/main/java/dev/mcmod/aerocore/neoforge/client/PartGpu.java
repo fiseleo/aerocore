@@ -30,7 +30,7 @@ import java.util.WeakHashMap;
  * entity shaders take pose and light from each vertex. A buffer is freed when its mesh is forgotten (MeshBakery's
  * cache dropped it) or when all are cleared. Render thread only.
  */
-final class PartGpu {
+public final class PartGpu {
     private PartGpu() {}
 
     /** A group of a baked mesh to draw where a part is: the mesh, the group's index, the pose and the packed light. */
@@ -41,8 +41,8 @@ final class PartGpu {
     private static final Map<PackedMesh, Held> HELD = new WeakHashMap<>();
     private static final List<Held> ALL = new ArrayList<>();
     private static volatile boolean clearing;
-    /** Whether to draw from buffers at all (a development switch: /aerocoredev parts gpu on|off). */
-    static volatile boolean enabled = true;
+    /** Whether to draw from buffers at all (a development switch: /aerocoredev parts gpu on|off; 0.41: public for the development tools mod). */
+    public static volatile boolean enabled = true;
     private static final Matrix4f IDENTITY = new Matrix4f();
 
     /** Frees every buffer at the next draw (resources reloaded, bakes cleared). */

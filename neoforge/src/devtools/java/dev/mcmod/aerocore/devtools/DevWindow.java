@@ -1,6 +1,5 @@
-package dev.mcmod.aerocore.neoforge.client;
+package dev.mcmod.aerocore.devtools;
 
-import net.neoforged.fml.loading.FMLEnvironment;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFW;
 
@@ -11,7 +10,8 @@ import org.lwjgl.glfw.GLFW;
  * created hidden, centred on the n-th monitor and shown without taking focus (DevWindowMixin), and the game starts
  * knowing it has no focus (DevWindowFocusMixin), so it grabs the mouse only once someone clicks into it. NeoForge's
  * early loading window opens on the primary monitor and takes focus before any mod runs, so those runs turn it off
- * (earlyWindowControl in config/fml.toml, written by the run tasks). Inert in production.
+ * (earlyWindowControl in config/fml.toml, written by the run tasks). 0.41: in the development tools mod
+ * (aerocore_devtools), which is never released; inert without the property.
  */
 public final class DevWindow {
     /** The system property naming the monitor (1 the primary; 0 or absent: the game opens as usual). */
@@ -23,7 +23,6 @@ public final class DevWindow {
 
     /** The monitor the development window opens on (1 the primary, GLFW's order), or 0 when the game opens as usual. */
     public static int monitor() {
-        if (FMLEnvironment.production) { return 0; }
         Integer n = Integer.getInteger(MONITOR, 0);
         return Math.max(0, n);
     }

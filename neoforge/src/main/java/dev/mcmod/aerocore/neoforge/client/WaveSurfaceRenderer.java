@@ -182,6 +182,15 @@ public final class WaveSurfaceRenderer {
     /** Worker time per part of compute (ns): mesh, correction, wakes, lattice, attributes; for timing(). */
     private static final java.util.concurrent.atomic.AtomicLongArray PARTS = new java.util.concurrent.atomic.AtomicLongArray(9);
 
+    /**
+     * The last frame's sea, for a slow-frame log (0.41: AutoShot moved to the development tools mod and reads it here):
+     * "x ms (refresh y ms for n tiles, look z ms, compute w ms)".
+     */
+    public static String lastFrame() {
+        return String.format(java.util.Locale.ROOT, "%.1f ms (refresh %.1f ms for %d tiles, look %.1f ms, compute %.1f ms)",
+                lastDrawNanos / 1e6, phase[0] / 1e6, refreshes, phase[1] / 1e6, phase[2] / 1e6);
+    }
+
     /** The mean milliseconds per frame spent drawing the sea (total and in the parallel compute) and tiles per frame since the last call. */
     public static String timing() {
         String out = frames == 0 ? "no frames" : String.format("%.2f ms per frame (compute %.2f ms; worker ms: mesh %.2f, correction %.2f, wakes %.2f, lattice %.2f, attributes %.2f), %.0f tiles",

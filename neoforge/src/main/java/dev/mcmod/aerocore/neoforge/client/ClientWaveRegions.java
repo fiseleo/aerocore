@@ -96,6 +96,16 @@ public final class ClientWaveRegions {
     static int updates, remeshed;
     static long acceptNanos;
 
+    /** Render-thread time spent accepting region updates so far, ns (0.41: the development tools' slow-frame log). */
+    public static long acceptNanos() { return acceptNanos; }
+
+    /** "region updates n, sections remeshed m" since the last call, and starts counting again (0.41: AutoShot's fps step). */
+    public static String counts() {
+        String out = "region updates " + updates + ", sections remeshed " + remeshed;
+        updates = remeshed = 0;
+        return out;
+    }
+
     private static void migrate(List<WaveRegion> before, List<WaveRegion> after) {
         WaveSurfaceRenderer.migrate(before, after);
         SeaFoam.migrate(before, after);

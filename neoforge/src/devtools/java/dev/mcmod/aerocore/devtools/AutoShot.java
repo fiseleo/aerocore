@@ -1,7 +1,9 @@
-package dev.mcmod.aerocore.neoforge.client;
+package dev.mcmod.aerocore.devtools;
 
 import com.mojang.logging.LogUtils;
-import dev.mcmod.aerocore.neoforge.AeroCore;
+import dev.mcmod.aerocore.neoforge.client.ClientWaveRegions;
+import dev.mcmod.aerocore.neoforge.client.PartStats;
+import dev.mcmod.aerocore.neoforge.client.WaveSurfaceRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
@@ -11,7 +13,6 @@ import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import org.slf4j.Logger;
 
@@ -22,8 +23,9 @@ import java.util.List;
 
 /**
  * Development-only screenshot runner, so the sea's appearance can be checked in a QA world without a person at the
- * keyboard. Inert unless the game runs from the development environment (not FMLEnvironment.production) and its game
- * directory holds aerocore-autoshot.txt, which is read and deleted at the first title screen. It opens only worlds
+ * keyboard. 0.41: part of the development tools mod (aerocore_devtools), which is never released: the development runs
+ * load it, and so does the release check's clean game. Inert unless the game directory holds aerocore-autoshot.txt,
+ * which is read and deleted at the first title screen. It opens only worlds
  * whose folder name starts with "AeroCore" (never a player's own world), then runs one step per client tick:
  * <pre>
  * world &lt;folder&gt;     the QA world (required, first; or server)
@@ -54,7 +56,7 @@ import java.util.List;
  * and (0.33.1) it never keeps the mouse: steps work without focus, and a click into the window is let go at once.
  * Frames slower than 50 ms are logged on their own with where the time went (collector, JIT, the sea, the client tick).
  */
-@EventBusSubscriber(modid = AeroCore.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = AeroCoreDevtools.MOD_ID, value = Dist.CLIENT)
 public final class AutoShot {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String PLAN = "aerocore-autoshot.txt", WORLD_PREFIX = "AeroCore";
@@ -74,7 +76,6 @@ public final class AutoShot {
     private AutoShot() {}
 
     @SubscribeEvent public static void tick(ClientTickEvent.Post event) {
-        if (FMLEnvironment.production) { return; }
         Minecraft minecraft = Minecraft.getInstance();
         try {
             if (steps == null) { start(minecraft); return; }
@@ -126,7 +127,7 @@ public final class AutoShot {
 
     /** Frame times while the plan runs, for the fps step: stutter shows in the slowest frame, not the average. */
     @SubscribeEvent public static void frame(net.neoforged.neoforge.client.event.RenderFrameEvent.Post event) {
-        if (FMLEnvironment.production || !entered || leaving) { return; }
+        if (!entered || leaving) { return; }
         long now = System.nanoTime(), gcMillis = 0, gcCount = 0;
         framesSinceFps++;
         for (java.lang.management.GarbageCollectorMXBean gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
@@ -140,15 +141,13 @@ public final class AutoShot {
                 slowFrames++;
                 // Where a slow frame went: collector pauses, JIT time (other threads, a hint of new code running), the
                 // sea's drawing, the client tick (all mods and vanilla) and accepting region updates.
-                LOGGER.info("AeroCore autoshot: slow frame {} ms: GC {} ms in {}, JIT {} ms, sea {} ms (refresh {} ms for {} tiles, look {} ms, compute {} ms), client tick {} ms, region updates {} ms",
+                LOGGER.info("AeroCore autoshot: slow frame {} ms: GC {} ms in {}, JIT {} ms, sea {}, client tick {} ms, region updates {} ms",
                         String.format("%.1f", dt / 1e6), gcMillis - lastGcMillis, gcCount - lastGcCount, jitMillis - lastJitMillis,
-                        String.format("%.1f", WaveSurfaceRenderer.lastDrawNanos / 1e6), String.format("%.1f", WaveSurfaceRenderer.phase[0] / 1e6),
-                        WaveSurfaceRenderer.refreshes, String.format("%.1f", WaveSurfaceRenderer.phase[1] / 1e6), String.format("%.1f", WaveSurfaceRenderer.phase[2] / 1e6),
-                        String.format("%.1f", tickNanos / 1e6),
-                        String.format("%.1f", (ClientWaveRegions.acceptNanos - lastAccept) / 1e6));
+                        WaveSurfaceRenderer.lastFrame(), String.format("%.1f", tickNanos / 1e6),
+                        String.format("%.1f", (ClientWaveRegions.acceptNanos() - lastAccept) / 1e6));
             }
         }
-        lastFrame = now; lastGcMillis = gcMillis; lastGcCount = gcCount; lastJitMillis = jitMillis; lastAccept = ClientWaveRegions.acceptNanos; tickNanos = 0;
+        lastFrame = now; lastGcMillis = gcMillis; lastGcCount = gcCount; lastJitMillis = jitMillis; lastAccept = ClientWaveRegions.acceptNanos(); tickNanos = 0;
     }
 
     @SubscribeEvent(priority = net.neoforged.bus.api.EventPriority.HIGHEST)
@@ -295,11 +294,11 @@ public final class AutoShot {
                 }
                 double meanTick = server == null ? 0 : server.getAverageTickTimeNanos() / 1e6;
                 LOGGER.info("AeroCore autoshot: {} fps, slowest frame {} ms, {} frames over 50 ms, slowest server tick {} ms (last 100: mean {} ms, {} over 50 ms); "
-                        + "region updates {}, sections remeshed {}; sea {}", minecraft.getFps(), String.format("%.1f", worstFrame / 1e6), slowFrames,
-                        String.format("%.1f", worstTick / 1e6), String.format("%.1f", meanTick), slowTicks, ClientWaveRegions.updates, ClientWaveRegions.remeshed,
+                        + "{}; sea {}", minecraft.getFps(), String.format("%.1f", worstFrame / 1e6), slowFrames,
+                        String.format("%.1f", worstTick / 1e6), String.format("%.1f", meanTick), slowTicks, ClientWaveRegions.counts(),
                         WaveSurfaceRenderer.timing());
                 LOGGER.info("AeroCore autoshot: {}", PartStats.report(framesSinceFps));   // 0.29: drawing parts
-                worstFrame = 0; slowFrames = 0; ClientWaveRegions.updates = 0; ClientWaveRegions.remeshed = 0; framesSinceFps = 0;
+                worstFrame = 0; slowFrames = 0; framesSinceFps = 0;
             }
             case "quit" -> leave(minecraft);
             default -> throw new IllegalArgumentException("Unknown autoshot step: " + step);

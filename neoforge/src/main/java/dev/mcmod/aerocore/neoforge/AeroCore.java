@@ -4,9 +4,7 @@ import com.mojang.brigadier.arguments.DoubleArgumentType;
 import dev.mcmod.aerocore.api.*;
 import dev.mcmod.aerocore.neoforge.probe.ProbeCommands;
 import dev.mcmod.aerocore.neoforge.probe.ProbeEntities;
-import dev.mcmod.aerocore.neoforge.probe.ProbeGameTests;
 import dev.mcmod.aerocore.neoforge.probe.PlatformCommands;
-import dev.mcmod.aerocore.neoforge.probe.PlatformGameTests;
 import dev.mcmod.aerocore.neoforge.probe.WaveCommands;
 import dev.mcmod.aerocore.neoforge.probe.WaveNetwork;
 import net.minecraft.commands.CommandSourceStack;
@@ -16,7 +14,6 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.neoforge.event.RegisterGameTestsEvent;
 
 import java.util.Locale;
 
@@ -30,13 +27,7 @@ public final class AeroCore {
         ProbeEntities.TYPES.register(modBus);
         dev.mcmod.aerocore.neoforge.vehicle.VehicleRegistry.register(modBus);
         modBus.addListener(WaveNetwork::register);
-        if (Boolean.getBoolean("aerocore.gametests")) {
-            modBus.addListener((RegisterGameTestsEvent event) -> event.register(ProbeGameTests.class));
-            modBus.addListener((RegisterGameTestsEvent event) -> event.register(PlatformGameTests.class));
-            modBus.addListener((RegisterGameTestsEvent event) -> event.register(dev.mcmod.aerocore.neoforge.probe.HullGameTests.class));
-            modBus.addListener((RegisterGameTestsEvent event) -> event.register(dev.mcmod.aerocore.neoforge.probe.SeaGameTests.class));
-            modBus.addListener((RegisterGameTestsEvent event) -> event.register(dev.mcmod.aerocore.neoforge.vehicle.VehicleGameTests.class));
-        }
+        // 0.41: the GameTests are in the gametest source set (development runs only, not in the release JAR)
         NeoForge.EVENT_BUS.addListener(AeroCore::registerCommands);
     }
 
