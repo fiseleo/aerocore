@@ -14,7 +14,7 @@
     同步與存檔，以及海浪與尾浪的計算與渲染（使用者：「浪的渲染要在 AeroCore」）。hdfv 缺什麼物理或計算，就在 AeroCore 補成通用 API。
     架構見 [docs/VEHICLE_PARTS.md](docs/VEHICLE_PARTS.md)。
 - 先維持可驗證的物理核心，再逐步接入載具玩法。不要把近似模型描述成工程級 CFD。
-- 截至 2026-10-20，版本為 **0.40.0**：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
+- 截至 2026-10-21，版本為 **0.41.0**（第一次對外發布）：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
   0.6 加入球形元件接觸反力（摩擦／反彈）、指定的線性 Airy 波浪、BEMT 螺旋槳推力（平台艉部示範槳）與阻力摩擦生熱；
   0.7 加入接觸摩擦生熱、波壓深度衰減（垂直 Froude–Krylov）、水平 Froude–Krylov 力與附加質量，測試球改用六自由度剛體與 `ContactSolver`；
   0.8 加入浮筒垂直方向的波浪輻射阻尼（Hulme 半球資料、Cummins 記憶力）與浮筒間點吸收體干擾；
@@ -129,6 +129,10 @@
   物種的生成焓與莫耳質量（`Species`）、配平的反應與 Hess 反應焓、鋁熱能否自持（`Reaction`）、Faraday 電解（`Electrolysis`：鋁、鎂、氯酸鹽、
   過氯酸鹽、水）、電爐（`Smelting`：電弧爐熔鋼、矽鐵、鉻鐵、鈦渣、Kroll、鋁熱法、Pidgeon、煅燒）、礦物品位（`Minerals`），以及甲醇合成
   （`api.petroleum.Methanol`）；見 [docs/METALLURGY.md](docs/METALLURGY.md)。只加新類別，其他不變。
+  0.41（2026-10-21，使用者「加入新手教學 我要發布要到外面」「AutoShot 可能要移除」，hdfv 0.24）是第一次對外發布（Beta）：
+  授權 LGPL-3.0-only；開發用程式移出發布的 JAR（AutoShot、`DevWindow` 與它的 mixin、`/aerocoredev` 成了另一個不發布的 mod
+  `aerocore_devtools`，GameTest 在 `neoforge/src/gametest`；`verifyReleaseJar`）；簡體中文；Mod 資訊與 Logo；對外的 README（三語）、CHANGELOG、
+  `release/`；正式版環境的載入測試 `scripts/release-test/release_test.py`。物理逐位元不變。
 - 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是線性自由面的非定常解（勢流），不是黏性流場求解。
 - AeroCore 不出可駕駛的載具與零件設計（`PartVehicle` 是給載具 Mod 用的通用實體；0.20 起載具 GameTest 在 hdfv）；尚無簧下質量與輪胎溫度、三維 CFD、碎浪動力、
   波浪反射、遠方風暴的湧浪、大氣層結（背風波）、氣象動力學、相變或完整熱流耦合；海岸是幾何光學（無反射、島後只有一個到達波）。
@@ -147,7 +151,8 @@
 | IDE | IntelliJ IDEA Community Edition |
 
 版本號以 `gradle.properties` 和建置設定為準。不要為一般功能修改順便升級 Minecraft、NeoForge、Gradle 或 Java。
-對外授權尚未決定，中繼資料為 `All Rights Reserved`；不要自行更改授權。
+授權：0.41 起 LGPL-3.0-only（使用者 2026-10-20 選擇；`COPYING.LESSER`、`COPYING`；MDK 範本的 `TEMPLATE_LICENSE.txt` 是 MIT），三個檔都打包進 JAR。
+不要自行更改授權。
 
 ## 工作目錄與本機資料
 
@@ -249,7 +254,9 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | physics 的 `api/engine/` | 活塞引擎的物理（0.18）：氣體、燃料、循環模擬、摩擦、點火標定；渦輪噴射的循環（0.19，`Turbojet`）；0.20 從設計抽出的幾何、強度、MAP 建立、執行時關係、渦輪機械；0.21 渦扇與自由渦輪（`Turbofan`、`FreeTurbine`，共用 `GasPath`、`TwoSpool`）；純 Java，可離線呼叫（測功機、測試台） |
 | neoforge 的 `vehicle/` | 給載具 Mod 用的公開遊戲端 API：`PartVehicle`、`VehicleRegistry`、`VehicleNetwork`、`VehicleCommands`；客戶端 `PartVehicleRenderer`／`PartRenderer`／`PartMesh` |
 | neoforge 的 `mixin/` | `aerocore.mixins.json`：雙端 `EntityCollideMixin`（實體對物體碰撞）、`EntityWaterMixin`（原版水高度與視線讀海面）、`BoatWaterMixin`（原版船水面）、`BoatPhysicsMixin`（原版船改由 `RowingBoats` 移動、槳速）、`BoatSeatMixin`（座位隨船傾斜）、`BoatAccessor`、`LivingEntityAccessor`、`GameTestTickerAccessor`（物體物理失敗時找它所屬的 GameTest）、`ChunkUnloadMixin`（0.37：丟掉過時的區塊卸載工作，關閉時不再卡在存檔）、`ChunkMapAccessor`（它的 GameTest）；客戶端 `LiquidBlockRendererMixin`（隱藏海面頂面）、`CameraFogMixin`（水下霧）、`BoatRendererMixin`（船的俯仰橫搖）、`BoatClientMixin`（槳動畫內插）、`RiderTiltMixin`（乘客模型隨船傾斜）、`SkyDomeMixin`（物理天空）、`CloudWindMixin`（雲隨風）、`WeatherWindMixin`（雨雪隨風傾斜）、0.37 的聲音：`SoundBufferLibraryMixin`（執行時的靜態聲音）、`ChannelAccessor`、`GuiAccessor`、`SoundEngineAccessor`、`SoundManagerAccessor`；只能放 mixin 類別 |
-| `scripts/` | JDK／IDE／本機資料與離線 CFD 繪圖工具 |
+| `scripts/` | JDK／IDE／本機資料與離線 CFD 繪圖工具；0.41 `zh_cn.py`（繁轉簡）、`logo.py`（Logo 與發布圖示）、`release-test/release_test.py`（正式版 NeoForge 的伺服器與客戶端載入測試） |
+| `neoforge/src/devtools`、`neoforge/src/gametest` | 0.41：不發布的開發工具 mod `aerocore_devtools`（AutoShot、開發視窗、`/aerocoredev`）；GameTest 與它的結構 |
+| `release/` | 0.41：發布頁的文字（三語）、各版的說明、上傳欄位清單；圖示與截圖在本機 `%USERPROFILE%\.mcmod\release\aerocore` |
 | `docs/` | API、模型假設、操作和驗證說明 |
 
 主要類別：`AeroSolver`、`RigidBodyDynamics`、`FloatingBodyDynamics`、`ContactSolver`、`LinearWave`／`WaveField`、
@@ -642,7 +649,8 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
     `RowingBoats` 0.11～0.16 共用一份狀態，0.17 開發時重現客戶端 `memory is null` 崩潰後才分開。
   - 藍圖 JSON 的數字以最短往返形式寫出；`format` 比目前新的拒絕讀。新增參數要有預設值，舊藍圖才讀得回來。
   - AeroCore 不加可駕駛載具的玩法與零件（AGENTS 開頭）；範例藍圖在 hdfv。
-- 0.15 `AutoShot`：只在非正式環境、遊戲目錄有 `aerocore-autoshot.txt` 時啟動（讀後即刪），只開資料夾名稱以 AeroCore 開頭的世界，最後正常存檔離開。
+- 0.41 起 AutoShot、`DevWindow` 與它的兩個 mixin、`/aerocoredev` 在另一個 mod `aerocore_devtools`（`neoforge/src/devtools`，package `dev.mcmod.aerocore.devtools`，自己的 mods.toml 與 `aerocore_devtools.mixins.json`），只用 AeroCore 的公開類別；開發 run 一起載入，發佈成 `aerocore-devtools-1.21.1` 給 hdfv 的開發 run，正式版環境的載入測試也用它驅動客戶端；它不發布，所以不再檢查 `FMLEnvironment.production`（沒有計畫檔就不動作）。GameTest 在 `neoforge/src/gametest`（同一個 mod、同 package，`AeroCoreGameTests` 登記）；`build` 的 `verifyReleaseJar` 擋下發布 JAR 裡的開發用類別與 GameTest 結構，也檢查授權檔與 Logo。開發工具需要的內部數值改由公開的方法讀（`WaveSurfaceRenderer.lastFrame`、`ClientWaveRegions.counts`／`acceptNanos`、`SoundHooks.synthStreams`／`synthLoad`）。
+- 0.15 `AutoShot`：只在非正式環境（0.41 起：只要裝了 `aerocore_devtools`）、遊戲目錄有 `aerocore-autoshot.txt` 時啟動（讀後即刪），只開資料夾名稱以 AeroCore 開頭的世界，最後正常存檔離開。
   0.16 加 `key`（按住移動鍵，例如划船）、`camera`、`look`、`clouds`（只在這次執行打開雲，結束還原使用者設定）；1.21.1 的船實體 ID 是 `minecraft:boat`。
   `AeroCore Render QA` 是 2026-10-10 在原開發機從使用者的「新的世界」複製的 QA 世界（複製時遊戲已關閉，只讀原世界，`level.dat` 名稱已改），
   可隨意修改；不要對「新的世界」使用 AutoShot。截圖在 `client/screenshots/aerocore-*.png`。
@@ -722,6 +730,7 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | 0.37.0 | 2026-10-19，原開發機 | 665＋5，同日補驗後 666＋5（新增聲學 32＋`aSourceLaunchedPastTheListenerBoomsWhileItsStandingSoundIsStillArriving`：`DspTest`（雜訊、濾波、延遲線、振盪器、模態、WAV 讀寫、同種子同樣本）、`PropagationTest`（ISO 9613-1 表值、球面擴散、都卜勒、延遲時間：次音速一根、超音速錐內兩根、錐外沒有、去重；Sabine 與 Eyring 的已知房間、質量定律、響度對應）、`SourcesTest`、`MoreSourcesTest`（直列四缸 3000 rpm 的 100 Hz、十字形曲軸 V8 的半階、V 型雙缸的不等間隔、渦輪嘯聲、噴流 80 log V、Gutin 葉片頻率、Concorde 音爆約 2 psf ±25 %、胎紋頻率隨車速、放氣隨壓力衰減、拍水的悶響、撞擊的模態）；`VehicleTest` 1e-9 不變） | 55（新增 `aLandingIsAnImpactAndASlideAScrape`、另一個工作階段的 `ChunkUnloadGameTests`） | hdfv 0.19 的 `AutoShot`（`AeroCore HDFV QA`，第 2 個螢幕，使用者同意）三輪：第一輪四條測試正弦波與主執行緒卡 300／600 ms 時串流約 40 % 的塊放空、有喀聲，改成自己的補塊執行緒、`read()` 補算、`Thread.sleep(1)`、領先 2048 後第二輪放空 0；EFX 開（石室 RT60 8.8 s、汽車廠 6.8 s、室外 0.6～0.9 s）；第一輪關閉時伺服器卡在區塊卸載（使用者同意強制結束，另一個工作階段修好，之後兩輪 1 秒內存檔關閉）。第二輪兩台測試車疊在一起每 tick 撞擊（1853 次）：撞擊封包改成一串只送第一次（之後 2 分鐘 2 次）。同日（另一個工作階段，hdfv 本機專用伺服器＋Dev、Dev2，`AeroCore MP QA`，使用者同意）補驗：多人連線（Dev2 用同步的狀態合成 Dev 的車、喇叭、方向燈繼電器只在車內）、`FarSounds`（Dev2 在 515 m 與 1245 m 外，伺服器 view distance 8 的追蹤範圍 128 m 外，聽到 Dev 空檔踩油的車 46、44 dB，放油門後消失）、音爆（`/hdfv dev drive launch 600`：測試車從 100 m 高、Dev 側方 40 m 外 64 m 處發射）。音爆找到並修掉三件：`SourceTrack` 的「到達數從 0 跳到 ≥1」抓不到（錐內那段聲音只有 8 ms，又有靜止時的聲音還在到達）→ 改看到達時間的折點（`foldArrives`，新 JUnit，physics 666）；客戶端快速載具用被截到 78 m/s 的原版運動判斷、沿一軸飛時落後兩 tick 滑行 → 用同步的 `v`；進入追蹤的第一步多一個 tick（假的 Mach 3.4 音爆）→ `targetTick` 減 1。修好後兩個聽者各一次音爆（Dev 4.0～4.7 kPa、41～45 m，Dev2 3.9～4.2 kPa、41～43 m，在預期的錐到達時間）。另見：以 600 m/s 從石台上發射時車撞到石台、被拋到 y 210；一次頭朝下壓在地上發射後停在原地、速度一直保留（快速載具彈出走廊時每 tick 退回，0.28 的 `finishSubstep`；沒有修，另開工作）。未確認：實際聽起來如何、Sound Physics Remastered 並存 |
 | 0.38.0 | 2026-10-19，原開發機 | 683＋5（新增 `LightSignalTest`（每個序號每週期亮一次、短閃不被幀率吃掉）、`SectorColoursTest`（PAPI 在 3° 兩紅兩白、偏高全白、偏低全紅、羽化）、`AllardTest`（10 000 cd 在 MOR 800 m：夜 1672 m、日 812 m）、`AirDataTest` 4（ISA 反算、QNH／QFE 與高度表、空速含超音速皮托、風分量與方位）、`WindGustsTest` 的峰值、`SurfaceWindTest` 的盛行風；`VehicleTest` 1e-9 不變） | 57（新增 `airAtAPointIsWhatVehiclesFeel`（海域內外）、`tracksFindTheVehiclesNearAPoint`（自己的批次：放在預設批次時同批的 `hullFloatsLevelAtItsDesignWaterline` 失敗）） | hdfv 0.20 開發時的 `AutoShot`（`AeroCore HDFV QA`，第 2 個螢幕，使用者同意）：`/aerocoredev lamps grid` 1638 盞約每幀 0.3～0.5 ms；PAPI 高 4 白、在下滑道上 2 白 2 紅（紅在靠跑道側）、低 4 紅；夜間 1、2、4 km 都看得到；順閃燈；白天淡。選用著色的回歸：沒選用的材質前後截圖逐像素比對只差 ≤ 2 級（浪、遠處區塊、引擎預覽的皮帶這類會動的地方）。原版 position_tex_color 丟掉 alpha < 0.1 的像素，燈先是看不見的，改成自己的著色器 |
 | 0.39.0 | 2026-10-20，原開發機 | 686＋5（新增 `AmbientOcclusionTest.aWalledFloorDarkAtItsCornersIsSplitAtItsOpenMiddle`、`LensPatchesTest` 2） | 57 | 美化著色（`Beautify`、材質的 `beautify`、暖色方塊光、地面色、`Refine.CENTRE`、燈罩光暈、接觸陰影、`ShotDiff`）；`PartGpu` 每種 render type 只套一次著色器、`GPU_MIN_QUADS` 96 → 32。hdfv 0.22 的 AutoShot：關掉時與 0.38 相同（只差會動的東西）；hdfv 的排列場景 5.75 → 4.47 ms、95 → 113 FPS（車輪成為件之後；沒有這次的 `PartGpu` 是 11 ms、58 FPS） |
+| 0.41.0 | 2026-10-21，原開發機 | 694＋5（新增 `LangParityTest`：en_us、zh_tw、zh_cn 的鍵與順序一樣，zh_cn 沒有繁體專用字） | 57（搬到 `neoforge/src/gametest`，開發 run 同時載入 `aerocore_devtools`） | 第一次對外發布。`verifyReleaseJar` 確認發布的 JAR 沒有開發用類別、GameTest 結構與 devtools，有 `COPYING`、`COPYING.LESSER`、Logo 與 mods.toml。正式版 NeoForge 21.1.252 的乾淨環境（`scripts/release-test/release_test.py`，和 hdfv 0.24 一起）：專用伺服器只有兩個 mod、加 JEI、加 JEI 與 Create 都起得來，記錄裡沒有可疑的行（Create 那組只有 Create 自己的一行 mixin 警告）；客戶端有 JEI、沒有 JEI 都正常結束，0.23 的 QA 世界打得開；客戶端連本機正式版伺服器的多人也正常。hdfv 0.22 的比較場景：機器 115～116、停車 113～114、塔台 119 FPS（0.22：114、111、119）；整合伺服器 tick 平均 54～57 ms，同場景 0.22 是 58～70 ms。物理程式只改了幾個成員的可見性（給 devtools 用） |
 | 0.32.0 | 2026-10-17，原開發機 | 544＋5 | 52 | 新 JUnit `PlaceTest`（搬到別處：油箱、內部狀態、顯示值、軸轉速逐位元保留，車身在新位置靜止，波浪記憶重來；複本不影響原本）；遊戲中由 hdfv 0.14 確認：組裝室推出的車保留油（GameTest）；`AutoShot` 的 `server`（本機專用伺服器與兩個客戶端）、`key <按鍵名稱> tap`（hdfv 的換檔、手煞車、四驅鍵）、連線中斷時關掉遊戲、暫停選單自動關掉；未確認：連不上伺服器時自己關掉（只寫了程式） |
 | 0.31.0 | 2026-10-17，原開發機 | 542＋5 | 52 | 新 JUnit `RestyleTest`（換外觀後與原本逐位元相同 300 步、複本不影響原本、質量或零件不同時拒絕）；遊戲中由 hdfv 0.13 確認：上傳的圖當貼紙材質（暫代透明、到了換圖、不重新烘焙）、烤漆房完成時 `replaceBlueprint` 讓轎車在原地變色並保留狀態（GameTest：質量不變、位置不動） |
 | 0.29.0 | 2026-10-15，原開發機 | 517＋5 | 52 | 新 JUnit：`MeshCompatTest`（0.28 形狀對凍結副本 1e-12）、`MeshUvTest`、`MeshOpsTest`（含 OBJ 來回與 Blender 式的 OBJ）、`AmbientOcclusionTest`（接觸處變暗、封閉與被覆蓋、5 m 機匣外 5 cm 的環管不算覆蓋、斜面不自遮、長面細分、9.3 萬面 1.2 秒）、`PlumeTest`（Prandtl-Pack 格距、音速噴口壓比 3 的 1.1～1.3 D、Ashkenas-Sherman 馬赫盤、Lau 勢核、Charity 黑體表 ±30）；既有測試數字不變。客戶端由 hdfv 0.11 的 `AutoShot` 看：載具改走背景烘焙（貼圖、遮蔽、細節層級）、零件著色器在正午／黃昏／夜晚與設計畫面；開發中發現並修正遮蔽的四個問題（雜湊鍵相撞、長面條紋、斜面自遮、體素覆蓋挖洞，見 docs/RENDERING.md）。hdfv 0.11 開發中補上（版本號仍是 0.29.0）：`PartRenderer.glow`、`PartVehicle.partPoint`、替身 `STAND_IN`（`MeshOpsTest.aStandInShowsAloneAtTheFarthestLevelOnly`，含遮蔽）、GPU 快取 `PartGpu`（同一畫面 12.1 萬面：13.1 → 1.5 ms／幀，畫面一致）、尾焰核心與菱形的強度（疊加後不飽和成黃綠） |
@@ -769,7 +778,7 @@ CFD CSV／圖在 `cfd/build/experiments/water/` 或 `air/`；`scripts/plot-cfd.p
 
 ## 延伸文件
 
-- [README](README.md)：啟動、IDE、產物與功能入口。
+- [README](README.md)（英文，另有 README.zh-TW.md、README.zh-CN.md）：對外的說明；[CHANGELOG](CHANGELOG.md)；0.40 以前的開發紀錄（舊 README）在 [docs/HISTORY.zh-TW.md](docs/HISTORY.zh-TW.md)。
 - [API](docs/API.md)：接入載具的資料型別與呼叫方式。
 - [零件的繪製](docs/RENDERING.md)：網格、UV、材質、環境光遮蔽、背景烘焙、零件著色器、尾焰（0.29）；大量固定燈、選用的材質著色（0.38）；美化著色（0.39）。
 - [物理模型](docs/PHYSICS.md)、[六自由度平台](docs/PLATFORM.md)、[測試船](docs/HULL.md)、[測試球](docs/PROBE.md)。

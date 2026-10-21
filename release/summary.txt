@@ -1,0 +1,1 @@
+The physics behind vehicle mods: air and water forces, real waves and wind, engines from piston to scramjet, wings, propellers, tyres, drivetrains and synthesized sound. Prerequisite of High Degree of Freedom Vehicles.
