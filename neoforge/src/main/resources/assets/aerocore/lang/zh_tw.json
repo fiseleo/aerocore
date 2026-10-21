@@ -45,7 +45,7 @@
   "command.aerocore.platform.waves.info": "波浪：振幅 %s m | 波長 %s m | 週期 %s s | 波速 %s m/s | 方向 %s° | 水深 %s m | 靜水面 y=%s | 區域半徑 %s m，此處振幅係數 %s（世界波浪區域；水方塊本身不會動，水面由客戶端重畫）",
   "command.aerocore.platform.waves.calm": "波浪：此處沒有波浪（靜水）。",
   "command.aerocore.platform.waves.invalid": "波浪設定被拒絕：%s",
-  "command.aerocore.waves.info": "波浪區域 %s：中心 (%s, %s)｜半徑 %s m（外圈 %s m 逐漸減弱為靜水）｜振幅 %s m｜波長 %s m｜週期 %s s｜方向 %s°｜水深 %s m｜靜水面 y=%s。只有這個高度的開放水面會起伏；畫面上的水面由客戶端重畫，水方塊本身不動。",
+  "command.aerocore.waves.info": "波浪區域 %s：中心 (%s, %s)｜半徑 %s m（外圈 %s m 逐漸減弱為靜水）｜振幅 %s m｜波長 %s m｜週期 %s s｜方向 %s°｜水深 %s m｜靜水面 y=%s。只有這個高度的開放水面會起伏；看到的水面由客戶端重畫，水方塊本身不動。",
   "command.aerocore.waves.none": "此維度沒有波浪區域。",
   "command.aerocore.waves.removed": "已移除 %s 個波浪區域。",
   "command.aerocore.waves.no_water": "此位置的水柱找不到開放水面（往上 3 格到往下 8 格內）。",

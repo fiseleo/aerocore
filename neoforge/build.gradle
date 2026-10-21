@@ -147,6 +147,8 @@ def verifyReleaseJar = tasks.register('verifyReleaseJar') {
                     it.startsWith('data/aerocore/structure/') || it.toLowerCase().contains('devtools')
         }
         if (development) { throw new GradleException("Development code in the release JAR: ${development}") }
+        def missing = ['COPYING', 'COPYING.LESSER', 'aerocore_logo.png', 'META-INF/neoforge.mods.toml'].findAll { !names.contains(it) }
+        if (missing) { throw new GradleException("The release JAR lacks ${missing}") }
     }
 }
 tasks.named('build') { dependsOn verifyReleaseJar }
@@ -154,6 +156,8 @@ tasks.named('build') { dependsOn verifyReleaseJar }
 // Ship the platform-independent API inside the mod, so players install one JAR.
 tasks.named('jar') { from project(':physics').sourceSets.main.output }
 tasks.named('sourcesJar') { from project(':physics').sourceSets.main.allSource }
+// 0.41: the licence (LGPL-3.0-only, with the GPL it builds on) and the MDK template's notice go with every JAR
+tasks.withType(Jar).configureEach { from(rootProject.files('COPYING', 'COPYING.LESSER', 'TEMPLATE_LICENSE.txt')) }
 
 // The game JAR (with the physics API inside) for mods that build against AeroCore, without dependencies: a mod adds
 // it as a mod and must not pull the physics JAR as well (the same packages twice break the module layer).

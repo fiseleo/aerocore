@@ -1,16 +1,20 @@
 modLoader="javafml"
 loaderVersion="[4,)"
-license="All Rights Reserved"
+license="LGPL-3.0-only"
+issueTrackerURL="https://github.com/fiseleo/aerocore/issues"
 
 [[mods]]
 modId="aerocore"
 version="${mod_version}"
 displayName="AeroCore"
+authors="fiseleo"
+credits="Physics from the published literature cited in the docs (NACA, ITTC, MARIN, Savitsky, Fridsma and others)."
+displayURL="https://github.com/fiseleo/aerocore"
+logoFile="aerocore_logo.png"
 description='''
-Reusable air and water forces and torques for vehicle mods.
-Includes standard atmosphere, flow-aware polars, hydrofoils and hydrostatic buoyancy.
-Includes a server-authoritative physics probe for in-game fall, float and current experiments.
-The separate experimental 2D CFD tool is not included in this game JAR.
+The physics behind vehicle mods: air and water forces on any shape, waves, wind, sky and ground, engines from
+piston to scramjet, wings, propellers, rotors, wheels and drivetrains, a generic part-based vehicle, and
+synthesized sound. A library: it adds no vehicles of its own (High Degree of Freedom Vehicles does).
 '''
 
 [[mixins]]
