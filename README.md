@@ -78,6 +78,11 @@ The models are validated against published data (each doc lists its sources and 
 no 3D CFD, no full wave propagation (coasts are geometric optics, wakes are linear), no rotor-wing interference, no
 tyre temperatures. Very fast vehicles need the world ahead of them loaded.
 
+## Community
+
+Questions, bug reports, screenshots and news about AeroCore and High Degree of Freedom Vehicles: join the
+[Discord server](https://discord.gg/4y2mubMg7e).
+
 ## License
 
 AeroCore is released under the [GNU Lesser General Public License v3.0 only](COPYING.LESSER) (LGPL-3.0-only), which

@@ -69,6 +69,10 @@ JDK 21。Windows 用 `.\dev.ps1 build`（會自己找 JDK 21 並執行 Gradle）
 模型都對照過公開資料（每份文件都列出來源與誤差），但它們是遊戲用的物理：沒有三維 CFD、沒有完整的波浪傳播
 （海岸是幾何光學、尾浪是線性解）、沒有旋翼與機翼的干擾、沒有輪胎溫度。極高速的載具需要前方的世界已載入。
 
+## 社群
+
+AeroCore 與高自由度載具的問題、錯誤回報、截圖與消息：歡迎加入 [Discord 伺服器](https://discord.gg/4y2mubMg7e)。
+
 ## 授權
 
 AeroCore 以 [GNU 較寬鬆通用公共授權條款第 3 版（僅此版）](COPYING.LESSER)（LGPL-3.0-only）發布，它建立在
