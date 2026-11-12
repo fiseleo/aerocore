@@ -21,6 +21,7 @@ Accounts, uploads and pushes are done by the user; each public step is agreed fi
 | Environment | client and server: required on both |
 | License | LGPL-3.0-only |
 | Source / issues | https://github.com/fiseleo/aerocore, /issues |
+| Discord invite | https://discord.gg/4y2mubMg7e (never expires) |
 | Icon | `%USERPROFILE%\.mcmod\release\aerocore\icon.png` (512 x 512) |
 | Gallery | `%USERPROFILE%\.mcmod\release\aerocore\gallery\*.png` |
 | Version | 0.41.0, release type **Beta**, loader NeoForge, game version 1.21.1 |

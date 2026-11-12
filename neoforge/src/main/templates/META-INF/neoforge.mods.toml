@@ -15,6 +15,8 @@ description='''
 The physics behind vehicle mods: air and water forces on any shape, waves, wind, sky and ground, engines from
 piston to scramjet, wings, propellers, rotors, wheels and drivetrains, a generic part-based vehicle, and
 synthesized sound. A library: it adds no vehicles of its own (High Degree of Freedom Vehicles does).
+
+Discord: https://discord.gg/4y2mubMg7e
 '''
 
 [[mixins]]

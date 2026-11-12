@@ -38,6 +38,7 @@ repository.
 ## Links
 
 - Source and issues: https://github.com/fiseleo/aerocore
+- Discord (questions, bug reports, news): https://discord.gg/4y2mubMg7e
 - License: LGPL-3.0-only
 
 <details>
@@ -61,6 +62,8 @@ AeroCore 是 Minecraft 1.21.1（NeoForge）的前置 Mod。它計算任何形狀
 
 需求：Minecraft 1.21.1、NeoForge 21.1.252 以上。授權 LGPL-3.0-only。
 
+問題、錯誤回報與消息：[Discord](https://discord.gg/4y2mubMg7e)。
+
 </details>
 
 <details>
@@ -83,5 +86,7 @@ AeroCore 是 Minecraft 1.21.1（NeoForge）的前置 Mod。它计算任何形状
 和高自由度载具一起装，客户端与服务器都要装。客户端设置：零件着色与“美化着色”。
 
 需求：Minecraft 1.21.1、NeoForge 21.1.252 以上。授权 LGPL-3.0-only。
+
+问题、错误反馈与消息：[Discord](https://discord.gg/4y2mubMg7e)。
 
 </details>
