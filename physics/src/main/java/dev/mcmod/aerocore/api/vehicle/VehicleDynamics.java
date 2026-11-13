@@ -77,8 +77,13 @@ public final class VehicleDynamics {
         final Object[] kept;
         double[] flexX, flexStart, flexEnd;
         boolean probing;
+        /** 0.42: the parts' conditions at the step's start (Part.conditions) and what they wore in it. */
+        final double[] used, worn;
+        final Vehicle vehicle;
 
         Collector(Vehicle v, VehicleState st) {
+            vehicle = v;
+            used = st.used.length == 0 ? st.used : st.used.clone(); worn = new double[st.used.length];
             int n = v.rotors().size();
             internal = new double[n]; external = new double[n]; derivative = new double[n]; speeds = new double[n];
             for (int k = 0; k < n; k++) { speeds[k] = st.rotorSpeed(k); }
@@ -126,7 +131,7 @@ public final class VehicleDynamics {
     public record Prepared(Vehicle vehicle, VehicleState state, RigidBodyState start, RigidBodyState damped, List<AppliedForce> forces,
                            Map<AppliedForce.Kind, Wrench> loads, Wrench inertia, List<RigidBodyDynamics.PointMass> masses,
                            double[] trainSpeeds, double[] radii, Map<String, Map<String, Double>> diagnostics, double dt, double[] internals,
-                           Drive drive, List<Collector.Burn> burns, java.util.Set<String> jettisons) {}
+                           Drive drive, List<Collector.Burn> burns, java.util.Set<String> jettisons, double[] worn) {}
 
     /**
      * What the drivetrain left for Part.after (0.24): every row's torque (N m) and every rolling force's end value (N)
@@ -206,6 +211,14 @@ public final class VehicleDynamics {
             c.pointMass(new RigidBodyDynamics.PointMass(at, kg), null);
             c.force(new AppliedForce(AppliedForce.Kind.WEIGHT, at, gravity.scale(kg)), true);
         }
+        // cargo in the holds, the same way (0.42)
+        for (int k = 0; k < v.holds().size(); k++) {
+            double kg = st.holdKg[k];
+            if (!(kg > 0)) { continue; }
+            Vec3d at = s.worldOffset(p, v.holds().get(k).centre());
+            c.pointMass(new RigidBodyDynamics.PointMass(at, kg), null);
+            c.force(new AppliedForce(AppliedForce.Kind.WEIGHT, at, gravity.scale(kg)), true);
+        }
         // 0.33: a twisting frame: probe the wheels at the start twist, solve the stations' twists, then the loads follow them
         Vehicle.Flex flex = v.flex();
         if (flex != null) {
@@ -219,7 +232,10 @@ public final class VehicleDynamics {
                 if (installed.part().probes()) { installed.part().probe(new PartStep(c, installed, s, p, omega, environment, controls, gravity, time, dt)); }
             }
             c.probing = false;
-            double[] end = FrameFlex.solve(flex, start, c.corners);
+            // 0.42: a damaged frame keeps a share of its stiffness (asked only of a frame that has conditions)
+            double share = frame.part().conditions().isEmpty() ? 1
+                    : frame.part().frameStiffness(new PartStep(c, frame, s, p, omega, environment, controls, gravity, time, dt));
+            double[] end = share == 1 ? FrameFlex.solve(flex, start, c.corners) : FrameFlex.solve(flex, start, c.corners, share);
             for (double t : end) { if (!Double.isFinite(t)) { throw new IllegalStateException("The frame's twist is not finite"); } }
             c.flexEnd = end;
             System.arraycopy(end, 0, c.nextInternals, frame.firstInternal(), n);
@@ -350,7 +366,7 @@ public final class VehicleDynamics {
         Drive drive = new Drive(rowTorques, firstRow, rowCount, rollingForces, firstRolling, rollingCount, c.carried, c.shown, c.speeds, time,
                 iterations, fallback);
         return new Prepared(v, st, s, damped, List.copyOf(c.display), new EnumMap<>(c.sums), inertia, List.copyOf(c.masses),
-                trainSpeeds, c.radii, c.diagnostics, dt, c.nextInternals, drive, List.copyOf(c.burns), java.util.Set.copyOf(c.jettisons));
+                trainSpeeds, c.radii, c.diagnostics, dt, c.nextInternals, drive, List.copyOf(c.burns), java.util.Set.copyOf(c.jettisons), c.worn);
     }
 
     /**
@@ -425,6 +441,11 @@ public final class VehicleDynamics {
         System.arraycopy(prepared.trainSpeeds(), 0, st.trainSpeeds, 0, st.trainSpeeds.length);
         System.arraycopy(prepared.internals(), 0, st.internals, 0, st.internals.length);
         System.arraycopy(prepared.drive().shown(), 0, st.shown, 0, st.shown.length);
+        // 0.42: what the parts wore in loads(), added to what the state has now (the game may have set it since prepare)
+        for (int i = 0; i < st.used.length; i++) {
+            double worn = prepared.worn()[i];
+            if (worn > 0) { st.used[i] = Math.min(1, st.used[i] + worn); }
+        }
         drawFuel(v, st, prepared.burns());
         st.jettisons.addAll(prepared.jettisons());
         for (Vehicle.Installed i : v.installed()) { i.part().after(new PartAfter(prepared, i, st, next)); }

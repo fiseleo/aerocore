@@ -74,6 +74,11 @@
 - 遊戲：`WorldGround`（neoforge）沿射線走過的方塊格（Amanatides–Woo），切每個方塊的碰撞形狀，所以半磚、樓梯、雪層、地毯、多盒形狀照實際；
   每格也試它下面一格（柵欄、牆高 1.5 m）。路面用 `GroundSurfaces`（淋雨時濕）。未載入的區塊不是地面（不會因此載入區塊）。
   形狀與路面每 tick 快取一次（`PartVehicle` 在 `beginTick` 清除）。
+- 0.42 斜面方塊：方塊實作 `vehicle/SlopedGround.groundSlope(state)`（回傳 `{h0, gx, gz}`：最小 x、z 那個角的頂面高度，沿 +x、+z 每格的升高）
+  時，`WorldGround` 用 `api.ground.SlopedCell` 的平面當它的頂面（法線是斜的），碰撞形狀只留給格子邊界上的側面與底面。
+  階梯形的碰撞形狀對輪子不是斜面：射線只打到踏面與立面，法向力一直垂直，每個立面是小路緣；hdfv 0.25 離線量到 1:8 還接近，
+  1:4 從 8 m/s 滑上去剩 2.1 m/s（真斜面 5.3 m/s），階梯做更細反而不穩。`BoxGround.stairs` 因此只適合低坡度的離線測試。
+  測試 `SlopedCellTest`；遊戲中由 hdfv 的坡道 GameTest 確認。
 - `/aerocore ground` 多一行：從腳上 1 m 垂直往下的車輪射線碰到的高度、坡度與路面。
 - 驗證：`GroundTest`（地板、坡、左右路面、方塊的面與內部、階梯高度與最近者）；GameTest `wheelRaysFollowBlockShapesAndSurfaces`
   （石頭 1、半磚 0.5、四層雪 0.375、柵欄 1.5 m、冰／沙／泥土／石頭的路面、方塊側面的法線）。

@@ -44,6 +44,9 @@ public final class Vehicle {
     /** A fuel tank in the vehicle (0.26): its part (installed index), id ("part.tank"), the part's tank and its centre in the vehicle frame. */
     public record Tank(int part, String id, Part.Tank tank, Vec3d centre) {}
 
+    /** A cargo hold in the vehicle (0.42): its part (installed index), id ("part.hold"), the part's hold and its centre in the vehicle frame. */
+    public record Hold(int part, String id, Part.Hold hold, Vec3d centre) {}
+
     /**
      * The vehicle's twisting frame (0.33): its part (installed index), the stations along the vehicle's x, their twist
      * stiffness (FrameTwist) and their shares of the vehicle's mass (each part's at its centre, split between the stations
@@ -62,15 +65,28 @@ public final class Vehicle {
     private final int trains;
     private final List<Freewheel> freewheels;
     private final List<Tank> tanks;
+    private final List<Hold> holds;
     private final List<DesignIssue> issues;
     private final Flex flex;
+    /** Where each part's condition values start (Part.conditions, by installed index), and how many there are in all (0.42). */
+    private final int[] firstCondition;
+    private final int conditions;
 
     private Vehicle(VehicleBlueprint blueprint, List<Installed> installed, MassProperties mass, RigidBodyProperties properties,
                     List<CollisionSphere> collision, List<Vec3d> radiationPoints, List<Vec3d> seats, List<WorldBox> deck,
-                    List<Rotor> rotors, int trains, List<Freewheel> freewheels, List<Tank> tanks, List<DesignIssue> issues, Flex flex) {
+                    List<Rotor> rotors, int trains, List<Freewheel> freewheels, List<Tank> tanks, List<Hold> holds, List<DesignIssue> issues, Flex flex) {
         this.blueprint = blueprint; this.installed = installed; this.mass = mass; this.properties = properties; this.collision = collision;
         this.radiationPoints = radiationPoints; this.seats = seats; this.deck = deck; this.rotors = rotors; this.trains = trains;
-        this.freewheels = freewheels; this.tanks = tanks; this.issues = issues; this.flex = flex;
+        this.freewheels = freewheels; this.tanks = tanks; this.holds = holds; this.issues = issues; this.flex = flex;
+        firstCondition = new int[installed.size()];
+        int n = 0;
+        for (Installed i : installed) {
+            firstCondition[i.index()] = n;
+            List<String> names = i.part().conditions();
+            if (new java.util.HashSet<>(names).size() != names.size()) { throw new IllegalStateException("Part " + i.id() + " names a condition twice: " + names); }
+            n += names.size();
+        }
+        conditions = n;
     }
 
     public VehicleBlueprint blueprint() { return blueprint; }
@@ -87,6 +103,12 @@ public final class Vehicle {
     public List<Freewheel> freewheels() { return freewheels; }
     /** Fuel tanks of all parts, in installed order (0.26). */
     public List<Tank> tanks() { return tanks; }
+    /** Cargo holds of all parts, in installed order (0.42). */
+    public List<Hold> holds() { return holds; }
+    /** Total condition values of all parts (Part.conditions), in installed order (0.42). */
+    public int conditions() { return conditions; }
+    /** Where a part's condition values start (by installed index). */
+    public int firstCondition(int part) { return firstCondition[part]; }
     /** The twisting frame (0.33), or null: the vehicle is one rigid body. */
     public Flex flex() { return flex; }
     /** EXTRAPOLATION issues of the parts and the assembly (INVALID ones stop compile()). */
@@ -220,6 +242,7 @@ public final class Vehicle {
         List<Vec3d> radiation = new ArrayList<>(), seats = new ArrayList<>();
         List<WorldBox> deck = new ArrayList<>();
         List<Tank> tanks = new ArrayList<>();
+        List<Hold> holds = new ArrayList<>();
         List<Rotor> rotors = new ArrayList<>();
         int internals = 0, shown = 0;
         for (int i = 0; i < entries.size(); i++) {
@@ -238,6 +261,7 @@ public final class Vehicle {
             for (Vec3d p : part.seats()) { seats.add(m.apply(p)); }
             for (WorldBox b : part.deck()) { deck.add(transformed(b, m)); }
             for (Part.Tank t : part.tanks()) { tanks.add(new Tank(i, e.id() + "." + t.name(), t, m.apply(t.centre()))); }
+            for (Part.Hold h : part.holds()) { holds.add(new Hold(i, e.id() + "." + h.name(), h, m.apply(h.centre()))); }
             for (Part.Rotor rotor : part.rotors()) {
                 rotors.add(new Rotor(i, r.rotate(rotor.axis()), m.position(), rotor.inertiaKgM2(), rotor.driver(), -1, 1, 1, rotor.momentumKgM2()));
             }
@@ -247,7 +271,7 @@ public final class Vehicle {
         Flex flex = flex(installed, masses, issues);
         DesignException.throwIfInvalid(issues);
         return new Vehicle(blueprint, List.copyOf(installed), total, properties, List.copyOf(collision), List.copyOf(radiation), List.copyOf(seats),
-                List.copyOf(deck), List.copyOf(rotors), trains, List.copyOf(freewheels), List.copyOf(tanks), List.copyOf(issues), flex);
+                List.copyOf(deck), List.copyOf(rotors), trains, List.copyOf(freewheels), List.copyOf(tanks), List.copyOf(holds), List.copyOf(issues), flex);
     }
 
     /** The vehicle's twisting frame (0.33): one part's at most, mounted level and square (no turn), its stations' mass shares. */

@@ -734,6 +734,36 @@ level.addFreshEntity(entity);
   伺服器與其他載具照常運作。`resume()`（指令 `/aerocore vehicle resume`）讓它從靜止重新開始；原因沒排除就會再停一次。
   零件仍應保持有限、有界（例如 `SectionPolar` 從不丟例外）：停用是保護，不是正常結果。
 
+## 0.42 相容性變更
+
+使用者 2026-11-12 要「修理系統」與「儲物箱系統」（hdfv 0.25：四種損壞來源、修理廠與急修、車身貨艙、儲物箱零件、儲物方塊）。只新增：
+沒有狀況項目、沒有貨的載具每一步與 0.41 逐位元相同（`VehicleTest` 1e-9），0.41 的存檔照讀、全新的載具存出來的內容不變。
+詳見 [CONDITION.md](CONDITION.md)。
+
+- `api.vehicle`：
+  - `Part.conditions()`（具名的狀況項目，預設沒有）、`Part.Hold` 與 `Part.holds()`（貨艙，預設沒有）。
+  - `Vehicle.conditions()`、`firstCondition(零件索引)`、`Vehicle.Hold`、`holds()`。一個零件的項目名稱重複時編譯丟 `IllegalStateException`。
+  - `VehicleState`：`used(零件 id, 索引)`、`used(零件 id, 名稱)`（沒有的回 0）、`setUsed`、`addUsed`、`usedValues`、`setUsedValues`、`worstUsed`；
+    `holdKg(索引)`、`cargoKg()`、`setHold(索引, kg)`；`keepHardware(舊狀態)`。`toJson` 多 `condition`、`holds` 兩個鍵（有東西才寫）。
+    `placed`、`restyled`、`refitted`、`separate` 都帶過去。
+  - `PartStep.used(i)`、`wear(i, 增量)`、`conditionCount()`；`PartAfter.used(i)`、`wear(i, 增量)`。
+  - `VehicleDynamics.Prepared` 多一個元件 `worn`（這一步各項目的磨損增量）：自己建 `Prepared` 的程式要補上（AeroCore 內只有 `prepare` 會建）。
+  - 貨艙的貨在 `prepare` 加成點質量與重量（和油箱的油同一段）。
+- 新套件 `api.damage`（純 Java）：`ImpactDamage`、`Wear`、`Corrosion`、`Casualty`。
+- 斜面方塊：`api.ground.SlopedCell`（一格裡頂面是平面的地：`cast` 回傳帶斜面法線的 `Ground.Hit`）與遊戲端介面
+  `vehicle/SlopedGround`（方塊實作 `groundSlope(state)` 回傳 `{h0, gx, gz}`）。`WorldGround` 對這種方塊用平面當頂面，
+  碰撞形狀只留給格子的側面（以及玩家與車身的碰撞）。原因：碰撞形狀只能用階梯代表斜面，輪子的射線只會打到踏面與立面，
+  法向力一直是垂直的、每個立面都是小路緣（hdfv 0.25 的離線測試：1:4 的階梯坡從 8 m/s 滑上去剩 2.1 m/s，真斜面是 5.3 m/s）。
+  沒有實作這個介面的方塊照舊（`wheelRaysFollowBlockShapesAndSurfaces`）。測試 `SlopedCellTest` 4 個。
+- `api.vehicle.part` 的執行時零件可以磨損（預設關閉，載具 Mod 給 `Wearing` 才有）：見 CONDITION.md〈執行時零件〉。
+- 遊戲端 `PartVehicle`：
+  - `used(零件 id, 名稱)`、`worstUsed()`（兩端；客戶端是同步來的整數百分比）、`setUsed`、`addUsed`（伺服器）。
+  - `holdCount()`、`holdKg(索引)`（兩端；客戶端是整數公斤）、`setHold(索引, kg)`（伺服器）。
+  - 事件 `PartVehicle.Hurt`（載具、`DamageSource`、量；`take()`）：`hurt()` 不再一律回 false，有監聽者 `take()` 時回 true。
+    載具實體是防火的，火與岩漿不會觸發它。
+  - DISPLAY 多 `"u"`（狀況的百分比）、`"h"`（貨艙的公斤），都只在不是全 0 時寫。
+  - `physicsFailed` 重建狀態時保留狀況與貨（油箱照舊回到設計的油量）。
+
 ## 0.38 相容性變更
 
 使用者 2026-10-19 要「加入機場塔台」（hdfv 0.20：塔台、跑道燈與標線、ATIS、起降許可、世界生成的機場）。只新增：物理逐位元不變（`VehicleTest` 1e-9），

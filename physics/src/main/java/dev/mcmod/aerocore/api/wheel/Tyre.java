@@ -290,6 +290,13 @@ public final class Tyre {
         return new Curve(fz, mu, slidingRatio(surface), kx, ky);
     }
 
+    /** 0.42: the curve with the peak friction times grip (a worn or flat tyre's share of its grip; stiffnesses as new). */
+    Curve curve(GroundContact.Surface surface, double loadN, double speedMps, double grip) {
+        double fz = Math.max(loadN, 0), mu = peakFriction(surface, fz, speedMps) * grip;
+        double kx = Math.max(slipStiffness(fz), 1e-6), ky = Math.max(corneringStiffness(fz), 1e-6);
+        return new Curve(fz, mu, slidingRatio(surface), kx, ky);
+    }
+
     /**
      * Pacejka's curve sin(C atan(B s)) on normalised slips: peak at n = 1 where C atan(y_p) = pi / 2, so the peak
      * slips are y_p / B with B = K / (C mu F_z). C is solved so that the locked wheel (slip ratio 1) keeps the

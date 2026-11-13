@@ -57,6 +57,31 @@ public interface Part {
 
     /** The part's fuel tanks (0.26; none by default). */
     default List<Tank> tanks() { return List.of(); }
+
+    /**
+     * A cargo hold (0.42): its name, volume (m^3) and centre in the part frame. What the game puts in it
+     * (VehicleState.setHold, kg) rides with the vehicle as a point mass with its weight, as a tank's fuel does; what the
+     * cargo is (items, their masses) is the game's business. A new vehicle's holds are empty.
+     */
+    record Hold(String name, double capacityM3, Vec3d centre) {
+        public Hold {
+            java.util.Objects.requireNonNull(name, "name"); java.util.Objects.requireNonNull(centre, "centre");
+            if (!(capacityM3 > 0) || !Double.isFinite(capacityM3)) { throw new IllegalArgumentException("A hold has a positive volume"); }
+        }
+    }
+
+    /** The part's cargo holds (0.42; none by default). */
+    default List<Hold> holds() { return List.of(); }
+
+    /**
+     * 0.42: the names of the things about this part that wear out or get damaged (an axle's "tyres", "brakes" and
+     * "suspension"; a wing's "structure"). For each the vehicle keeps how much of it is used up, 0 (new) to 1 (failed), in
+     * VehicleState: the part reads it (PartStep.used) to lose performance and adds its own wear (PartStep.wear,
+     * PartAfter.wear); the game adds damage from outside (VehicleState.setUsed: a crash, corrosion) and takes it away
+     * (a repair). Kept by part id and name, so a blueprint may change around it. None by default: the part never wears.
+     * A part must behave to the last bit as before 0.42 while everything is 0.
+     */
+    default List<String> conditions() { return List.of(); }
     /** Heave wave-radiation points in the part frame (WaveRadiation point absorbers); radii are reported each step. */
     default List<Vec3d> radiationPoints() { return List.of(); }
     /** Boxes people can stand on, in the part frame. */
@@ -76,6 +101,13 @@ public interface Part {
      * keeps the stations' twists (rad) as its first internal states, which VehicleDynamics solves (FrameFlex) and writes.
      */
     default FrameTwist frame() { return null; }
+
+    /**
+     * 0.42: the share (0..1) of its frame's twist stiffness this part has left this step: a damaged chassis twists more
+     * easily (FramePart). Asked before the twist is solved, and only of the part the vehicle twists as, when it has
+     * conditions; read the condition with PartStep.used and write nothing. 1: as designed, the solve as before 0.42.
+     */
+    default double frameStiffness(PartStep step) { return 1; }
 
     /**
      * 0.33: whether this part's loads depend on where a twisting frame puts it (wheels). When the vehicle has a frame,

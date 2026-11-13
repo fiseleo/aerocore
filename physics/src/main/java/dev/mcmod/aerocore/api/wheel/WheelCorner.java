@@ -5,6 +5,7 @@ import dev.mcmod.aerocore.api.GroundContact;
 import dev.mcmod.aerocore.api.RigidBodyState;
 import dev.mcmod.aerocore.api.Vec3d;
 import dev.mcmod.aerocore.api.Wrench;
+import dev.mcmod.aerocore.api.damage.Wear;
 import dev.mcmod.aerocore.api.ground.Ground;
 import dev.mcmod.aerocore.api.vehicle.PartAfter;
 import dev.mcmod.aerocore.api.vehicle.PartStep;
@@ -48,6 +49,27 @@ import java.util.Objects;
  * <p>Internal states (STATES, from the owning part's index): compression (m from droop), its rate (m/s), the tyre's
  * deflections u and v (m), the brake's temperature (K). Shown values (SHOWN): spin angle (rad), steer angle (rad, left
  * positive), compression (m). The wheel's own mass rides with the body (no unsprung mass in this version).
+ *
+ * <p>0.42: a part that wears (Wearing; AxlePart.wearing, LegPart.wearing) keeps three conditions in this order: the tyres
+ * (TYRE), the brakes (BRAKE) and the suspension or strut (SUSPENSION), each 0 new .. 1 failed for all its wheels
+ * together. It hands them to loads(), probe() and free() as a Worn and its Wearing to after():
+ * <ul>
+ * <li>Tyres wear by the contact's friction work, -(F_x V_sx + F_y V_sy) dt with the forces and slip velocities of the
+ *     step's start (what the contact turns to heat in steady slip; not the rolling resistance), through Wear.tread with
+ *     Wear.treadSeverity at the sliding speed |V_s|. Worn tread grips less (treadGrip: to WORN_GRIP_DRY on dry ground
+ *     and ice, WORN_GRIP_WET on wet, loose and snowy ground at the end of the tread, in proportion); at 1 the tyre is
+ *     through its carcass and runs flat: FLAT_GRIP of its grip and FLAT_ROLLING times its rolling resistance.</li>
+ * <li>Brakes wear by their friction work (the share of the holding row's torque that is the brake's, times the wheel's
+ *     speed), through Wear.lining times Wear.liningHeat at the rotor's temperature. The torque is unchanged up to
+ *     LINING_KNEE and then falls to LINING_BARE at 1 (liningShare: the backing plate on the disc). A handbrake's torque
+ *     (holdNm) is not reduced.</li>
+ * <li>The suspension does not wear in normal running. Driven into its bump stop harder than the Wearing's rated stop
+ *     force it is damaged by (stop force / rated - 1) dt / stopLifeS (Wear.running); mostly the game damages it
+ *     (VehicleState.setUsed). Its damping falls to DAMPER_BLOWN of the design's at 1 (damperShare); a leg's strut
+ *     (collapses) at 1 also keeps only COLLAPSED_SPRING of its spring and stop force.</li>
+ * </ul>
+ * With no Worn, and with one whose three values are 0, every load is as before 0.42 to the last bit; wear never changes
+ * the loads of the step it is counted in.
  */
 public final class WheelCorner {
     /** Internal states per wheel. */
@@ -75,6 +97,112 @@ public final class WheelCorner {
     /** Air temperature for brake cooling, K (rule; the world's air is not passed in). */
     public static final double AIR_K = 293.15;
 
+    /** 0.42: the condition indices of a part built of wheel corners (Part.conditions: tyres, brakes, suspension or strut). */
+    public static final int TYRE = 0, BRAKE = 1, SUSPENSION = 2;
+    /**
+     * 0.42: the share of its grip a tyre keeps at the end of its tread: on dry ground and ice (rule: the compound has
+     * hardened and the blocks' edges are gone; smooth tread loses little there), and on wet, loose and snowy ground,
+     * where the grooves and blocks do the work (rule: worn tyres' wet braking distances are about half as long again
+     * at the legal tread depth, 1 / 0.6 at none).
+     */
+    public static final double WORN_GRIP_DRY = 0.9, WORN_GRIP_WET = 0.6;
+    /** 0.42: a flat tyre's share of its grip, and its rolling resistance over an inflated one's (rules: it runs on its sidewalls). */
+    public static final double FLAT_GRIP = 0.4, FLAT_ROLLING = 5;
+    /** 0.42: how used a lining is when the brake's torque starts to fall, and the share left at 1 (rule: steel on iron, mu about 0.12 of 0.40). */
+    public static final double LINING_KNEE = 0.8, LINING_BARE = 0.3;
+    /** 0.42: the share of its damping a blown damper keeps (rule: seal and rod friction), and of its spring force a collapsed strut. */
+    public static final double DAMPER_BLOWN = 0.2, COLLAPSED_SPRING = 0.1;
+
+    /**
+     * 0.42: what wears a part's wheels (the caller's numbers; all its wheels together):
+     * the usable tread rubber (m^3: treadVolumeM3 times the tyres), its abradability (m^3 per J of sliding friction;
+     * Wear.TREAD_M3_PER_J) and the sliding speed at which a J takes twice the rubber (m/s; Wear.treadSeverity);
+     * the usable brake lining (m^3), its specific wear rate (m^3/J; Wear.BRAKE_LINING_M3_PER_J), the rotor temperature up
+     * to which that holds (K) and the step that doubles it beyond (K; Wear.liningHeat);
+     * the bump stop force a wheel's suspension is made for (N per wheel; infinite: it never damages itself) and the
+     * seconds at twice that force that use it up.
+     */
+    public record Wearing(double treadVolumeM3, double abradabilityM3PerJ, double slideReferenceMps, double liningVolumeM3, double liningWearM3PerJ,
+                          double liningKneeK, double liningDoublingK, double stopRatedN, double stopLifeS) {
+        /** A lining wears at its cold rate up to here (250 C, where Brake.liningFriction starts to fade), K. */
+        public static final double LINING_KNEE_K = 523.15;
+        /** Rule: the wear rate doubles every 60 K beyond the knee (ten times the cold rate at 450 C, the order of dynamometer wear-temperature curves). */
+        public static final double LINING_DOUBLING_K = 60;
+        /** Wear.treadSeverity's reference (its 3 m/s: a wheel locked at 30 m/s wears a hundred times gentle slip's rate), m/s. */
+        public static final double SLIDE_REFERENCE_MPS = 3;
+        /** Rule: half a second at twice the rated stop force uses a suspension up (a 50 ms bottoming at twice the rating costs a tenth). */
+        public static final double STOP_LIFE_S = 0.5;
+
+        public Wearing {
+            if (!(treadVolumeM3 > 0) || !(liningVolumeM3 > 0)) { throw new IllegalArgumentException("Tread and lining volumes must be positive"); }
+            if (!(abradabilityM3PerJ >= 0) || !Double.isFinite(abradabilityM3PerJ) || !(liningWearM3PerJ >= 0) || !Double.isFinite(liningWearM3PerJ)) {
+                throw new IllegalArgumentException("Wear rates must be finite and not negative");
+            }
+            if (!(slideReferenceMps > 0) || !(liningDoublingK > 0) || Double.isNaN(liningKneeK)) { throw new IllegalArgumentException("Reference speed and doubling step must be positive"); }
+            if (!(stopRatedN > 0) || !(stopLifeS > 0)) { throw new IllegalArgumentException("Rated stop force and its life must be positive"); }
+        }
+
+        /** Typical rates (Wear's constants and the rules above) for the wheels' tread and lining volumes (m^3) and a wheel's rated stop force (N). */
+        public static Wearing typical(double treadVolumeM3, double liningVolumeM3, double stopRatedN) {
+            return new Wearing(treadVolumeM3, Wear.TREAD_M3_PER_J, SLIDE_REFERENCE_MPS, liningVolumeM3, Wear.BRAKE_LINING_M3_PER_J, LINING_KNEE_K, LINING_DOUBLING_K,
+                    stopRatedN, STOP_LIFE_S);
+        }
+
+        /**
+         * One tyre's usable tread rubber (m^3): tread width x circumference x usable depth x the land ratio (the share of
+         * the tread that is rubber, not groove: about 0.7 for a road tyre, 0.6 off-road, 1 for a slick). A car tyre has
+         * about 8 mm new and 1.6 mm at the legal limit: 6.4 mm usable.
+         */
+        public static double treadVolumeM3(double treadWidthM, double radiusM, double usableDepthM, double landRatio) {
+            return Math.max(treadWidthM, 0) * 2 * Math.PI * Math.max(radiusM, 0) * Math.max(usableDepthM, 0) * Math.clamp(landRatio, 0.0, 1.0);
+        }
+
+        /** The same for a tyre: its footprint's width (Rhyne's (1.03 - 0.4 aspect ratio) x section width) and outside radius. */
+        public static double treadVolumeM3(Tyre tyre, double usableDepthM, double landRatio) {
+            return treadVolumeM3((1.03 - 0.4 * tyre.spec().aspectRatio()) * tyre.spec().sectionWidthM(), tyre.radiusM(), usableDepthM, landRatio);
+        }
+
+        /** Linings' usable volume (m^3): each pad's or shoe's area (m^2) x usable thickness (m) x how many. */
+        public static double liningVolumeM3(double areaM2, double usableThicknessM, int linings) {
+            return Math.max(areaM2, 0) * Math.max(usableThicknessM, 0) * Math.max(linings, 0);
+        }
+    }
+
+    /**
+     * 0.42: a wearing part's wheels in a step: its Wearing and how used the tyres, brakes and suspension are (0 new .. 1
+     * failed, PartStep.used), and whether the suspension is a leg's strut that collapses at 1.
+     */
+    public record Worn(Wearing wearing, double tyre, double brake, double suspension, boolean collapses) {
+        public Worn {
+            Objects.requireNonNull(wearing, "wearing");
+            tyre = unit(tyre); brake = unit(brake); suspension = unit(suspension);
+        }
+        private static double unit(double u) { return u > 0 ? Math.min(u, 1) : 0; }
+        /** The damper's and the spring's shares (1: untouched). */
+        double damping() { return damperShare(suspension); }
+        double spring() { return collapses && suspension >= 1 ? COLLAPSED_SPRING : 1; }
+    }
+
+    /** 0.42: the share of its peak friction a tyre keeps on a kind of ground with so much of its tread used (1 at 0; FLAT_GRIP at 1). */
+    public static double treadGrip(Tyre.Ground ground, double used) {
+        if (!(used > 0)) { return 1; }
+        if (used >= 1) { return FLAT_GRIP; }
+        double worn = ground == Tyre.Ground.DRY || ground == Tyre.Ground.ICE ? WORN_GRIP_DRY : WORN_GRIP_WET;
+        return 1 - (1 - worn) * used;
+    }
+
+    /** 0.42: the share of its torque a brake keeps with so much of its lining used. */
+    public static double liningShare(double used) {
+        if (!(used > LINING_KNEE)) { return 1; }
+        return 1 - (1 - LINING_BARE) * (Math.min(used, 1) - LINING_KNEE) / (1 - LINING_KNEE);
+    }
+
+    /** 0.42: the share of its damping a suspension keeps with so much of it used. */
+    public static double damperShare(double used) {
+        if (!(used > 0)) { return 1; }
+        return 1 - (1 - DAMPER_BLOWN) * Math.min(used, 1);
+    }
+
     /**
      * A wheel corner's design: the hub at full droop (part frame), the side (+1 starboard, -1 port, 0 on the
      * centreline), the axle's track (m; 0 for a single wheel: no jacking), tyre, the inertia of rim, hub and brake rotor
@@ -88,10 +216,21 @@ public final class WheelCorner {
         }
     }
 
-    /** What loads() found, for after() (0.33: and how fast a twisting frame lifted the wheel's attachment, m/s). */
+    /**
+     * What loads() found, for after() (0.33: and how fast a twisting frame lifted the wheel's attachment, m/s; 0.42: for a
+     * wearing part the contact's friction power (W) and sliding speed (m/s) and the bump stop's force (N), else 0).
+     */
     public record Carry(boolean contact, Vec3d hubPart, Vec3d up, Suspension.Step suspension, Vec3d contactPart, Vec3d heading, Vec3d lateral,
                         Vec3d groundVelocity, double loadN, double rollingRadiusM, int row, double brakeShare, double steerRad, double speedMps,
-                        double flexRateMps) {}
+                        double flexRateMps, double slipW, double slideMps, double stopN) {
+        /** As before 0.42 (nothing to wear by). */
+        public Carry(boolean contact, Vec3d hubPart, Vec3d up, Suspension.Step suspension, Vec3d contactPart, Vec3d heading, Vec3d lateral,
+                     Vec3d groundVelocity, double loadN, double rollingRadiusM, int row, double brakeShare, double steerRad, double speedMps,
+                     double flexRateMps) {
+            this(contact, hubPart, up, suspension, contactPart, heading, lateral, groundVelocity, loadN, rollingRadiusM, row, brakeShare, steerRad, speedMps,
+                    flexRateMps, 0, 0, 0);
+        }
+    }
 
     /** The ground under the wheel: the deciding ray's hit (null: none), how far it reaches into the travel (m) and its angle off straight down. */
     public record Found(Ground.Hit hit, double best, double angle) {}
@@ -146,7 +285,10 @@ public final class WheelCorner {
     public Probe probe(PartStep step, int state, double steerRad, double extraN) { return probe(step, state, steerRad, extraN, 1); }
 
     /** 0.33: the probe with an air spring's air scaled (Suspension.Levelling). */
-    public Probe probe(PartStep step, int state, double steerRad, double extraN, double airScale) {
+    public Probe probe(PartStep step, int state, double steerRad, double extraN, double airScale) { return probe(step, state, steerRad, extraN, airScale, null); }
+
+    /** 0.42: the probe of a wearing part's wheel (worn null: as above). */
+    public Probe probe(PartStep step, int state, double steerRad, double extraN, double airScale, Worn worn) {
         Suspension sus = spec.suspension();
         double dt = step.dt(), c = step.internal(state);
         Found f = find(step, c, steerRad);
@@ -158,7 +300,9 @@ public final class WheelCorner {
         }
         Vec3d hubVelocity = step.state().velocity().add(step.angularVelocity().cross(step.offset(hubPart))).subtract(f.hit().velocity());
         double closing = -hubVelocity.dot(step.axis(Vec3d.Y));
-        Suspension.Step ss = sus.step(spec.tyre(), best, closing, c, step.internal(state + 1), extraN, dt, airScale);
+        Suspension.Step ss = worn != null && (worn.damping() != 1 || worn.spring() != 1)
+                ? sus.step(spec.tyre(), best, closing, c, step.internal(state + 1), extraN, dt, airScale, worn.damping(), worn.spring())
+                : sus.step(spec.tyre(), best, closing, c, step.internal(state + 1), extraN, dt, airScale);
         double force = Math.max(ss.forceN() + ss.slopeNsPerM() * closing, 0), stiffness = ss.toppedOut() || force == 0 ? 0 : ss.slopeNsPerM() / dt;
         step.corner(hubPart, force, stiffness);
         return new Probe(f, force, stiffness);
@@ -222,6 +366,16 @@ public final class WheelCorner {
      */
     public Carry loads(PartStep step, int rotor, int state, int shown, double steerRad, double brakeDemand, BrakeControl control, int memory, double holdNm,
                        double extraN, String key, Probe probe, double airScale, double mountLiftM) {
+        return loads(step, rotor, state, shown, steerRad, brakeDemand, control, memory, holdNm, extraN, key, probe, airScale, mountLiftM, null);
+    }
+
+    /**
+     * 0.42: as loads above for a wearing part's wheel: worn tyres grip less, a worn-out lining brakes less, a damaged
+     * suspension damps less (see the class description), and the Carry tells after() what there is to wear by. worn
+     * null: as above, bit for bit; so are the loads while its three values are 0.
+     */
+    public Carry loads(PartStep step, int rotor, int state, int shown, double steerRad, double brakeDemand, BrakeControl control, int memory, double holdNm,
+                       double extraN, String key, Probe probe, double airScale, double mountLiftM, Worn worn) {
         Suspension sus = spec.suspension();
         Tyre tyre = spec.tyre();
         double dt = step.dt(), c = step.internal(state), u = step.internal(state + 2), v = step.internal(state + 3), temperature = step.internal(state + 4);
@@ -243,12 +397,14 @@ public final class WheelCorner {
         double flexRate = 0;
         if (step.flexing()) { best -= step.flexLift(hubPart); flexRate = step.flexRate(hubPart); }
         if (mountLiftM != 0) { best -= mountLiftM; }
-        if (hit == null || best <= 0) { return free(step, rotor, state, steerRad, brakeDemand, control, memory, holdNm, extraN, key, Math.min(best, 0), airScale); }
+        if (hit == null || best <= 0) { return free(step, rotor, state, steerRad, brakeDemand, control, memory, holdNm, extraN, key, Math.min(best, 0), airScale, worn); }
         Vec3d n = hit.normal(), ground0 = hit.velocity();
         Vec3d hubVelocity = s.velocity().add(omega.cross(hubOffset)).subtract(ground0);
         double closing = -hubVelocity.dot(up);
         if (flexRate != 0) { closing -= flexRate; }
-        Suspension.Step ss = airScale == 1 ? sus.step(tyre, best, closing, c, step.internal(state + 1), extraN, dt)
+        Suspension.Step ss = worn != null && (worn.damping() != 1 || worn.spring() != 1)
+                ? sus.step(tyre, best, closing, c, step.internal(state + 1), extraN, dt, airScale, worn.damping(), worn.spring())
+                : airScale == 1 ? sus.step(tyre, best, closing, c, step.internal(state + 1), extraN, dt)
                 : sus.step(tyre, best, closing, c, step.internal(state + 1), extraN, dt, airScale);
         // the suspension balances the ground's push along its travel; the links take the rest, so the ground's normal
         // force is the suspension's over the cosine between travel and normal, and it is that the body gets
@@ -270,7 +426,10 @@ public final class WheelCorner {
             camber = sus.geometry().solid() ? sus.staticCamberRad() : sus.camberToBody(c) - Math.asin(Math.clamp(out.dot(n), -1, 1));
         }
         GroundContact.Surface surface = hit.surface();
-        TyreContact.Step t = TyreContact.step(tyre, surface, load, vx, vy, spin * re, -spec.side() * camber, u, v, dt);
+        // 0.42: worn tread's share of the grip on this ground (1 while new: the contact as before)
+        double grip = worn != null && worn.tyre() > 0 ? treadGrip(Tyre.ground(surface), worn.tyre()) : 1;
+        TyreContact.Step t = grip == 1 ? TyreContact.step(tyre, surface, load, vx, vy, spin * re, -spec.side() * camber, u, v, dt)
+                : TyreContact.step(tyre, surface, load, vx, vy, spin * re, -spec.side() * camber, u, v, dt, grip);
         double jack = 0;
         if (spec.trackM() > 0 && spec.side() != 0) {
             double outward = t.lateralN() * lateral.dot(step.axis(Vec3d.Z.scale(spec.side())));
@@ -287,7 +446,8 @@ public final class WheelCorner {
             double jacked = Math.max(load + jack, 0);
             jack = jacked - load;
             load = jacked;
-            t = TyreContact.step(tyre, surface, load, vx, vy, spin * re, -spec.side() * camber, u, v, dt);
+            t = grip == 1 ? TyreContact.step(tyre, surface, load, vx, vy, spin * re, -spec.side() * camber, u, v, dt)
+                    : TyreContact.step(tyre, surface, load, vx, vy, spin * re, -spec.side() * camber, u, v, dt, grip);
         }
         // normal: the suspension's force through the contact patch along the ground's normal, implicit in the closing rate
         step.force(new AppliedForce(AppliedForce.Kind.CONTACT, contactOffset, n.scale(ss.forceN() / cosine + jack)));
@@ -305,9 +465,19 @@ public final class WheelCorner {
         if (t.aligningNm() != 0) { step.load(new Wrench(Vec3d.ZERO, n.scale(t.aligningNm())), AppliedForce.Kind.CONTACT); }
         // brake, handbrake and rolling resistance hold the rotor as one friction
         double brake = spec.brake() == null ? 0 : spec.brake().torqueNm(controlled(step, control, memory, brakeDemand, t.slipX(), Math.abs(vx)), temperature);
+        if (worn != null && worn.brake() > LINING_KNEE) { brake *= liningShare(worn.brake()); }
         double hold = brake + Math.max(holdNm, 0);
         double resist = t.rollingResistanceN() * Math.max(r0 - Math.max(ss.tyreDeflection(), 0), 0.5 * r0);
+        if (worn != null && worn.tyre() >= 1) { resist *= FLAT_ROLLING; }
         int row = step.hold(rotor, hold + resist);
+        // 0.42: what the contact turns to heat (force against slip velocity) and how fast it slides, and the stop's force
+        double slipW = 0, slide = 0, stopN = 0;
+        if (worn != null) {
+            double sx = vx - spin * re;
+            slipW = Math.max(-(t.longitudinalN() * sx + t.lateralN() * vy), 0);
+            slide = Math.hypot(sx, vy);
+            stopN = worn.spring() * sus.stopForce(c, airScale);
+        }
         step.diagnostic(key + "LoadN", load);
         step.diagnostic(key + "SlipRatio", t.slipX());
         step.diagnostic(key + "SlipAngleDeg", Math.toDegrees(Math.atan(-t.slipY())));
@@ -316,7 +486,7 @@ public final class WheelCorner {
         step.diagnostic(key + "ForceN", t.longitudinalN());
         step.diagnostic(key + "SideForceN", t.lateralN());
         return new Carry(true, hubPart, up, ss, step.partPoint(hit.point()), hg, lateral, ground0, load, re, row, hold + resist > 0 ? hold / (hold + resist) : 0,
-                steerRad, Math.abs(vx), flexRate);
+                steerRad, Math.abs(vx), flexRate, slipW, slide, stopN);
     }
 
     /**
@@ -328,19 +498,30 @@ public final class WheelCorner {
                       double extraN, String key) {
         step.show(shown + 1, PartStep.stepped(step.shown(shown + 1), steerRad, SHOWN_STEER_RAD));
         step.show(shown + 2, PartStep.stepped(step.shown(shown + 2), step.internal(state), SHOWN_COMPRESSION_M));
-        return free(step, rotor, state, steerRad, brakeDemand, control, memory, holdNm, extraN, key, Double.NEGATIVE_INFINITY, 1);
+        return free(step, rotor, state, steerRad, brakeDemand, control, memory, holdNm, extraN, key, Double.NEGATIVE_INFINITY, 1, null);
+    }
+
+    /** 0.42: as free above for a wearing part's wheel (worn null: as above). */
+    public Carry free(PartStep step, int rotor, int state, int shown, double steerRad, double brakeDemand, BrakeControl control, int memory, double holdNm,
+                      double extraN, String key, Worn worn) {
+        step.show(shown + 1, PartStep.stepped(step.shown(shown + 1), steerRad, SHOWN_STEER_RAD));
+        step.show(shown + 2, PartStep.stepped(step.shown(shown + 2), step.internal(state), SHOWN_COMPRESSION_M));
+        return free(step, rotor, state, steerRad, brakeDemand, control, memory, holdNm, extraN, key, Double.NEGATIVE_INFINITY, 1, worn);
     }
 
     private Carry free(PartStep step, int rotor, int state, double steerRad, double brakeDemand, BrakeControl control, int memory, double holdNm,
-                       double extraN, String key, double lift, double airScale) {
+                       double extraN, String key, double lift, double airScale, Worn worn) {
         Suspension sus = spec.suspension();
         double dt = step.dt(), c = step.internal(state), temperature = step.internal(state + 4);
         double yaw = sus.kinematics() == null ? steerRad + spec.side() * spec.toeRad() : steerRad + spec.side() * (spec.toeRad() + bumpToe(c));
         Vec3d up = step.axis(Vec3d.Y), heading = step.axis(new Vec3d(Math.cos(yaw), 0, -Math.sin(yaw)));
         RigidBodyState s = step.state();
         double brake = spec.brake() == null ? 0 : spec.brake().torqueNm(controlled(step, control, memory, brakeDemand, 0, s.velocity().length()), temperature);
+        if (worn != null && worn.brake() > LINING_KNEE) { brake *= liningShare(worn.brake()); }
         double hold = brake + Math.max(holdNm, 0);
-        Suspension.Step ss = airScale == 1 ? sus.step(spec.tyre(), lift, 0, c, extraN, dt) : sus.step(spec.tyre(), lift, 0, c, 0, extraN, dt, airScale);
+        Suspension.Step ss = worn != null && (worn.damping() != 1 || worn.spring() != 1)
+                ? sus.step(spec.tyre(), lift, 0, c, 0, extraN, dt, airScale, worn.damping(), worn.spring())
+                : airScale == 1 ? sus.step(spec.tyre(), lift, 0, c, extraN, dt) : sus.step(spec.tyre(), lift, 0, c, 0, extraN, dt, airScale);
         int row = step.hold(rotor, hold);
         step.diagnostic(key + "LoadN", 0);
         return new Carry(false, hub(c), up, ss, Vec3d.ZERO, heading, Vec3d.ZERO, Vec3d.ZERO, 0, spec.tyre().radiusM(), row, 1, steerRad, s.velocity().length(), 0);
@@ -361,11 +542,22 @@ public final class WheelCorner {
         return ground.cast(step.point(droopHub.add(Vec3d.Y.scale(top)).add(headingPart.scale(ahead))), down, top + r0);
     }
 
+    /** 0.42: wears a condition by a share of its life, whatever the numbers were: nothing for one that is not a positive number, a whole life at most. */
+    private static void wear(PartAfter a, int condition, double amount) {
+        if (amount > 0) { a.wear(condition, Math.min(amount, 1)); }
+    }
+
     /** After the step: compression, deflections, brake temperature and the wheel's spin angle. */
     public void after(PartAfter a, Carry k, int rotor, int state, int shown) { after(a, k, rotor, state, shown, -1); }
 
     /** As after, also setting the wheel's EXTRA shown values from an index (0.30; negative: none). */
-    public void after(PartAfter a, Carry k, int rotor, int state, int shown, int extra) {
+    public void after(PartAfter a, Carry k, int rotor, int state, int shown, int extra) { after(a, k, rotor, state, shown, extra, null); }
+
+    /**
+     * 0.42: as after, also wearing the part's conditions TYRE, BRAKE and SUSPENSION by what this wheel's step carried
+     * (see the class description; wearing null: nothing wears). The states and shown values move on exactly as above.
+     */
+    public void after(PartAfter a, Carry k, int rotor, int state, int shown, int extra, Wearing wearing) {
         double dt = a.dt(), spin = a.rotorSpeed(rotor), c = a.internal(state);
         double closing = k.contact() ? -a.velocity(k.hubPart()).subtract(k.groundVelocity()).dot(k.up()) : 0;
         if (k.flexRateMps() != 0) { closing -= k.flexRateMps(); }
@@ -384,7 +576,20 @@ public final class WheelCorner {
         }
         if (spec.brake() != null) {
             double heat = k.brakeShare() * Math.abs(a.rowTorque(k.row()) * spin);
+            // 0.42: the lining wears by the friction work, faster hot (at the temperature the step began with)
+            if (wearing != null && heat > 0 && heat < Double.POSITIVE_INFINITY) {
+                wear(a, BRAKE, Wear.lining(heat * dt, wearing.liningWearM3PerJ(), wearing.liningVolumeM3())
+                        * Wear.liningHeat(a.internal(state + 4), wearing.liningKneeK(), wearing.liningDoublingK()));
+            }
             a.setInternal(state + 4, spec.brake().temperatureK(a.internal(state + 4), heat, a.state().velocity().length(), AIR_K, dt));
+        }
+        if (wearing != null) {
+            if (k.slipW() > 0 && k.slipW() < Double.POSITIVE_INFINITY && k.slideMps() < Double.POSITIVE_INFINITY) {
+                wear(a, TYRE, Wear.tread(k.slipW() * dt, wearing.abradabilityM3PerJ(), Wear.treadSeverity(k.slideMps(), wearing.slideReferenceMps()), wearing.treadVolumeM3()));
+            }
+            if (k.stopN() > wearing.stopRatedN() && k.stopN() < Double.POSITIVE_INFINITY) {
+                wear(a, SUSPENSION, Wear.running(dt, wearing.stopLifeS(), 1, 1, k.stopN() / wearing.stopRatedN() - 1, 1));
+            }
         }
         // 0.30: the angle stands still below a creep (a parked wheel sends nothing); the compression to a millimetre
         if (Math.abs(spin) >= SHOWN_CREEP_RAD_S) { a.show(shown, Math.IEEEremainder(a.shown(shown) + spin * dt, 2 * Math.PI)); }

@@ -2,13 +2,16 @@ package dev.mcmod.aerocore.api.vehicle.part;
 
 import dev.mcmod.aerocore.api.CollisionSphere;
 import dev.mcmod.aerocore.api.Vec3d;
+import dev.mcmod.aerocore.api.damage.Wear;
 import dev.mcmod.aerocore.api.drive.TorqueConverter;
 import dev.mcmod.aerocore.api.vehicle.DesignIssue;
 import dev.mcmod.aerocore.api.vehicle.MassProperties;
 import dev.mcmod.aerocore.api.vehicle.Part;
+import dev.mcmod.aerocore.api.vehicle.PartAfter;
 import dev.mcmod.aerocore.api.vehicle.PartDesign;
 import dev.mcmod.aerocore.api.vehicle.PartStep;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -42,6 +45,22 @@ import java.util.Objects;
  * </ul>
  * Gears pass power with the box's efficiency. Shown values: the engaged gear (CVT: its ratio), the state (0 steady,
  * 1 synchronising or shifting, 2 grinding), the ratio in use.
+ *
+ * <p>0.42: a box given a Wearing (wearing) has two conditions, in this order: GEARS (0) and CLUTCH (1); a part wrapping
+ * it lists them first among its own and passes after() on, as it does the internal states.
+ * <ul>
+ * <li>CLUTCH is the friction elements together: a manual's clutch, an automatic's shift elements and lock-up, a
+ *     dual-clutch box's two clutches, a CVT's lock-up and its belt (synchronisers are not counted). They wear by their
+ *     slip work, |row torque x slip speed| dt at the step's end (Wear.lining over the Wearing's facing volume), and
+ *     their capacity falls to clutchShare: 1 - (1 - WORN_CLUTCH) used^2 (a diaphragm spring holds its clamp load over
+ *     most of a facing's life and loses it as the facing thins), 0.15 at 1: it slips under load.</li>
+ * <li>GEARS (teeth and bearings) wear by Wear.running: the Wearing's life at its rated input-side torque and speed,
+ *     with each gear row's torque and its input-side shaft's speed. The gears' efficiency falls to gearEfficiency:
+ *     1 - (1 - WORN_EFFICIENCY) used of the design's, and at 1 the box drives no more: no gear, element, synchroniser or
+ *     belt row is made (neutral whatever the lever says; converter, clutches and the park pawl still act).</li>
+ * </ul>
+ * Diagnostics then tell them ("gearsUsed", "clutchUsed"). A box without a Wearing has no conditions and is as before 0.42;
+ * so are the rows of one whose conditions are 0.
  */
 public final class TransmissionPart implements Part {
     /** Kinds of gearbox. */
@@ -78,17 +97,71 @@ public final class TransmissionPart implements Part {
     /** Churning drag on the inner shafts, N m s/rad (rule; lets a declutched primary shaft spin down). */
     static final double CHURN = 0.002;
 
+    /** 0.42: the names of a wearing box's conditions (indices 0 and 1). */
+    public static final String GEARS = "gears", CLUTCH = "clutch";
+    private static final List<String> CONDITIONS = List.of(GEARS, CLUTCH);
+    /** 0.42: where a wearing box keeps them among its conditions (for PartStep.used, VehicleState.setUsed). */
+    public static final int GEARS_INDEX = 0, CLUTCH_INDEX = 1;
+    /** 0.42: the share of their efficiency worn-out gears keep (rule: pitted flanks and loose bearings), and of its capacity a worn-out clutch. */
+    public static final double WORN_EFFICIENCY = 0.9, WORN_CLUTCH = 0.15;
+
+    /**
+     * 0.42: what wears a gearbox (the caller's numbers): the gears' life (s) at a rated input-side torque (N m) and
+     * speed (rad/s) with Wear.running's exponents on speed and load, and the friction elements' usable facing volume
+     * (m^3) and specific wear rate (m^3/J; Wear.CLUTCH_FACING_M3_PER_J).
+     */
+    public record Wearing(double gearLifeS, double ratedTorqueNm, double ratedSpeedRadPerS, double speedExponent, double loadExponent,
+                          double clutchVolumeM3, double clutchWearM3PerJ) {
+        public Wearing {
+            if (!(gearLifeS > 0) || !(ratedTorqueNm > 0) || !(ratedSpeedRadPerS > 0)) { throw new IllegalArgumentException("Gear life and rated torque and speed must be positive"); }
+            if (!(speedExponent >= 0) || !Double.isFinite(speedExponent) || !(loadExponent >= 0) || !Double.isFinite(loadExponent)) {
+                throw new IllegalArgumentException("Exponents must be finite and not negative");
+            }
+            if (!(clutchVolumeM3 > 0) || !(clutchWearM3PerJ >= 0) || !Double.isFinite(clutchWearM3PerJ)) { throw new IllegalArgumentException("Facing volume positive, wear rate not negative"); }
+        }
+
+        /**
+         * Typical exponents and rate: a life in revolutions (speed exponent 1) falling with the cube of the load (ISO 281's
+         * ball bearings, as Wear.running says; teeth pit at least as steeply), and an organic facing.
+         */
+        public static Wearing typical(double gearLifeS, double ratedTorqueNm, double ratedSpeedRadPerS, double clutchVolumeM3) {
+            return new Wearing(gearLifeS, ratedTorqueNm, ratedSpeedRadPerS, 1, 3, clutchVolumeM3, Wear.CLUTCH_FACING_M3_PER_J);
+        }
+    }
+
+    /** 0.42: the share of the design's efficiency gears keep with so much of them used. */
+    public static double gearEfficiency(double used) { return used > 0 ? 1 - (1 - WORN_EFFICIENCY) * Math.min(used, 1) : 1; }
+    /** 0.42: the share of its capacity a friction element keeps with so much of its facing used. */
+    public static double clutchShare(double used) {
+        if (!(used > 0)) { return 1; }
+        double u = Math.min(used, 1);
+        return 1 - (1 - WORN_CLUTCH) * u * u;
+    }
+
     private final PartDesign design;
     private final Spec spec;
     private final MassProperties mass;
     private final List<DesignIssue> issues;
+    private final Wearing wearing;
+    /** The hardware of a box that does not wear, the same every step. */
+    private final Run plain;
 
-    public TransmissionPart(PartDesign design, Spec spec, MassProperties mass, List<DesignIssue> issues) {
+    public TransmissionPart(PartDesign design, Spec spec, MassProperties mass, List<DesignIssue> issues) { this(design, spec, mass, issues, null); }
+
+    private TransmissionPart(PartDesign design, Spec spec, MassProperties mass, List<DesignIssue> issues, Wearing wearing) {
         this.design = Objects.requireNonNull(design, "design");
         this.spec = Objects.requireNonNull(spec, "spec");
         this.mass = Objects.requireNonNull(mass, "mass");
         this.issues = List.copyOf(issues);
+        this.wearing = wearing;
+        this.plain = new Run(spec.efficiency(), 1, true, false);
     }
+
+    /** 0.42: this box wearing by these numbers, with the conditions GEARS and CLUTCH; null: one that does not wear. A copy. */
+    public TransmissionPart wearing(Wearing wearing) { return new TransmissionPart(design, spec, mass, issues, wearing); }
+    /** 0.42: what wears this box, or null. */
+    public Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
 
     public Spec spec() { return spec; }
     @Override public PartDesign design() { return design; }
@@ -175,18 +248,75 @@ public final class TransmissionPart implements Part {
         return (int) Math.round(Math.clamp(Double.isFinite(g) ? g : 0, lowest, gears()));
     }
 
+    /** 0.42: a row to wear by: its handle, the rotors a and b it joins and the ratio between them (a = ratio x b when it holds). */
+    private record Worked(int row, int a, int b, double ratio) {}
+
+    /**
+     * A step's hardware: the gears' efficiency, the friction elements' share of their capacity and whether the gears
+     * still drive (the design's, 1 and true unless worn), and for a wearing box the gear and friction rows it made.
+     */
+    private static final class Run {
+        final double efficiency, clutch;
+        final boolean drives;
+        final List<Worked> gears, frictions;
+
+        Run(double efficiency, double clutch, boolean drives, boolean logs) {
+            this.efficiency = efficiency; this.clutch = clutch; this.drives = drives;
+            gears = logs ? new ArrayList<>(3) : null; frictions = logs ? new ArrayList<>(3) : null;
+        }
+        /** A friction element's capacity (N m) as worn. */
+        double capacity(double nm) { return clutch == 1 ? nm : nm * clutch; }
+        void gear(int row, int a, int b, double ratio) { if (gears != null) { gears.add(new Worked(row, a, b, ratio)); } }
+        void friction(int row, int a, int b, double ratio) { if (frictions != null) { frictions.add(new Worked(row, a, b, ratio)); } }
+    }
+
     @Override public void loads(PartStep step) {
+        Run run;
+        if (wearing == null) {
+            run = plain;
+        } else {
+            double gears = step.used(GEARS_INDEX), clutch = step.used(CLUTCH_INDEX);
+            run = new Run(gears > 0 ? spec.efficiency() * gearEfficiency(gears) : spec.efficiency(), clutchShare(clutch), !(gears >= 1), true);
+            step.diagnostic("gearsUsed", gears);
+            step.diagnostic("clutchUsed", clutch);
+            step.carry(run);
+        }
         switch (spec.kind()) {
-            case MANUAL -> manual(step);
-            case AUTOMATIC -> automatic(step);
-            case DUAL_CLUTCH -> dualClutch(step);
-            case CVT -> cvt(step);
+            case MANUAL -> manual(step, run);
+            case AUTOMATIC -> automatic(step, run);
+            case DUAL_CLUTCH -> dualClutch(step, run);
+            case CVT -> cvt(step, run);
+        }
+    }
+
+    /** 0.42: gears wear by the torque and speed they ran at, friction elements by their slip work (see the class description). */
+    @Override public void after(PartAfter a) {
+        if (wearing == null || !(a.carried() instanceof Run run) || run.gears == null) { return; }
+        double dt = a.dt(), running = 0, slipJ = 0;
+        for (Worked g : run.gears) {
+            double torque = Math.abs(a.rowTorque(g.row())), speed = Math.abs(a.rotorSpeed(g.a()));
+            if (torque < Double.POSITIVE_INFINITY && speed < Double.POSITIVE_INFINITY) {
+                running += Wear.running(dt, wearing.gearLifeS(), speed / wearing.ratedSpeedRadPerS(), wearing.speedExponent(), torque / wearing.ratedTorqueNm(),
+                        wearing.loadExponent());
+            }
+        }
+        for (Worked f : run.frictions) {
+            double work = Math.abs(a.rowTorque(f.row()) * (a.rotorSpeed(f.a()) - f.ratio() * a.rotorSpeed(f.b()))) * dt;
+            if (work < Double.POSITIVE_INFINITY) { slipJ += work; }
+        }
+        // (a whole life at most in a step, whatever the numbers: wear must be finite)
+        if (running > 0) { a.wear(GEARS_INDEX, Math.min(running, 1)); }
+        if (slipJ > 0) {
+            double worn = Wear.lining(slipJ, wearing.clutchWearM3PerJ(), wearing.clutchVolumeM3());
+            if (worn > 0) { a.wear(CLUTCH_INDEX, Math.min(worn, 1)); }
         }
     }
 
     /** A gear between two rotors at a ratio, passing power with the box's efficiency, able to carry cap (N m on a). */
-    private void gearRow(PartStep step, int a, int b, double ratio, double cap) {
-        step.row(new int[]{a, b}, new double[]{1, -ratio}, 0, -cap, cap, spec.efficiency());
+    private int gearRow(PartStep step, Run run, int a, int b, double ratio, double cap) {
+        int row = step.row(new int[]{a, b}, new double[]{1, -ratio}, 0, -cap, cap, run.efficiency);
+        run.gear(row, a, b, ratio);
+        return row;
     }
 
     /**
@@ -194,14 +324,16 @@ public final class TransmissionPart implements Part {
      * element in an upshift lets go as soon as the on-coming one pulls the input below its speed, and an on-coming one in
      * a downshift takes the drive only once the input has run up to its speed, as the shift's control does.
      */
-    private void elementRow(PartStep step, int a, int b, double ratio, double cap, boolean oneWay) {
-        step.row(new int[]{a, b}, new double[]{1, -ratio}, 0, -cap, oneWay ? 0 : cap, spec.efficiency());
+    private void elementRow(PartStep step, Run run, int a, int b, double ratio, double cap, boolean oneWay) {
+        int row = step.row(new int[]{a, b}, new double[]{1, -ratio}, 0, -cap, oneWay ? 0 : cap, run.efficiency);
+        run.gear(row, a, b, ratio);
+        run.friction(row, a, b, ratio);
     }
 
     /** Whether going from one gear to another is an upshift (a smaller forward ratio). */
     private boolean upshift(int from, int to) { return from >= 1 && to >= 1 && ratio(to) < ratio(from); }
 
-    private void manual(PartStep step) {
+    private void manual(PartStep step, Run run) {
         int want = wanted(step, -1), engaged = (int) step.internal(0), target = (int) step.internal(1);
         double time = step.internal(2), dt = step.dt();
         int state = 0;
@@ -212,15 +344,15 @@ public final class TransmissionPart implements Part {
                 if (target != want) { target = want; time = 0; }
                 if (Math.abs(slip) < SYNCED) { engaged = want; target = 0; time = 0; }
                 else {
-                    step.clutch(1, 2, ratio, want < 0 ? 0.25 * spec.synchroniserNm() : spec.synchroniserNm());
+                    if (run.drives) { step.clutch(1, 2, ratio, want < 0 ? 0.25 * spec.synchroniserNm() : spec.synchroniserNm()); }
                     time += dt;
                     state = time > GRIND ? 2 : 1;
                 }
             } else { target = 0; time = 0; }
         }
-        if (engaged != 0) { gearRow(step, 1, 2, ratio(engaged), Double.POSITIVE_INFINITY); }
+        if (engaged != 0 && run.drives) { gearRow(step, run, 1, 2, ratio(engaged), Double.POSITIVE_INFINITY); }
         double pedal = Math.clamp(step.input("clutch", 0), 0, 1);
-        step.clutch(0, 1, 1, (1 - pedal) * spec.clutchNm());
+        run.friction(step.clutch(0, 1, 1, run.capacity((1 - pedal) * spec.clutchNm())), 0, 1, 1);
         step.rotorTorque(1, -CHURN * step.rotorSpeed(1), -CHURN, false);
         step.setInternal(0, engaged);
         step.setInternal(1, target);
@@ -228,13 +360,13 @@ public final class TransmissionPart implements Part {
         report(step, engaged, state, engaged == 0 ? 0 : ratio(engaged));
     }
 
-    private void converter(PartStep step) {
+    private void converter(PartStep step, Run run) {
         double p = step.rotorSpeed(0), t = step.rotorSpeed(1), hp = Math.max(0.5, 1e-3 * Math.abs(p)), ht = Math.max(0.5, 1e-3 * Math.abs(t));
         TorqueConverter c = spec.converter();
         double[] f = c.torques(p, t), dp = slope(c, p + hp, t, p - hp, t, hp), dt = slope(c, p, t + ht, p, t - ht, ht);
         step.torquePair(0, 1, f[0], f[1], dp[0], dt[0], dp[1], dt[1]);
         double lockup = Math.clamp(step.input("lockup", 0), 0, 1);
-        if (lockup > 0) { step.clutch(0, 1, 1, lockup * spec.lockupNm()); }
+        if (lockup > 0) { run.friction(step.clutch(0, 1, 1, run.capacity(lockup * spec.lockupNm())), 0, 1, 1); }
         step.diagnostic("converterSpeedRatio", p != 0 ? t / p : 0);
     }
 
@@ -247,16 +379,16 @@ public final class TransmissionPart implements Part {
         step.hold(2, Math.abs(step.rotorSpeed(2)) < PAWL ? Double.POSITIVE_INFINITY : 0);
     }
 
-    private void automatic(PartStep step) {
-        converter(step);
+    private void automatic(PartStep step, Run run) {
+        converter(step, run);
         int want = wanted(step, -2), current = (int) step.internal(0), previous = (int) step.internal(1);
         double progress = step.internal(2);
         if (want != current) { previous = progress >= 1 ? current : previous; current = want; progress = 0; }
         progress = Math.min(1, progress + step.dt() / spec.shiftTimeS());
         boolean shifting = progress < 1 && previous != 0 && previous != -2 && previous != current;
         boolean up = shifting && upshift(previous, current), down = shifting && upshift(current, previous);
-        if (current != 0 && current != -2) { elementRow(step, 1, 2, ratio(current), spec.clutchNm() * progress, down); }
-        if (shifting) { elementRow(step, 1, 2, ratio(previous), spec.clutchNm() * (1 - progress), up); }
+        if (current != 0 && current != -2 && run.drives) { elementRow(step, run, 1, 2, ratio(current), run.capacity(spec.clutchNm() * progress), down); }
+        if (shifting && run.drives) { elementRow(step, run, 1, 2, ratio(previous), run.capacity(spec.clutchNm() * (1 - progress)), up); }
         if (current == -2) { park(step); }
         step.rotorTorque(1, -CHURN * step.rotorSpeed(1), -CHURN, false);
         step.setInternal(0, current);
@@ -268,7 +400,7 @@ public final class TransmissionPart implements Part {
     /** The shaft a dual-clutch box carries a gear on: 1 odd, 2 even (and reverse), 0 none. */
     private static int shaft(int gear) { return gear == 0 || gear == -2 ? 0 : gear < 0 || gear % 2 == 0 ? 2 : 1; }
 
-    private void dualClutch(PartStep step) {
+    private void dualClutch(PartStep step, Run run) {
         int want = wanted(step, -2);
         int[] gear = {0, (int) step.internal(0), (int) step.internal(1)};
         int active = (int) step.internal(4), before = (int) step.internal(6);
@@ -288,7 +420,7 @@ public final class TransmissionPart implements Part {
             if (target[s] != 0) {
                 double ratio = ratio(target[s]), slip = step.rotorSpeed(s) - ratio * step.rotorSpeed(3);
                 if (Math.abs(slip) < SYNCED) { gear[s] = target[s]; }
-                else { step.clutch(s, 3, ratio, spec.synchroniserNm()); state = 1; }
+                else { if (run.drives) { step.clutch(s, 3, ratio, spec.synchroniserNm()); } state = 1; }
             }
         }
         // hand over to the shaft that has the wanted gear ready
@@ -298,16 +430,16 @@ public final class TransmissionPart implements Part {
         double command = driving == 0 ? 0 : Math.clamp(step.input("clutch", 1), 0, 1);
         double[] cap = {0, 0, 0};
         boolean[] oneWay = {false, false, false};
-        if (active != 0) { cap[active] += spec.clutchNm() * command * progress; }
+        if (active != 0) { cap[active] += run.capacity(spec.clutchNm() * command * progress); }
         if (before != 0 && before != active && progress < 1) {
-            cap[before] += spec.clutchNm() * command * (1 - progress);
+            cap[before] += run.capacity(spec.clutchNm() * command * (1 - progress));
             boolean up = upshift(gear[before], gear[active]);
             oneWay[up ? before : active] = true;
         }
-        step.row(new int[]{0, 1}, new double[]{1, -1}, 0, -cap[1], oneWay[1] ? 0 : cap[1], 1);
-        step.row(new int[]{0, 2}, new double[]{1, -1}, 0, -cap[2], oneWay[2] ? 0 : cap[2], 1);
+        run.friction(step.row(new int[]{0, 1}, new double[]{1, -1}, 0, -cap[1], oneWay[1] ? 0 : cap[1], 1), 0, 1, 1);
+        run.friction(step.row(new int[]{0, 2}, new double[]{1, -1}, 0, -cap[2], oneWay[2] ? 0 : cap[2], 1), 0, 2, 1);
         for (int s = 1; s <= 2; s++) {
-            if (gear[s] != 0) { gearRow(step, s, 3, ratio(gear[s]), Double.POSITIVE_INFINITY); }
+            if (gear[s] != 0 && run.drives) { gearRow(step, run, s, 3, ratio(gear[s]), Double.POSITIVE_INFINITY); }
             step.rotorTorque(s, -CHURN * step.rotorSpeed(s), -CHURN, false);
         }
         if (want == -2) { step.hold(3, Math.abs(step.rotorSpeed(3)) < PAWL ? Double.POSITIVE_INFINITY : 0); }
@@ -320,8 +452,8 @@ public final class TransmissionPart implements Part {
         report(step, shown, progress < 1 || state == 1 ? 1 : 0, shown == 0 ? 0 : ratio(shown));
     }
 
-    private void cvt(PartStep step) {
-        converter(step);
+    private void cvt(PartStep step, Run run) {
+        converter(step, run);
         int mode = wanted(step, -2);
         double low = spec.ratios()[0], high = spec.ratios()[1], r = step.internal(0);
         double aim = step.input("ratio", r);
@@ -329,7 +461,7 @@ public final class TransmissionPart implements Part {
         double move = spec.ratioRatePerS() * step.dt();
         r += Math.clamp(aim - r, -move, move);
         double total = mode == 1 ? r : mode == -1 ? spec.reverseRatio() * r : 0;
-        if (total != 0) { gearRow(step, 1, 2, total, spec.beltNm()); }
+        if (total != 0 && run.drives) { run.friction(gearRow(step, run, 1, 2, total, run.capacity(spec.beltNm())), 1, 2, total); }
         if (mode == -2) { park(step); }
         step.rotorTorque(1, -CHURN * step.rotorSpeed(1), -CHURN, false);
         step.setInternal(0, r);

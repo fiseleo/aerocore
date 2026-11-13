@@ -2,9 +2,11 @@ package dev.mcmod.aerocore.api.vehicle.part;
 
 import dev.mcmod.aerocore.api.CollisionSphere;
 import dev.mcmod.aerocore.api.Vec3d;
+import dev.mcmod.aerocore.api.damage.Wear;
 import dev.mcmod.aerocore.api.vehicle.DesignIssue;
 import dev.mcmod.aerocore.api.vehicle.MassProperties;
 import dev.mcmod.aerocore.api.vehicle.Part;
+import dev.mcmod.aerocore.api.vehicle.PartAfter;
 import dev.mcmod.aerocore.api.vehicle.PartDesign;
 import dev.mcmod.aerocore.api.vehicle.PartStep;
 
@@ -26,6 +28,13 @@ import java.util.Objects;
  *     up to its largest capacity.</li>
  * </ul>
  * Shown values: range (1 high, 2 low), mode (part-time) or lock (full-time) or coupling torque share (on-demand).
+ *
+ * <p>0.42: a case given a Wearing (wearing) has one condition, GEARS (0): teeth, chain and bearings, worn by Wear.running
+ * with the Wearing's life at its rated input torque and speed, from the range gear's torque and the input's speed. Its
+ * efficiency falls to TransmissionPart.gearEfficiency of the design's (a tenth less at the end), and at 1 it drives no
+ * more: the range gear's row is not made (the input turns free; the outputs keep what joins them to each other). A part
+ * wrapping it lists the condition first and passes after() on. Diagnostic "gearsUsed". Without a Wearing: no
+ * conditions, as before 0.42.
  */
 public final class TransferPart implements Part {
     /** Kinds of transfer case. */
@@ -52,17 +61,47 @@ public final class TransferPart implements Part {
     /** Output speed below which the range may change, rad/s. */
     public static final double RANGE_CHANGE = 5;
 
+    /** 0.42: the name of a wearing case's condition (index 0). */
+    public static final String GEARS = "gears";
+    private static final List<String> CONDITIONS = List.of(GEARS);
+
+    /**
+     * 0.42: what wears a transfer case (the caller's numbers): its life (s) at a rated input torque (N m) and speed
+     * (rad/s), with Wear.running's exponents on speed and load.
+     */
+    public record Wearing(double lifeS, double ratedTorqueNm, double ratedSpeedRadPerS, double speedExponent, double loadExponent) {
+        public Wearing {
+            if (!(lifeS > 0) || !(ratedTorqueNm > 0) || !(ratedSpeedRadPerS > 0)) { throw new IllegalArgumentException("Life and rated torque and speed must be positive"); }
+            if (!(speedExponent >= 0) || !Double.isFinite(speedExponent) || !(loadExponent >= 0) || !Double.isFinite(loadExponent)) {
+                throw new IllegalArgumentException("Exponents must be finite and not negative");
+            }
+        }
+
+        /** Typical exponents: a life in revolutions (1) falling with the cube of the load (ISO 281's ball bearings, as Wear.running says). */
+        public static Wearing typical(double lifeS, double ratedTorqueNm, double ratedSpeedRadPerS) { return new Wearing(lifeS, ratedTorqueNm, ratedSpeedRadPerS, 1, 3); }
+    }
+
     private final PartDesign design;
     private final Spec spec;
     private final MassProperties mass;
     private final List<DesignIssue> issues;
+    private final Wearing wearing;
 
-    public TransferPart(PartDesign design, Spec spec, MassProperties mass, List<DesignIssue> issues) {
+    public TransferPart(PartDesign design, Spec spec, MassProperties mass, List<DesignIssue> issues) { this(design, spec, mass, issues, null); }
+
+    private TransferPart(PartDesign design, Spec spec, MassProperties mass, List<DesignIssue> issues, Wearing wearing) {
         this.design = Objects.requireNonNull(design, "design");
         this.spec = Objects.requireNonNull(spec, "spec");
         this.mass = Objects.requireNonNull(mass, "mass");
         this.issues = List.copyOf(issues);
+        this.wearing = wearing;
     }
+
+    /** 0.42: this case wearing by these numbers, with the condition GEARS; null: one that does not wear. A copy. */
+    public TransferPart wearing(Wearing wearing) { return new TransferPart(design, spec, mass, issues, wearing); }
+    /** 0.42: what wears this case, or null. */
+    public Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
 
     public Spec spec() { return spec; }
     @Override public PartDesign design() { return design; }
@@ -96,7 +135,19 @@ public final class TransferPart implements Part {
         boolean slow = Math.abs(step.rotorSpeed(2)) < RANGE_CHANGE && Math.abs(step.rotorSpeed(3)) < RANGE_CHANGE;
         if (spec.lowRatio() > 1 && slow) { range = wantLow ? 2 : 1; }
         if (spec.lowRatio() <= 1) { range = 1; }
-        step.row(new int[]{0, 1}, new double[]{1, -(range == 2 ? spec.lowRatio() : 1)}, 0, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, spec.efficiency());
+        if (wearing == null) {
+            step.row(new int[]{0, 1}, new double[]{1, -(range == 2 ? spec.lowRatio() : 1)}, 0, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, spec.efficiency());
+        } else {
+            // 0.42: worn gears lose a little more; used up they drive nothing. after() wears them by the range row
+            double used = step.used(0);
+            int row = -1;
+            if (!(used >= 1)) {
+                row = step.row(new int[]{0, 1}, new double[]{1, -(range == 2 ? spec.lowRatio() : 1)}, 0, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
+                        used > 0 ? spec.efficiency() * TransmissionPart.gearEfficiency(used) : spec.efficiency());
+            }
+            step.carry(new RangeRow(row));
+            step.diagnostic("gearsUsed", used);
+        }
         double second = 0;
         switch (spec.kind()) {
             case FULL_TIME -> {
@@ -128,5 +179,18 @@ public final class TransferPart implements Part {
         step.show(1, second);
         step.diagnostic("range", range);
         step.diagnostic("mode", second);
+    }
+
+    /** 0.42: the range gear's row of a wearing case's step (-1: none, the gears being used up). */
+    private record RangeRow(int row) {}
+
+    /** 0.42: the gears wear by the torque through the range gear and the input's speed (Wear.running). */
+    @Override public void after(PartAfter a) {
+        if (wearing == null || !(a.carried() instanceof RangeRow r) || r.row() < 0) { return; }
+        double torque = Math.abs(a.rowTorque(r.row())), speed = Math.abs(a.rotorSpeed(0));
+        if (!(torque < Double.POSITIVE_INFINITY) || !(speed < Double.POSITIVE_INFINITY)) { return; }
+        double worn = Wear.running(a.dt(), wearing.lifeS(), speed / wearing.ratedSpeedRadPerS(), wearing.speedExponent(), torque / wearing.ratedTorqueNm(),
+                wearing.loadExponent());
+        if (worn > 0) { a.wear(0, Math.min(worn, 1)); }
     }
 }

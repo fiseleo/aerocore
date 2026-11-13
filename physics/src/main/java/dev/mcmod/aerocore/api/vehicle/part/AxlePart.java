@@ -40,6 +40,11 @@ import java.util.Objects;
  * </ul>
  * The wheels' and axle's mass rides with the body (no unsprung mass). Shown values: each wheel's spin, steer and
  * compression (left first), then the input's angle when driven.
+ *
+ * <p>0.42: an axle given a WheelCorner.Wearing (wearing) has three conditions, in this order: TYRES (0), BRAKES (1) and
+ * SUSPENSION (2), each for both wheels together: what wears them and what they then do is WheelCorner's (its class
+ * description). Diagnostics then tell them ("tyresUsed", "brakesUsed", "suspensionUsed"). An axle without one has no
+ * conditions and is as before 0.42.
  */
 public final class AxlePart implements Part {
     /** Differential kinds. */
@@ -75,9 +80,20 @@ public final class AxlePart implements Part {
     private final MassProperties mass;
     private final List<DesignIssue> issues;
     private final int wheel0, memory;
+    private final WheelCorner.Wearing wearing;
+
+    /** 0.42: the names of a wearing axle's conditions (indices WheelCorner.TYRE, BRAKE, SUSPENSION: 0, 1, 2). */
+    public static final String TYRES = "tyres", BRAKES = "brakes", SUSPENSION = "suspension";
+    private static final List<String> CONDITIONS = List.of(TYRES, BRAKES, SUSPENSION);
 
     public AxlePart(PartDesign design, WheelCorner left, WheelCorner right, Drive drive, Steering steering, double antiRollNPerM, double handbrakeNm,
                     BrakeControl control, MassProperties mass, List<DesignIssue> issues) {
+        this(design, left, right, drive, steering, antiRollNPerM, handbrakeNm, control, mass, issues, null);
+    }
+
+    private AxlePart(PartDesign design, WheelCorner left, WheelCorner right, Drive drive, Steering steering, double antiRollNPerM, double handbrakeNm,
+                     BrakeControl control, MassProperties mass, List<DesignIssue> issues, WheelCorner.Wearing wearing) {
+        this.wearing = wearing;
         this.design = Objects.requireNonNull(design, "design");
         this.left = Objects.requireNonNull(left, "left"); this.right = Objects.requireNonNull(right, "right");
         if (left.spec().side() != -1 || right.spec().side() != 1) { throw new IllegalArgumentException("The left wheel is on side -1, the right on +1"); }
@@ -92,6 +108,22 @@ public final class AxlePart implements Part {
     public WheelCorner right() { return right; }
     public Drive drive() { return drive; }
     public Steering steering() { return steering; }
+
+    /**
+     * 0.42: this axle wearing by these numbers (the tread and lining volumes are both wheels' together), with the
+     * conditions TYRES, BRAKES and SUSPENSION; null: one that does not wear. A copy; this axle is unchanged.
+     */
+    public AxlePart wearing(WheelCorner.Wearing wearing) {
+        return new AxlePart(design, left, right, drive, steering, antiRollNPerM, handbrakeNm, control, mass, issues, wearing);
+    }
+    /** 0.42: what wears this axle, or null. */
+    public WheelCorner.Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
+
+    /** 0.42: the wheels' condition at the step's start (null for an axle that does not wear). */
+    private WheelCorner.Worn worn(PartStep step) {
+        return wearing == null ? null : new WheelCorner.Worn(wearing, step.used(WheelCorner.TYRE), step.used(WheelCorner.BRAKE), step.used(WheelCorner.SUSPENSION), false);
+    }
 
     @Override public PartDesign design() { return design; }
     @Override public MassProperties mass() { return mass; }
@@ -164,7 +196,8 @@ public final class AxlePart implements Part {
         double[] steer = steerAngles(step.input("steer", 0));
         double roll = antiRollNPerM * (step.internal(0) - step.internal(WheelCorner.STATES));
         double airL = levelling() == null ? 1 : step.internal(air()), airR = levelling() == null ? 1 : step.internal(air() + 1);
-        step.keep(new WheelCorner.Probe[]{left.probe(step, 0, steer[0], roll, airL), right.probe(step, WheelCorner.STATES, steer[1], -roll, airR)});
+        WheelCorner.Worn worn = worn(step);
+        step.keep(new WheelCorner.Probe[]{left.probe(step, 0, steer[0], roll, airL, worn), right.probe(step, WheelCorner.STATES, steer[1], -roll, airR, worn)});
     }
 
     @Override public void loads(PartStep step) {
@@ -174,8 +207,15 @@ public final class AxlePart implements Part {
         int m = control == null ? 0 : control.memory();
         WheelCorner.Probe[] probes = step.kept() instanceof WheelCorner.Probe[] k ? k : new WheelCorner.Probe[2];
         double airL = levelling() == null ? 1 : step.internal(air()), airR = levelling() == null ? 1 : step.internal(air() + 1);
-        WheelCorner.Carry l = left.loads(step, wheel0, 0, 0, steer[0], brake, control, memory, hand, roll, "left", probes[0], airL);
-        WheelCorner.Carry r = right.loads(step, wheel0 + 1, WheelCorner.STATES, WheelCorner.SHOWN, steer[1], brake, control, memory + m, hand, -roll, "right", probes[1], airR);
+        WheelCorner.Worn worn = worn(step);
+        WheelCorner.Carry l = left.loads(step, wheel0, 0, 0, steer[0], brake, control, memory, hand, roll, "left", probes[0], airL, 0, worn);
+        WheelCorner.Carry r = right.loads(step, wheel0 + 1, WheelCorner.STATES, WheelCorner.SHOWN, steer[1], brake, control, memory + m, hand, -roll, "right", probes[1], airR,
+                0, worn);
+        if (worn != null) {
+            step.diagnostic("tyresUsed", worn.tyre());
+            step.diagnostic("brakesUsed", worn.brake());
+            step.diagnostic("suspensionUsed", worn.suspension());
+        }
         if (drive != null) {
             int d = step.differential(0, 1, 2, drive.finalRatio(), 0.5, drive.efficiency());
             boolean locked = drive.differential() == Differential.SPOOL || (drive.lockable() && step.input("lock", 0) > 0.5);
@@ -203,8 +243,8 @@ public final class AxlePart implements Part {
     @Override public void after(PartAfter a) {
         Carry c = (Carry) a.carried();
         if (c == null) { return; }
-        left.after(a, c.left(), wheel0, 0, 0, extraShown());
-        right.after(a, c.right(), wheel0 + 1, WheelCorner.STATES, WheelCorner.SHOWN, extraShown() + WheelCorner.EXTRA);
+        left.after(a, c.left(), wheel0, 0, 0, extraShown(), wearing);
+        right.after(a, c.right(), wheel0 + 1, WheelCorner.STATES, WheelCorner.SHOWN, extraShown() + WheelCorner.EXTRA, wearing);
         // 0.33: the levelling valve fills or vents each air spring toward the ride height's compression
         if (levelling() != null && !Double.isNaN(c.target())) {
             for (int k = 0; k < 2; k++) {

@@ -55,6 +55,9 @@ public final class VehicleGameTests {
                 @Override public List<DesignIssue> issues() { return List.of(); }
                 @Override public List<Vec3d> radiationPoints() { return sphere.radiationPoints(); }
                 @Override public List<String> inputs() { return List.of("fail", "drop"); }
+                // 0.42: something to damage and somewhere to put cargo (neither changes a step while new and empty)
+                @Override public List<String> conditions() { return List.of("shell"); }
+                @Override public List<Hold> holds() { return List.of(new Hold("inside", 0.1, Vec3d.ZERO)); }
                 @Override public void loads(PartStep step) {
                     if (step.input("fail", 0) > 0.5) { throw new IllegalStateException("Test ball failed on request"); }
                     if (step.input("drop", 0) > 0.5) { step.jettison(); }
@@ -399,6 +402,42 @@ public final class VehicleGameTests {
         h.runAfterDelay(22, () -> {
             h.assertTrue(VehicleTracks.near(h.getLevel(), new Vec3d(a.getX(), a.getY(), a.getZ()), 10).stream().noneMatch(t -> t.id().equals(b.getUUID())),
                     "a removed vehicle is left out");
+            h.succeed();
+        });
+    }
+
+    /**
+     * 0.42: a ball's condition and cargo belong to the vehicle entity: set on the server, saved and loaded with it; and
+     * vanilla's hurt() reaches listeners as PartVehicle.Hurt, answering true only when one takes it.
+     */
+    @GameTest(templateNamespace = "aerocore", template = "hull_pool", timeoutTicks = 40, batch = "aerocore_condition")
+    public static void wearCargoAndHurtBelongToTheVehicle(GameTestHelper h) {
+        for (int x = 0; x < 24; x++) for (int z = 0; z < 16; z++) { h.setBlock(new BlockPos(x, 0, z), Blocks.STONE); }
+        PartVehicle v = resting(h, 6);
+        h.runAfterDelay(5, () -> {
+            h.assertTrue(v.used("ball", "shell") == 0 && v.worstUsed() == 0 && v.holdCount() == 1 && v.holdKg(0) == 0, "new and empty");
+            h.assertTrue(v.setUsed("ball", "shell", 0.37) && !v.setUsed("ball", "nothing", 0.5) && !v.setUsed("nobody", "shell", 0.5), "only what there is can be damaged");
+            h.assertTrue(Math.abs(v.addUsed("ball", "shell", 0.1) - 0.47) < 1e-12 && v.addUsed("ball", "nothing", 0.1) == 0, "damage adds up");
+            v.setHold(0, 300);
+            h.assertTrue(v.holdKg(0) == 300 && v.vehicleState().cargoKg() == 300, "the cargo's mass");
+            net.minecraft.world.damagesource.DamageSource source = h.getLevel().damageSources().generic();
+            h.assertTrue(!v.hurt(source, 5), "nobody listening: nothing happens");
+            float[] heard = {0};
+            java.util.function.Consumer<PartVehicle.Hurt> listener = e -> { if (e.vehicle() == v) { heard[0] += e.amount(); e.take(); } };
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(PartVehicle.Hurt.class, listener);
+            boolean taken = v.hurt(source, 5);
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.unregister(listener);
+            h.assertTrue(taken && heard[0] == 5, "a listener that takes it is told the damage: " + heard[0]);
+            CompoundTag tag = new CompoundTag();
+            v.saveWithoutId(tag);
+            PartVehicle copy = VehicleRegistry.PART_VEHICLE.get().create(h.getLevel());
+            if (copy == null) { throw new IllegalStateException("Vehicle factory failed"); }
+            copy.load(tag);
+            h.assertTrue(Math.abs(copy.vehicleState().used("ball", "shell") - 0.47) < 1e-12 && copy.vehicleState().holdKg(0) == 300,
+                    "both come back from the save: " + copy.vehicleState().used("ball", "shell") + ", " + copy.vehicleState().holdKg(0));
+        });
+        h.runAfterDelay(20, () -> {
+            h.assertTrue(v.fault() == null && Math.abs(v.vehicleState().body().velocity().length()) < 0.05, "loaded and damaged, it rests on: " + v.fault());
             h.succeed();
         });
     }

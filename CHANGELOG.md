@@ -3,6 +3,22 @@
 AeroCore's versions, newest first. Before 0.41 AeroCore was not released; the detailed development log (in Traditional
 Chinese) is [docs/HISTORY.zh-TW.md](docs/HISTORY.zh-TW.md), and each model's validation is in [docs](docs).
 
+## 0.42.0: wear, damage and cargo
+
+- Part conditions: a part names what wears out or gets damaged (an axle's tyres, brakes and suspension; a wing's
+  structure); the vehicle keeps each from 0 (new) to 1 (failed), saved by part and name and synced to clients. Parts read
+  them to lose performance and add their own wear; the game adds damage and repairs.
+- Damage calculations (`api.damage`): impact energy and its split between parts, lining and tread wear, running life,
+  Larson-Miller creep, Miner fatigue, corrosion rates by metal and exposure, occupants' risk by change of velocity,
+  flooding through a hole.
+- The runtime parts can wear (off unless the vehicle mod asks): axles, landing gear, gearboxes, transfer cases, wings,
+  control surfaces, propellers, rotors, motors, bodies, frames.
+- Cargo holds: a part's holds carry a mass the game sets, as a point mass with its weight.
+- `PartVehicle.Hurt`: attacks, explosions, fire and lava reach the vehicle mod as an event.
+- Sloped blocks: a block can give wheels the plane of its top (`SlopedGround`), so a road ramp is a slope to them and
+  not a flight of small kerbs.
+- A vehicle without conditions or cargo steps exactly as in 0.41; saves from 0.41 load unchanged.
+
 ## 0.41.0: first public release (beta)
 
 - Licence: LGPL-3.0-only (with the GPL v3 it builds on); the MDK template's files stay MIT.

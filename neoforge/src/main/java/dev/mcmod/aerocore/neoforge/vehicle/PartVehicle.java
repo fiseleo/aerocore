@@ -178,6 +178,8 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
     private double toldImpactNs;
     private Vec3d clientVelocity;
     private VehicleContacts.Scrape clientScrape;
+    /** 0.42: the parts' conditions (0..1, installed order) and the holds' cargo (kg) as the client last heard. */
+    private double[] clientUsed = new double[0], clientHoldKg = new double[0];
 
     public PartVehicle(EntityType<? extends PartVehicle> type, Level level) {
         super(type, level);
@@ -351,6 +353,97 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         double now = state.setTank(tank, fuel, Math.max(0, kg), densityKgPerM3);
         publish();
         return now;
+    }
+
+    // ----- 0.42: condition and cargo -----
+
+    /**
+     * How much of a part's condition (Part.conditions, by name) is used up, 0 new .. 1 failed: the state's on the server,
+     * the last heard on a client (whole per cent). 0 for a part or a name the vehicle does not have.
+     */
+    public double used(String partId, String name) {
+        if (vehicle == null) { return 0; }
+        if (!level().isClientSide) { return state == null ? 0 : state.used(partId, name); }
+        Vehicle.Installed p = vehicle.installed(partId);
+        int i = p == null ? -1 : p.part().conditions().indexOf(name);
+        int at = i < 0 ? -1 : vehicle.firstCondition(p.index()) + i;
+        return at >= 0 && at < clientUsed.length ? clientUsed[at] : 0;
+    }
+
+    /** The worst of all the parts' conditions (0 with none): whether anything needs looking at. Both sides. */
+    public double worstUsed() {
+        if (!level().isClientSide) { return state == null ? 0 : state.worstUsed(); }
+        double w = 0;
+        for (double u : clientUsed) { w = Math.max(w, u); }
+        return w;
+    }
+
+    /**
+     * Server: sets how much of a part's condition is used up (damage, a repair), within 0..1. False for a part or a name
+     * the vehicle does not have.
+     */
+    public boolean setUsed(String partId, String name, double value) {
+        Vehicle.Installed p = state == null ? null : vehicle.installed(partId);
+        int i = p == null ? -1 : p.part().conditions().indexOf(name);
+        if (i < 0 || Double.isNaN(value)) { return false; }
+        state.setUsed(partId, i, value);
+        publish();
+        return true;
+    }
+
+    /** Server: adds to a part's condition (damage; negative mends) and returns what it then is (0 when there is no such thing). */
+    public double addUsed(String partId, String name, double amount) {
+        Vehicle.Installed p = state == null ? null : vehicle.installed(partId);
+        int i = p == null ? -1 : p.part().conditions().indexOf(name);
+        if (i < 0 || Double.isNaN(amount)) { return 0; }
+        double now = state.addUsed(partId, i, amount);
+        publish();
+        return now;
+    }
+
+    /** Number of cargo holds (Vehicle.holds). */
+    public int holdCount() { return vehicle == null ? 0 : vehicle.holds().size(); }
+
+    /** Cargo in a hold, kg: the state's on the server, the last heard on a client (whole kg). */
+    public double holdKg(int hold) {
+        if (!level().isClientSide && state != null) { return state.holdKg(hold); }
+        return hold >= 0 && hold < clientHoldKg.length ? clientHoldKg[hold] : 0;
+    }
+
+    /** Server: sets the mass a hold carries (kg; the game adds up its cargo). */
+    public void setHold(int hold, double kg) {
+        if (state == null || hold < 0 || hold >= holdCount() || !(kg >= 0) || !Double.isFinite(kg)) { return; }
+        if (state.holdKg(hold) == kg) { return; }
+        state.setHold(hold, kg);
+        publish();
+    }
+
+    /**
+     * Server (0.42): something hurt this vehicle: an attack, a projectile, an explosion (vanilla's hurt()). Not fire or
+     * lava: the vehicle entity types are fire-immune, so vanilla never hurts them by burning; a mod that burns parts
+     * looks at the blocks they are in.
+     * AeroCore does nothing with it: a listener that damages parts for it (VehicleState.setUsed) says so with take(),
+     * and hurt() then answers true (the attacker hears the hit).
+     */
+    public static final class Hurt extends net.neoforged.bus.api.Event {
+        private final PartVehicle vehicle;
+        private final net.minecraft.world.damagesource.DamageSource source;
+        private final float amount;
+        private boolean taken;
+        public Hurt(PartVehicle vehicle, net.minecraft.world.damagesource.DamageSource source, float amount) { this.vehicle = vehicle; this.source = source; this.amount = amount; }
+        public PartVehicle vehicle() { return vehicle; }
+        public net.minecraft.world.damagesource.DamageSource source() { return source; }
+        /** Vanilla's damage (half hearts). */
+        public float amount() { return amount; }
+        public void take() { taken = true; }
+        public boolean taken() { return taken; }
+    }
+
+    @Override public boolean hurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
+        if (level().isClientSide || isRemoved() || isInvulnerableTo(source) || !(amount > 0)) { return false; }
+        Hurt event = new Hurt(this, source, amount);
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(event);
+        return event.taken();
     }
 
     /** Server: whether the parts' tables are built and the vehicle steps (it waits in place until then). */
@@ -554,9 +647,18 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
                 }
                 clientTankKg = kg; clientTankFuel = fuel;
             }
+            // 0.42: conditions in per cent and cargo in kg; neither is written while all are zero
+            clientUsed = m.get("u") instanceof List<?> u ? numbers(u, 0.01) : new double[0];
+            clientHoldKg = m.get("h") instanceof List<?> h ? numbers(h, 1) : new double[0];
         } catch (RuntimeException ignored) {
             // A malformed display update only affects animation.
         }
+    }
+
+    private static double[] numbers(List<?> list, double scale) {
+        double[] out = new double[list.size()];
+        for (int i = 0; i < out.length; i++) { out[i] = list.get(i) instanceof Number n ? n.doubleValue() * scale : 0; }
+        return out;
     }
 
     // ---------------------------------------------------------------- ticking
@@ -781,7 +883,9 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         RigidBodyState pose = lastGood != null ? lastGood : state.body();
         fault = phase + ": " + error;
         LOGGER.error("Vehicle {} ({}) at {} stopped: its physics failed in {}", getId(), blueprint.name(), pose.position(), phase, error);
+        VehicleState failed = state;
         state = vehicle.newState(vehicle.origin(pose), pose.orientation(), SUBSTEP);
+        state.keepHardware(failed);   // 0.42: what is worn stays worn, and the cargo is still aboard
         moving = false;
         pending = null;
         displayForces = List.of();
@@ -1094,6 +1198,20 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             List<Object> tanks = new ArrayList<>();
             for (int k = 0; k < vehicle.tanks().size(); k++) { tanks.add(List.of(Math.rint(state.tankKg(k) * 10) / 10, state.tankFuel(k))); }
             display.put("f", tanks);
+        }
+        // 0.42: conditions in whole per cent and cargo in whole kg, each only when something is not zero
+        double[] used = state.usedValues();
+        boolean worn = false;
+        for (double u : used) { worn |= u >= 0.005; }
+        if (worn) {
+            List<Object> list = new ArrayList<>();
+            for (double u : used) { list.add((double) Math.round(u * 100)); }
+            display.put("u", list);
+        }
+        if (state.cargoKg() >= 0.5) {
+            List<Object> list = new ArrayList<>();
+            for (int k = 0; k < vehicle.holds().size(); k++) { list.add((double) Math.round(state.holdKg(k))); }
+            display.put("h", list);
         }
         // 0.37: the true velocity (2 cm/s steps: one at rest sends nothing new) and scraping
         Vec3d v = s.velocity();

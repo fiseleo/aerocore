@@ -173,8 +173,16 @@ final class TestParts {
                            dev.mcmod.aerocore.api.wheel.Suspension.Type type, boolean brakes, dev.mcmod.aerocore.api.vehicle.part.AxlePart.Drive drive,
                            dev.mcmod.aerocore.api.vehicle.part.AxlePart.Steering steering, double antiRoll, double handbrakeNm,
                            dev.mcmod.aerocore.api.wheel.kinematics.Hardpoints hardpoints) {
+        return axle(name, trackM, wheelRate, cornerLoadN, bump, rebound, type, brakes, drive, steering, antiRoll, handbrakeNm, hardpoints, null);
+    }
+
+    /** 0.42: the same wearing by these numbers (null: an axle that does not wear, as above). */
+    static PartDesign axle(String name, double trackM, double wheelRate, double cornerLoadN, double bump, double rebound,
+                           dev.mcmod.aerocore.api.wheel.Suspension.Type type, boolean brakes, dev.mcmod.aerocore.api.vehicle.part.AxlePart.Drive drive,
+                           dev.mcmod.aerocore.api.vehicle.part.AxlePart.Steering steering, double antiRoll, double handbrakeNm,
+                           dev.mcmod.aerocore.api.wheel.kinematics.Hardpoints hardpoints, dev.mcmod.aerocore.api.wheel.WheelCorner.Wearing wearing) {
         String key = "axle " + trackM + " " + wheelRate + " " + cornerLoadN + " " + bump + " " + rebound + " " + type + " " + brakes + " " + drive + " " + steering + " "
-                + antiRoll + " " + handbrakeNm + (hardpoints == null ? "" : " " + hardpoints);
+                + antiRoll + " " + handbrakeNm + (hardpoints == null ? "" : " " + hardpoints) + (wearing == null ? "" : " " + wearing);
         MassProperties m = new MassProperties(100, Vec3d.ZERO, 100 * trackM * trackM / 12, 100 * trackM * trackM / 12, 5, 0, 0, 0);
         return new Fixture(name, key, d -> {
             dev.mcmod.aerocore.api.wheel.Tyre tyre = carTyre();
@@ -188,7 +196,9 @@ final class TestParts {
                     new Vec3d(0, -design, -trackM / 2), -1, trackM, tyre, 0.8, s, brakes ? carBrake() : null, 0));
             dev.mcmod.aerocore.api.wheel.WheelCorner right = new dev.mcmod.aerocore.api.wheel.WheelCorner(new dev.mcmod.aerocore.api.wheel.WheelCorner.Spec(
                     new Vec3d(0, -design, trackM / 2), 1, trackM, tyre, 0.8, s, brakes ? carBrake() : null, 0));
-            return new dev.mcmod.aerocore.api.vehicle.part.AxlePart(d, left, right, drive, steering, antiRoll, handbrakeNm, null, m, List.of());
+            dev.mcmod.aerocore.api.vehicle.part.AxlePart axle = new dev.mcmod.aerocore.api.vehicle.part.AxlePart(d, left, right, drive, steering, antiRoll, handbrakeNm,
+                    null, m, List.of());
+            return wearing == null ? axle : axle.wearing(wearing);
         });
     }
 

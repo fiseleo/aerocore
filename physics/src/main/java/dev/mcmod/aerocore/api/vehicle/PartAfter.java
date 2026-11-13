@@ -88,6 +88,21 @@ public final class PartAfter {
         if (!Double.isFinite(value)) { throw new IllegalArgumentException("Internal state must be finite"); }
         st.internals[installed.firstInternal() + i] = value;
     }
+    /** 0.42: how much of this part's i-th condition (Part.conditions) is used up now: 0 new .. 1 failed (0 for an index it does not have). */
+    public double used(int i) {
+        if (i < 0 || i >= installed.part().conditions().size()) { return 0; }
+        return st.used[prepared.vehicle().firstCondition(installed.index()) + i];
+    }
+    /**
+     * 0.42: wears this part's i-th condition by amount (a share of its life, not negative) for what the step carried: a
+     * clutch's slip work, a brake's, a tyre's. It stops at 1; nothing for an index the installed part does not have.
+     */
+    public void wear(int i, double amount) {
+        if (!(amount >= 0) || !Double.isFinite(amount)) { throw new IllegalArgumentException("Wear must be finite and not negative"); }
+        if (i < 0 || i >= installed.part().conditions().size() || amount == 0) { return; }
+        int at = prepared.vehicle().firstCondition(installed.index()) + i;
+        st.used[at] = Math.min(1, st.used[at] + amount);
+    }
     /** This part's i-th shown value. */
     public double shown(int i) {
         if (i < 0 || i >= installed.part().shownValues()) { throw new IndexOutOfBoundsException("Shown value " + i); }

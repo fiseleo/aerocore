@@ -48,13 +48,22 @@ public final class TyreContact {
      */
     public static Step step(Tyre tyre, GroundContact.Surface surface, double loadN, double vx, double vy, double rollingMps, double camberRad,
                             double u, double v, double dt) {
+        return step(tyre, surface, loadN, vx, vy, rollingMps, camberRad, u, v, dt, 1);
+    }
+
+    /**
+     * 0.42: the contact with the tyre's peak friction times grip (0..1: worn tread, a flat tyre; WheelCorner.treadGrip);
+     * with 1 it is the contact above to the last bit.
+     */
+    public static Step step(Tyre tyre, GroundContact.Surface surface, double loadN, double vx, double vy, double rollingMps, double camberRad,
+                            double u, double v, double dt, double grip) {
         if (!(loadN > 0)) { return new Step(0, 0, 0, 0, 0, 0, 0, 0, 0); }
         double sigmaX = tyre.longitudinalRelaxationM(loadN), sigmaY = tyre.lateralRelaxationM(loadN), speed = Math.abs(vx);
         double slipX = vx - rollingMps, slipY = vy;
         double denX = 1 + dt * speed / sigmaX, denY = 1 + dt * speed / sigmaY;
         double[] predicted = bound(sigmaX, sigmaY, (u - dt * slipX) / denX, (v - dt * slipY) / denY);
         double sx = predicted[0] / sigmaX, sy = predicted[1] / sigmaY, gamma = 0.12 * camberRad;
-        Tyre.Curve curve = tyre.curve(surface, loadN, speed);
+        Tyre.Curve curve = grip == 1 || !(grip >= 0) ? tyre.curve(surface, loadN, speed) : tyre.curve(surface, loadN, speed, Math.min(grip, 1));
         double[] f = curve.forces(sx, sy + gamma), slope = curve.slopes(sx, sy + gamma);
         double fade = speed < LOW_SPEED ? 0.5 * (1 + Math.cos(Math.PI * speed / LOW_SPEED)) : 0, mass = loadN / G;
         double lowX = fade * 2 * LOW_DAMPING * Math.sqrt(tyre.slipStiffness(loadN) / sigmaX * mass);

@@ -29,6 +29,13 @@ import java.util.Objects;
  * first step or in warmUp.
  * Not modelled: water on the wing (a float or hull carries the vehicle on water), a propeller's slipstream over it,
  * other wings' downwash; ground effect over land arrives with the ground query.
+ *
+ * <p>0.42: a wing given a Wearing (wearing) has one condition, STRUCTURE (0), which only the game changes (a crash, a
+ * repair: VehicleState.setUsed); the wing does not wear itself. A damaged wing (torn skin, bent ribs, a lost tip) lifts
+ * less and drags more: of its solved force the part along the air past its middle strip (the drag) is times
+ * 1 + dragRise x used when it is a drag, the rest (lift and side force) and the whole moment times 1 - liftLoss x used.
+ * The damage is taken as alike on both halves (no roll of its own). Diagnostic "structureUsed"; "liftN" and "dragN" are
+ * the damaged wing's. Without a Wearing: no conditions, as before 0.42.
  */
 public final class WingPart implements Part {
     private final PartDesign design;
@@ -41,9 +48,33 @@ public final class WingPart implements Part {
     private final List<CollisionSphere> collision;
     private final List<String> inputs;
     private volatile Wing wing;
+    private final Wearing wearing;
+
+    /** 0.42: the name of a wearing wing's condition (index 0). */
+    public static final String STRUCTURE = "structure";
+    private static final List<String> CONDITIONS = List.of(STRUCTURE);
+
+    /**
+     * 0.42: what damage does to a wing (the caller's rule): the share of its lift lost and the share of its drag added
+     * with its structure used up (in proportion before).
+     */
+    public record Wearing(double liftLoss, double dragRise) {
+        public Wearing {
+            if (!(liftLoss >= 0 && liftLoss <= 1) || !(dragRise >= 0) || !Double.isFinite(dragRise)) { throw new IllegalArgumentException("Lift loss 0..1, drag rise not negative"); }
+        }
+        /** Rule: a wing shot to pieces keeps 0.3 of its lift and has three times its drag. */
+        public static Wearing typical() { return new Wearing(0.7, 2.0); }
+    }
 
     public WingPart(PartDesign design, Wing.Planform planform, Airfoil root, Airfoil tip, List<Wing.ControlSurface> surfaces, int stripsPerHalf,
                     MassProperties mass, List<DesignIssue> issues) {
+        this(design, planform, root, tip, surfaces, stripsPerHalf, mass, issues, null, null);
+    }
+
+    private WingPart(PartDesign design, Wing.Planform planform, Airfoil root, Airfoil tip, List<Wing.ControlSurface> surfaces, int stripsPerHalf,
+                     MassProperties mass, List<DesignIssue> issues, Wearing wearing, Wing built) {
+        this.wearing = wearing;
+        this.wing = built;
         this.design = Objects.requireNonNull(design, "design");
         this.planform = Objects.requireNonNull(planform, "planform");
         this.root = Objects.requireNonNull(root, "root"); this.tip = Objects.requireNonNull(tip, "tip");
@@ -79,6 +110,12 @@ public final class WingPart implements Part {
     public Airfoil rootSection() { return root; }
     public Airfoil tipSection() { return tip; }
     public List<Wing.ControlSurface> surfaces() { return surfaces; }
+
+    /** 0.42: this wing damageable by this rule, with the condition STRUCTURE; null: one that is not. A copy (sharing the polars already built). */
+    public WingPart wearing(Wearing wearing) { return new WingPart(design, planform, root, tip, surfaces, stripsPerHalf, mass, issues, wearing, wing); }
+    /** 0.42: what damage does to this wing, or null. */
+    public Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
 
     /** The wing with its polars, built on first use. */
     public Wing wing() {
@@ -122,8 +159,22 @@ public final class WingPart implements Part {
         Wing.Solution s = w.solve(flow, new Wing.Air(air.densityKgPerM3(), air.dynamicViscosityPaS(), air.speedOfSoundMps()), controls,
                 height, any ? warm : null);
         for (int i = 0; i < strips; i++) { step.setInternal(i, s.strength()[i]); }
-        Vec3d force = step.axis(s.force()), origin = step.offset(Vec3d.ZERO);
-        Vec3d moment = step.axis(s.moment()).add(origin.cross(force));
+        Vec3d solved = s.force(), solvedMoment = s.moment();
+        if (wearing != null) {
+            // 0.42: a damaged wing: less of the force across the air past it, more of the drag along it
+            double used = Math.min(step.used(0), 1);
+            if (used > 0) {
+                Vec3d past = flow[strips / 2];
+                double pastSpeed = past.length();
+                Vec3d downwind = pastSpeed > 1e-6 ? past.scale(1 / pastSpeed) : Vec3d.X.scale(-1);
+                double dragged = solved.dot(downwind), keep = 1 - wearing.liftLoss() * used;
+                solved = solved.subtract(downwind.scale(dragged)).scale(keep).add(downwind.scale(dragged > 0 ? dragged * (1 + wearing.dragRise() * used) : dragged));
+                solvedMoment = solvedMoment.scale(keep);
+            }
+            step.diagnostic("structureUsed", used);
+        }
+        Vec3d force = step.axis(solved), origin = step.offset(Vec3d.ZERO);
+        Vec3d moment = step.axis(solvedMoment).add(origin.cross(force));
         if (force.lengthSquared() > 0 || moment.lengthSquared() > 0) {
             step.load(new Wrench(force, moment), AppliedForce.Kind.LIFT);
             step.display(new AppliedForce(AppliedForce.Kind.LIFT, origin, force));
@@ -131,9 +182,9 @@ public final class WingPart implements Part {
         Vec3d stream = flow[strips / 2];
         double speed = stream.length();
         Vec3d along = speed > 1e-6 ? stream.scale(1 / speed) : Vec3d.X.scale(-1);
-        double drag = s.force().dot(along);
+        double drag = solved.dot(along);
         step.diagnostic("airspeedMps", speed);
-        step.diagnostic("liftN", s.force().subtract(along.scale(drag)).length());
+        step.diagnostic("liftN", solved.subtract(along.scale(drag)).length());
         step.diagnostic("dragN", drag);
         step.diagnostic("alphaDeg", Math.toDegrees(Math.atan2(-stream.y(), -stream.x())));
         step.diagnostic("stalledShare", s.stalledShare());

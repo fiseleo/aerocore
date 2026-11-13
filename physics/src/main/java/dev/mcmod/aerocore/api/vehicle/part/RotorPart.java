@@ -24,6 +24,11 @@ import java.util.Objects;
  * velocity and flapping are kept as internal states (the inflow lags as Pitt and Peters'; the flapping converges over the
  * steps). The aerodynamic torque acts on the rotor (its shaft train must give it); the hub's force and moment act on
  * the vehicle. Ground effect over the water surface; over land it arrives with the ground query.
+ *
+ * <p>0.42: a rotor given a Wearing (wearing) has one condition, BLADES (0), which only the game changes (it does not wear
+ * itself). Damaged blades give less: the hub's force and moment are times Wearing.thrustShare (1 - thrustLoss x used,
+ * failedThrust at 1) while the torque the air asks of the shaft does not fall. Diagnostic "bladesUsed"; "thrustN" is
+ * the damaged one. A part wrapping it lists the condition first. Without a Wearing: no conditions, as before 0.42.
  */
 public final class RotorPart implements Part {
     private final PartDesign design;
@@ -31,6 +36,28 @@ public final class RotorPart implements Part {
     private final double minCollectiveDeg, maxCollectiveDeg, cyclicDeg, spinInertia;
     private final MassProperties mass;
     private final List<DesignIssue> issues;
+    private final Wearing wearing;
+
+    /** 0.42: the name of a wearing rotor's condition (index 0). */
+    public static final String BLADES = "blades";
+    private static final List<String> CONDITIONS = List.of(BLADES);
+
+    /**
+     * 0.42: what damage does to the blades (the caller's rule): the share of the thrust lost as they come to the end
+     * (in proportion before), and the share of the thrust left with them used up (broken off short).
+     */
+    public record Wearing(double thrustLoss, double failedThrust) {
+        public Wearing {
+            if (!(thrustLoss >= 0 && thrustLoss <= 1) || !(failedThrust >= 0 && failedThrust <= 1)) { throw new IllegalArgumentException("Thrust shares 0..1"); }
+        }
+        /** Rule: bent and chipped blades lose up to 0.6 of their thrust; stubs give a tenth. */
+        public static Wearing typical() { return new Wearing(0.6, 0.1); }
+        /** The share of its thrust a rotor keeps with so much of its blades used. */
+        public double thrustShare(double used) {
+            if (!(used > 0)) { return 1; }
+            return used >= 1 ? failedThrust : 1 - thrustLoss * used;
+        }
+    }
 
     public RotorPart(PartDesign design, HelicopterRotor.Geometry geometry, double minCollectiveDeg, double maxCollectiveDeg, double cyclicDeg,
                      double hubInertiaKgM2, MassProperties mass, List<DesignIssue> issues) {
@@ -44,7 +71,20 @@ public final class RotorPart implements Part {
         double r = geometry.radiusM(), e = geometry.hingeOffset() * r;
         double blade = geometry.bladeMassKg() * ((r * r * r - e * e * e) / (3 * (r - e)));
         this.spinInertia = Math.max(geometry.blades() * blade + hubInertiaKgM2, 1e-6);
+        this.wearing = null;
     }
+
+    private RotorPart(RotorPart of, Wearing wearing) {
+        design = of.design; rotor = of.rotor; minCollectiveDeg = of.minCollectiveDeg; maxCollectiveDeg = of.maxCollectiveDeg; cyclicDeg = of.cyclicDeg;
+        spinInertia = of.spinInertia; mass = of.mass; issues = of.issues;
+        this.wearing = wearing;
+    }
+
+    /** 0.42: this rotor damageable by this rule, with the condition BLADES; null: one that is not. A copy (sharing the rotor's model). */
+    public RotorPart wearing(Wearing wearing) { return new RotorPart(this, wearing); }
+    /** 0.42: what damage does to this rotor, or null. */
+    public Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
 
     public HelicopterRotor rotor() { return rotor; }
     public HelicopterRotor.Geometry geometry() { return rotor.geometry(); }
@@ -99,15 +139,23 @@ public final class RotorPart implements Part {
             for (int i = 0; i < shown.length; i++) { step.show(i, PartStep.stepped(step.shown(i), shown[i], 1e-3)); }
             step.show(6, PartStep.stepped(step.shown(6), next.inducedMps(), 0.1));
         }
-        Vec3d force = step.axis(l.force()), origin = step.offset(Vec3d.ZERO);
-        Vec3d moment = step.axis(l.moment()).add(origin.cross(force));
+        Vec3d hubForce = l.force(), hubMoment = l.moment();
+        double thrust = l.thrustN();
+        if (wearing != null) {
+            // 0.42: damaged blades carry less for the same torque
+            double used = step.used(0);
+            if (used > 0) { double left = wearing.thrustShare(used); hubForce = hubForce.scale(left); hubMoment = hubMoment.scale(left); thrust *= left; }
+            step.diagnostic("bladesUsed", used);
+        }
+        Vec3d force = step.axis(hubForce), origin = step.offset(Vec3d.ZERO);
+        Vec3d moment = step.axis(hubMoment).add(origin.cross(force));
         step.load(new Wrench(force, moment), AppliedForce.Kind.THRUST);
         step.display(new AppliedForce(AppliedForce.Kind.THRUST, origin, force));
         // the air resists the rotor's turning; the torque grows about as the square of its speed
         double torque = l.torqueNm();
         step.rotorTorque(0, -torque, -2 * Math.max(torque, 0) / Math.max(omega, 1), true);
         step.diagnostic("rpm", omega * 60 / (2 * Math.PI));
-        step.diagnostic("thrustN", l.thrustN());
+        step.diagnostic("thrustN", thrust);
         step.diagnostic("torqueNm", torque);
         step.diagnostic("powerW", l.powerW());
         step.diagnostic("coningDeg", Math.toDegrees(next.beta0()));

@@ -36,6 +36,12 @@ import java.util.Objects;
  * trailer off the fifth wheel, drawn up it lets the trailer down onto it. Its wheel keeps its rays and contact, its
  * attachment lifted by the stroke drawn up (WheelCorner's mount lift); the last shown value is the share drawn up.
  * A leg folds (Retraction) or telescopes, not both.
+ *
+ * <p>0.42: a leg given a WheelCorner.Wearing (wearing) has three conditions, in this order: TYRES (0), BRAKES (1) and STRUT
+ * (2): what wears them and what they then do is WheelCorner's (its class description); a strut at 1 has collapsed and
+ * carries WheelCorner.COLLAPSED_SPRING of its spring and stop force (the aircraft settles on its other legs or its
+ * belly). Diagnostics then tell them ("tyresUsed", "brakesUsed", "strutUsed"). A leg without one has no conditions and
+ * its inputs, internal states and loads are as before 0.42.
  */
 public final class LegPart implements Part {
     /** How the wheel is steered. */
@@ -50,6 +56,11 @@ public final class LegPart implements Part {
     private final List<DesignIssue> issues;
     private final Retraction retraction;
     private final Telescope telescope;
+    private final WheelCorner.Wearing wearing;
+
+    /** 0.42: the names of a wearing leg's conditions (indices WheelCorner.TYRE, BRAKE, SUSPENSION: 0, 1, 2). */
+    public static final String TYRES = "tyres", BRAKES = "brakes", STRUT = "strut";
+    private static final List<String> CONDITIONS = List.of(TYRES, BRAKES, STRUT);
 
     /**
      * 0.30: how a leg folds away: the time from down to up (s), the axis it swings about through its mount (part frame)
@@ -82,7 +93,13 @@ public final class LegPart implements Part {
     /** 0.36: with a telescoping strut (retraction then null). */
     public LegPart(PartDesign design, WheelCorner wheel, Steer steer, double maxSteerRad, double trailM, BrakeControl control, MassProperties mass,
                    List<DesignIssue> issues, Retraction retraction, Telescope telescope) {
+        this(design, wheel, steer, maxSteerRad, trailM, control, mass, issues, retraction, telescope, null);
+    }
+
+    private LegPart(PartDesign design, WheelCorner wheel, Steer steer, double maxSteerRad, double trailM, BrakeControl control, MassProperties mass,
+                    List<DesignIssue> issues, Retraction retraction, Telescope telescope, WheelCorner.Wearing wearing) {
         if (retraction != null && telescope != null) { throw new IllegalArgumentException("A leg folds or telescopes, not both"); }
+        this.wearing = wearing;
         this.retraction = retraction;
         this.telescope = telescope;
         this.design = Objects.requireNonNull(design, "design");
@@ -99,6 +116,18 @@ public final class LegPart implements Part {
     public Retraction retraction() { return retraction; }
     /** 0.36: how its strut draws up, or null. */
     public Telescope telescope() { return telescope; }
+    /**
+     * 0.42: this leg wearing by these numbers (one wheel's tread and linings), with the conditions TYRES, BRAKES and
+     * STRUT; null: one that does not wear. A copy; this leg is unchanged.
+     */
+    public LegPart wearing(WheelCorner.Wearing wearing) {
+        // trailM is already held to its smallest value, so the copy's is the same
+        return new LegPart(design, wheel, steer, maxSteerRad, trailM, control, mass, issues, retraction, telescope, wearing);
+    }
+    /** 0.42: what wears this leg, or null. */
+    public WheelCorner.Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
+
     /** 0.36: whether "retract" moves it (folding or telescoping). */
     private boolean moves() { return retraction != null || telescope != null; }
 
@@ -136,10 +165,21 @@ public final class LegPart implements Part {
         };
         double brake = Math.clamp(step.input("brake", 0), 0, 1), folded = retraction == null ? 0 : step.internal(retractState());
         double drawn = telescope == null ? 0 : telescope.strokeM() * step.internal(retractState());
-        WheelCorner.Carry c = folded > 0
+        // 0.42: a wearing leg's wheel (a strut used up has collapsed)
+        WheelCorner.Worn worn = wearing == null ? null
+                : new WheelCorner.Worn(wearing, step.used(WheelCorner.TYRE), step.used(WheelCorner.BRAKE), step.used(WheelCorner.SUSPENSION), true);
+        WheelCorner.Carry c = worn != null
+                ? (folded > 0 ? wheel.free(step, 0, 0, 0, angle, brake, control, WheelCorner.STATES + 1, 0, 0, "wheel", worn)
+                        : wheel.loads(step, 0, 0, 0, angle, brake, control, WheelCorner.STATES + 1, 0, 0, "wheel", null, 1, drawn, worn))
+                : folded > 0
                 ? wheel.free(step, 0, 0, 0, angle, brake, control, WheelCorner.STATES + 1, 0, 0, "wheel")
                 : drawn != 0 ? wheel.loads(step, 0, 0, 0, angle, brake, control, WheelCorner.STATES + 1, 0, 0, "wheel", null, 1, drawn)
                 : wheel.loads(step, 0, 0, 0, angle, brake, control, WheelCorner.STATES + 1, 0, 0, "wheel");
+        if (worn != null) {
+            step.diagnostic("tyresUsed", worn.tyre());
+            step.diagnostic("brakesUsed", worn.brake());
+            step.diagnostic("strutUsed", worn.suspension());
+        }
         if (retraction != null && folded < 1 && retraction.frontalAreaM2() > 0) {
             // a bluff body in the air while down (less as it folds)
             Vec3d at = wheel.hub(step.internal(0));
@@ -159,7 +199,7 @@ public final class LegPart implements Part {
         Carry carried = (Carry) a.carried();
         if (carried == null) { return; }
         WheelCorner.Carry c = carried.wheel();
-        wheel.after(a, c, 0, 0, 0, WheelCorner.SHOWN);
+        wheel.after(a, c, 0, 0, 0, WheelCorner.SHOWN, wearing);
         if (retraction != null) {
             double folded = a.internal(retractState());
             boolean loaded = c.contact() || a.internal(0) > WEIGHT_ON_WHEELS_M;

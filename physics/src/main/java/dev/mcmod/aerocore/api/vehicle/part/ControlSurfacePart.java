@@ -23,6 +23,11 @@ import java.util.Objects;
  * deflection; positive moves the trailing edge toward +Z. Loads from AeroSolver through Rudder.load with the given
  * section polar (Rudder.lowAspectPolar against a hull, Rudder.freeEndsPolar free at both ends), blended by immersion
  * in water and air; inside a propeller's race (Connection.Slipstream) the inflow is raised by its slipstream.
+ *
+ * <p>0.42: a surface given a Wearing (wearing) has one condition, STRUCTURE (0), which only the game changes (it does not
+ * wear itself). A damaged surface answers its input less (bent, its linkage slack): the deflection is times
+ * 1 - authorityLoss x used, and with all authority lost it stays at neutral (jammed there; as a fin it still carries the
+ * loads of its own incidence). Diagnostic "structureUsed". Without a Wearing: no conditions, as before 0.42.
  */
 public final class ControlSurfacePart implements Part {
     private final PartDesign design;
@@ -30,15 +35,43 @@ public final class ControlSurfacePart implements Part {
     private final Rudder surface;
     private final MassProperties mass;
     private final List<DesignIssue> issues;
+    private final Wearing wearing;
+
+    /** 0.42: the name of a wearing surface's condition (index 0). */
+    public static final String STRUCTURE = "structure";
+    private static final List<String> CONDITIONS = List.of(STRUCTURE);
+
+    /** 0.42: what damage does to a control surface (the caller's rule): the share of its deflection lost with its structure used up (in proportion before). */
+    public record Wearing(double authorityLoss) {
+        public Wearing {
+            if (!(authorityLoss >= 0 && authorityLoss <= 1)) { throw new IllegalArgumentException("Authority loss 0..1"); }
+        }
+        /** Rule: all of it (a surface used up is jammed at neutral). */
+        public static Wearing typical() { return new Wearing(1); }
+    }
 
     public ControlSurfacePart(PartDesign design, double chordM, double spanM, double maxDeflectionDeg, double thicknessRatio, AirfoilPolar polar,
                               MassProperties mass, List<DesignIssue> issues) {
+        this(design, chordM, spanM, maxDeflectionDeg, thicknessRatio, new Rudder(Vec3d.ZERO, chordM, spanM, polar), mass, issues, null);
+    }
+
+    private ControlSurfacePart(PartDesign design, double chordM, double spanM, double maxDeflectionDeg, double thicknessRatio, Rudder surface,
+                               MassProperties mass, List<DesignIssue> issues, Wearing wearing) {
         this.design = Objects.requireNonNull(design, "design");
         this.chordM = chordM; this.spanM = spanM; this.maxDeflectionDeg = maxDeflectionDeg; this.thicknessRatio = thicknessRatio;
-        this.surface = new Rudder(Vec3d.ZERO, chordM, spanM, polar);
+        this.surface = surface;
         this.mass = Objects.requireNonNull(mass, "mass");
         this.issues = List.copyOf(issues);
+        this.wearing = wearing;
     }
+
+    /** 0.42: this surface damageable by this rule, with the condition STRUCTURE; null: one that is not. A copy. */
+    public ControlSurfacePart wearing(Wearing wearing) {
+        return new ControlSurfacePart(design, chordM, spanM, maxDeflectionDeg, thicknessRatio, surface, mass, issues, wearing);
+    }
+    /** 0.42: what damage does to this surface, or null. */
+    public Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
 
     public double chordM() { return chordM; }
     public double spanM() { return spanM; }
@@ -53,6 +86,12 @@ public final class ControlSurfacePart implements Part {
 
     @Override public void loads(PartStep step) {
         double angle = Math.clamp(step.input("deflection", 0), -1, 1) * Math.toRadians(maxDeflectionDeg);
+        if (wearing != null) {
+            // 0.42: a damaged surface moves less for the same input
+            double used = Math.min(step.used(0), 1);
+            if (used > 0) { angle *= 1 - wearing.authorityLoss() * used; }
+            step.diagnostic("structureUsed", used);
+        }
         FloatingBodyDynamics.Contact contact = step.environment().sphere(step.point(Vec3d.ZERO), spanM / 2);
         double f = contact.fraction();
         double[] race = step.slipstream();

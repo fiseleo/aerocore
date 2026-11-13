@@ -30,11 +30,22 @@ public final class FrameFlex {
     public record Corner(double xM, double zM, double forceN, double stiffnessNPerM) {}
 
     /** The stations' twists at the step's end. */
-    public static double[] solve(Vehicle.Flex frame, double[] start, List<Corner> corners) {
+    public static double[] solve(Vehicle.Flex frame, double[] start, List<Corner> corners) { return solve(frame, start, corners, 1); }
+
+    /**
+     * 0.42: the same with the frame's stiffness times a share (0..1: a damaged frame, Part.frameStiffness): every entry
+     * alike, so the matrix stays symmetric with rows summing to zero. With 1 it is the solve above to the last bit.
+     */
+    public static double[] solve(Vehicle.Flex frame, double[] start, List<Corner> corners, double stiffnessShare) {
         int n = frame.stationX().length;
         double[][] a = new double[n + 1][n + 1];
         double[] b = new double[n + 1];
-        for (int i = 0; i < n; i++) { System.arraycopy(frame.twistNmPerRad()[i], 0, a[i], 0, n); }
+        if (stiffnessShare == 1 || Double.isNaN(stiffnessShare)) {
+            for (int i = 0; i < n; i++) { System.arraycopy(frame.twistNmPerRad()[i], 0, a[i], 0, n); }
+        } else {
+            double share = Math.clamp(stiffnessShare, 0.0, 1.0);
+            for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) { a[i][j] = share * frame.twistNmPerRad()[i][j]; }
+        }
         for (Corner c : corners) {
             double[] sh = shape(frame.stationX(), c.xM());
             double kz2 = c.stiffnessNPerM() * c.zM() * c.zM(), was = 0;

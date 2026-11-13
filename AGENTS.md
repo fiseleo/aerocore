@@ -14,7 +14,7 @@
     同步與存檔，以及海浪與尾浪的計算與渲染（使用者：「浪的渲染要在 AeroCore」）。hdfv 缺什麼物理或計算，就在 AeroCore 補成通用 API。
     架構見 [docs/VEHICLE_PARTS.md](docs/VEHICLE_PARTS.md)。
 - 先維持可驗證的物理核心，再逐步接入載具玩法。不要把近似模型描述成工程級 CFD。
-- 截至 2026-10-21，版本為 **0.41.0**（第一次對外發布）：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
+- 截至 2026-11-12，版本為 **0.42.0**（0.41.0 是 2026-10-21 第一次對外發布的版本）：具備六自由度剛體、四角浮力、可調配重、受力／環境流速粒子顯示、溫壓流體性質與基礎熱交換；
   0.6 加入球形元件接觸反力（摩擦／反彈）、指定的線性 Airy 波浪、BEMT 螺旋槳推力（平台艉部示範槳）與阻力摩擦生熱；
   0.7 加入接觸摩擦生熱、波壓深度衰減（垂直 Froude–Krylov）、水平 Froude–Krylov 力與附加質量，測試球改用六自由度剛體與 `ContactSolver`；
   0.8 加入浮筒垂直方向的波浪輻射阻尼（Hulme 半球資料、Cummins 記憶力）與浮筒間點吸收體干擾；
@@ -133,6 +133,12 @@
   授權 LGPL-3.0-only；開發用程式移出發布的 JAR（AutoShot、`DevWindow` 與它的 mixin、`/aerocoredev` 成了另一個不發布的 mod
   `aerocore_devtools`，GameTest 在 `neoforge/src/gametest`；`verifyReleaseJar`）；簡體中文；Mod 資訊與 Logo；對外的 README（三語）、CHANGELOG、
   `release/`；正式版環境的載入測試 `scripts/release-test/release_test.py`。物理逐位元不變。
+  0.42（2026-11-12，使用者「H4～H6（變速箱的試算圖、路面坡道方塊） + 還有修理系統 + 還有儲物箱系統」，hdfv 0.25；使用者選了四種損壞來源、
+  修理廠加就地急修、超過 80 % 換新零件、預設寫實、乘員會受傷、三種儲物、貨物算重量）加：零件的狀況項目（`Part.conditions`、
+  `VehicleState.used`／`setUsed`、`PartStep.used`／`wear`）、損壞的計算 `api.damage`（撞擊能量與分配、摩擦片與胎面磨耗、運轉壽命、潛變、
+  疲勞、腐蝕、乘員風險、進水）、執行時零件的磨損與效果（預設關閉，`wearing(...)`）、貨艙（`Part.Hold`、`VehicleState.setHold`）、
+  `PartVehicle.Hurt` 事件、斜面方塊（`SlopedGround`、`api.ground.SlopedCell`）；見 [docs/CONDITION.md](docs/CONDITION.md)。
+  沒有狀況項目與貨的載具逐位元不變，0.41 的存檔照讀。
 - 獨立二維 CFD 實驗與離線流場圖仍保留。遊戲內粒子顯示目前是環境取樣；尾浪是線性自由面的非定常解（勢流），不是黏性流場求解。
 - AeroCore 不出可駕駛的載具與零件設計（`PartVehicle` 是給載具 Mod 用的通用實體；0.20 起載具 GameTest 在 hdfv）；尚無簧下質量與輪胎溫度、三維 CFD、碎浪動力、
   波浪反射、遠方風暴的湧浪、大氣層結（背風波）、氣象動力學、相變或完整熱流耦合；海岸是幾何光學（無反射、島後只有一個到達波）。
@@ -247,6 +253,7 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | physics 的 `api/gasdynamics/`、`api/propellant/`、`api/storage/` | 0.28：可壓縮流（震波、錐形流、加熱與摩擦管流、廣義一維流、表面壓力、氣動加熱）；固體推進劑與火箭；氫的儲存；純 Java |
 | physics 的 `api/acoustics/` | 0.37 聲音：`Voice`、`Noise`、`Filters`、`DelayLine`、`Oscillator`、`Modal`、`Mix`、`Dsp`、`Spectrum`、`Wav`；`Propagation`、`SourceTrack`、`SonicBoom`、`RoomAcoustics`、`Surface`、`Transmission`、`Loudness`；聲源 `PistonEngineNoise`、`TurbineNoise`、`RotorNoise`、`MotorNoise`、`TyreNoise`、`FlowNoise`、`WaterNoise`、`ImpactNoise`、`GasJetNoise`、`ProcessNoise`、`Horn`；純 Java |
 | neoforge 的 `client/sound/` | 0.37：`RuntimeSounds`（程式產生的靜態聲音）、`SynthInstance`、`SynthStream`／`SynthThread`（合成與補塊執行緒）、`LiveSound`、`SoundHooks`、`Efx`、`Listening`、`SoundRecorder`、`DevSoundCommands`（`/aerocoredev sound`） |
+| physics 的 `api/damage/` | 0.42：`ImpactDamage`、`Wear`、`Corrosion`、`Casualty`（損壞的計算，純 Java）；狀況項目與貨艙在 `api/vehicle/`（`Part`、`VehicleState`、`PartStep`、`PartAfter`），斜面在 `api/ground/SlopedCell` 與 neoforge 的 `vehicle/SlopedGround` |
 | physics 的 `api/metallurgy/` | 0.40：`Species`、`Reaction`、`Electrolysis`、`Smelting`、`Minerals`（冶金與電化學）；`api/petroleum/Methanol`；純 Java |
 | physics 的 `api/light/`、`api/AirData` | 0.38：`LightSignal`、`SectorColours`、`FieldLamp`、`Allard`（大量固定燈的資料與可見度）；`AirData`（ISA 的高度、QNH、空速、風分量）；純 Java |
 | neoforge 的 `probe/WorldAir`、`vehicle/VehicleTracks`、`client/FieldLamps` | 0.38：一點的風與空氣（和載具感受的相同）、能見度、峰值陣風；一點附近的載具清單；大量固定燈的客戶端（自己的著色器 `rendertype_aerocore_field_lamp`，在 `PartLate` 畫） |
@@ -437,6 +444,18 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
   - `VehicleState.restyled` 要逐位元接過所有狀態（`RestyleTest`）：VehicleState 加新欄位時，`restyled` 也要複製它。
 - 0.32 搬車：`VehicleState.placed` 也要接過車上的東西（`PlaceTest`）：VehicleState 加新欄位時，想一下搬車時要不要保留它。
   組裝室推出載具時用 `place`，不要用 `setBlueprint`（hdfv 0.13 以前推出時把清空的油箱又加滿）。
+- 0.42 狀況、損壞、貨艙、斜面（詳見 docs/CONDITION.md）：
+  - 狀況不放進零件的內部狀態：內部狀態在數量改變時整台重設、物理出錯時回初始值、也不同步。狀況依零件 id 與名稱存在 `VehicleState.used`；
+    `VehicleState` 加新欄位時要一起改的 `placed`、`restyled`、`refitted`、`separate` 都已用 `carryCondition`（`ConditionTest.carriedWhereverTheStateGoes`），
+    `physicsFailed` 用 `keepHardware`。
+  - 會磨損的零件在所有項目都是 0 時要和沒有 `Wearing` 逐位元相同：用 `if (used > 0)` 分支，不要乘剛好是 1 的係數
+    （三個新測試類別都比對 `toJson` 逐位元）。磨損的增量只在 `finish` 加進狀態（`Prepared.worn`），這一步的受力不受它影響。
+  - 不要為了磨損在既有零件加內部狀態或顯示值：舊存檔的內部狀態會整台重設。
+  - `api.damage` 同 0.35、0.40：只放公式與有出處的典型值；韌性、壽命、體積、遊戲的時間尺度是 hdfv 的規則。改典型值時同時改
+    CONDITION.md 的〈來源與量級〉與 `DamageTest` 的範圍。
+  - 貨艙的質量由遊戲設（`setHold`），AeroCore 不管物品；設計時算進零件質量的載重不要再放進貨艙（重複）。
+  - 斜面方塊：`WorldGround` 對實作 `SlopedGround` 的方塊用平面當頂面，形狀裡不在格子邊界上的面（階梯的踏面與立面）不算；
+    不要改回只看碰撞形狀（hdfv 0.25 量到 1:4 的階梯坡滑行掉速是真斜面的兩倍以上）。玩家與車身的碰撞仍用碰撞形狀。
 - 0.40 冶金（詳見 docs/METALLURGY.md）：同 0.35，只放公式與有出處的典型值（槽電壓、電流效率、出爐熱、電效率、礦物比例）；
   哪台機器、一批多少、配方的電量由 hdfv 決定（hdfv 的產生器呼叫這些算好寫進配方，測試核對）。新的物種要有生成焓與莫耳質量的出處；
   `Reaction` 建立時檢查質量守恆，原子由呼叫者配平。改典型值時同時改 METALLURGY.md 的表與 `MetallurgyTest` 的實廠範圍。
@@ -731,6 +750,7 @@ IDE 優先用 `open-ide.cmd` 開：專案的 Gradle JVM 設為 `#JAVA_HOME`，�
 | 0.38.0 | 2026-10-19，原開發機 | 683＋5（新增 `LightSignalTest`（每個序號每週期亮一次、短閃不被幀率吃掉）、`SectorColoursTest`（PAPI 在 3° 兩紅兩白、偏高全白、偏低全紅、羽化）、`AllardTest`（10 000 cd 在 MOR 800 m：夜 1672 m、日 812 m）、`AirDataTest` 4（ISA 反算、QNH／QFE 與高度表、空速含超音速皮托、風分量與方位）、`WindGustsTest` 的峰值、`SurfaceWindTest` 的盛行風；`VehicleTest` 1e-9 不變） | 57（新增 `airAtAPointIsWhatVehiclesFeel`（海域內外）、`tracksFindTheVehiclesNearAPoint`（自己的批次：放在預設批次時同批的 `hullFloatsLevelAtItsDesignWaterline` 失敗）） | hdfv 0.20 開發時的 `AutoShot`（`AeroCore HDFV QA`，第 2 個螢幕，使用者同意）：`/aerocoredev lamps grid` 1638 盞約每幀 0.3～0.5 ms；PAPI 高 4 白、在下滑道上 2 白 2 紅（紅在靠跑道側）、低 4 紅；夜間 1、2、4 km 都看得到；順閃燈；白天淡。選用著色的回歸：沒選用的材質前後截圖逐像素比對只差 ≤ 2 級（浪、遠處區塊、引擎預覽的皮帶這類會動的地方）。原版 position_tex_color 丟掉 alpha < 0.1 的像素，燈先是看不見的，改成自己的著色器 |
 | 0.39.0 | 2026-10-20，原開發機 | 686＋5（新增 `AmbientOcclusionTest.aWalledFloorDarkAtItsCornersIsSplitAtItsOpenMiddle`、`LensPatchesTest` 2） | 57 | 美化著色（`Beautify`、材質的 `beautify`、暖色方塊光、地面色、`Refine.CENTRE`、燈罩光暈、接觸陰影、`ShotDiff`）；`PartGpu` 每種 render type 只套一次著色器、`GPU_MIN_QUADS` 96 → 32。hdfv 0.22 的 AutoShot：關掉時與 0.38 相同（只差會動的東西）；hdfv 的排列場景 5.75 → 4.47 ms、95 → 113 FPS（車輪成為件之後；沒有這次的 `PartGpu` 是 11 ms、58 FPS） |
 | 0.41.0 | 2026-10-21，原開發機 | 694＋5（新增 `LangParityTest`：en_us、zh_tw、zh_cn 的鍵與順序一樣，zh_cn 沒有繁體專用字） | 57（搬到 `neoforge/src/gametest`，開發 run 同時載入 `aerocore_devtools`） | 第一次對外發布。`verifyReleaseJar` 確認發布的 JAR 沒有開發用類別、GameTest 結構與 devtools，有 `COPYING`、`COPYING.LESSER`、Logo 與 mods.toml。正式版 NeoForge 21.1.252 的乾淨環境（`scripts/release-test/release_test.py`，和 hdfv 0.24 一起）：專用伺服器只有兩個 mod、加 JEI、加 JEI 與 Create 都起得來，記錄裡沒有可疑的行（Create 那組只有 Create 自己的一行 mixin 警告）；客戶端有 JEI、沒有 JEI 都正常結束，0.23 的 QA 世界打得開；客戶端連本機正式版伺服器的多人也正常。hdfv 0.22 的比較場景：機器 115～116、停車 113～114、塔台 119 FPS（0.22：114、111、119）；整合伺服器 tick 平均 54～57 ms，同場景 0.22 是 58～70 ms。物理程式只改了幾個成員的可見性（給 devtools 用） |
+| 0.42.0 | 2026-11-12，原開發機 | 742＋5（新增 48：`ConditionTest` 6（零件磨到失效、遊戲在兩步之間與一步之內設值、依名稱存讀進改過的藍圖、`placed`／`restyled`／`refitted`／`separate`／`keepHardware` 都帶過去、貨隨車落下與加速、項目名稱不能重複）、`DamageTest` 10（撞擊能量、分配的手算、NCAP 的量級、來令片與胎面的壽命量級、ISO 281、Larson-Miller、Miner、ISO 9223 與海水的速率、風險曲線的兩個錨點、進水）、`SlopedCellTest` 4、`WheelWearTest` 10、`DrivelineWearTest` 10、`StructureDamageTest` 8（後三個由子代理寫，每個零件比對有無 `Wearing` 的 `toJson` 逐位元相同）；`VehicleTest` 1e-9 不變） | 58（新增 `wearCargoAndHurtBelongToTheVehicle`：狀況與貨在實體上設定、存讀；`hurt()` 沒有監聽者時回 false、有監聽者 `take()` 時回 true） | `build publish` 給 hdfv 0.25；未啟動客戶端。未驗證：`SlopedGround` 在遊戲中（AeroCore 自己沒有斜面方塊，由 hdfv 的坡道 GameTest 確認）、DISPLAY 的 `u`／`h` 在客戶端讀到的值、多人同步 |
 | 0.32.0 | 2026-10-17，原開發機 | 544＋5 | 52 | 新 JUnit `PlaceTest`（搬到別處：油箱、內部狀態、顯示值、軸轉速逐位元保留，車身在新位置靜止，波浪記憶重來；複本不影響原本）；遊戲中由 hdfv 0.14 確認：組裝室推出的車保留油（GameTest）；`AutoShot` 的 `server`（本機專用伺服器與兩個客戶端）、`key <按鍵名稱> tap`（hdfv 的換檔、手煞車、四驅鍵）、連線中斷時關掉遊戲、暫停選單自動關掉；未確認：連不上伺服器時自己關掉（只寫了程式） |
 | 0.31.0 | 2026-10-17，原開發機 | 542＋5 | 52 | 新 JUnit `RestyleTest`（換外觀後與原本逐位元相同 300 步、複本不影響原本、質量或零件不同時拒絕）；遊戲中由 hdfv 0.13 確認：上傳的圖當貼紙材質（暫代透明、到了換圖、不重新烘焙）、烤漆房完成時 `replaceBlueprint` 讓轎車在原地變色並保留狀態（GameTest：質量不變、位置不動） |
 | 0.29.0 | 2026-10-15，原開發機 | 517＋5 | 52 | 新 JUnit：`MeshCompatTest`（0.28 形狀對凍結副本 1e-12）、`MeshUvTest`、`MeshOpsTest`（含 OBJ 來回與 Blender 式的 OBJ）、`AmbientOcclusionTest`（接觸處變暗、封閉與被覆蓋、5 m 機匣外 5 cm 的環管不算覆蓋、斜面不自遮、長面細分、9.3 萬面 1.2 秒）、`PlumeTest`（Prandtl-Pack 格距、音速噴口壓比 3 的 1.1～1.3 D、Ashkenas-Sherman 馬赫盤、Lau 勢核、Charity 黑體表 ±30）；既有測試數字不變。客戶端由 hdfv 0.11 的 `AutoShot` 看：載具改走背景烘焙（貼圖、遮蔽、細節層級）、零件著色器在正午／黃昏／夜晚與設計畫面；開發中發現並修正遮蔽的四個問題（雜湊鍵相撞、長面條紋、斜面自遮、體素覆蓋挖洞，見 docs/RENDERING.md）。hdfv 0.11 開發中補上（版本號仍是 0.29.0）：`PartRenderer.glow`、`PartVehicle.partPoint`、替身 `STAND_IN`（`MeshOpsTest.aStandInShowsAloneAtTheFarthestLevelOnly`，含遮蔽）、GPU 快取 `PartGpu`（同一畫面 12.1 萬面：13.1 → 1.5 ms／幀，畫面一致）、尾焰核心與菱形的強度（疊加後不飽和成黃綠） |
@@ -790,6 +810,7 @@ CFD CSV／圖在 `cfd/build/experiments/water/` 或 `air/`；`scripts/plot-cfd.p
 - [大氣](docs/ATMOSPHERE.md)：全世界的風、天空、雲與雨雪、飛行用大氣、空氣資料與一點的風（0.38）；[地面載具](docs/GROUND.md)：輪胎、滾動阻力、軟地面。
 - [車架](docs/FRAME.md)：會扭的車架進物理、梁 FEM、承載式車身的扭轉（0.33）。
 - [鉸接](docs/COUPLING.md)：兩台載具的接頭、求解、世界中的連結、驗證（0.36）。
+- [狀況、損壞與貨艙](docs/CONDITION.md)：狀況項目、`api.damage` 的公式與來源、執行時零件的磨損與效果、貨艙、`PartVehicle.Hurt`（0.42）。
 - [冶金與電化學](docs/METALLURGY.md)：反應焓、電解、電爐、礦物品位、甲醇（0.40）。
 - [聲音](docs/ACOUSTICS.md)：程式合成的聲源、傳播、房間、響度、Minecraft 聲音引擎的接口、接觸事件與遠處的聲源（0.37）。
 - [零件化載具](docs/VEHICLE_PARTS.md)：零件藍圖、組裝與連接、通用載具物理、遊戲端 `PartVehicle`、驗證。

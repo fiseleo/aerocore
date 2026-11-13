@@ -315,4 +315,33 @@ public final class Suspension {
         double a = (ks + cd / dt) / d;
         return new Step(fs + extraN + a * (ft - fs - extraN), a * kt * dt, c, delta, ft, ks, cd, kt, fs, extraN, false);
     }
+
+    /** 0.42: the bump stop's own force at compression c (0 within the travel) with an air spring's air scaled, N. */
+    public double stopForce(double c, double scale) {
+        return c > travelM ? BUMP_STOP * Math.max(spring.rate(travelM, scale), 1e3) * (c - travelM) : 0;
+    }
+
+    /**
+     * 0.42: the step with the damper's coefficient times dampingShare (a worn or blown damper) and the spring's force
+     * and rate, stops included, times springShare (a collapsed strut): both 0..1, and with both 1 it is the step above
+     * to the last bit. The Step keeps the scaled values, so its compression() follows them.
+     */
+    public Step step(Tyre tyre, double penetrationM, double rate, double compressionM, double ownRate, double extraN, double dt, double scale,
+                     double dampingShare, double springShare) {
+        if (dampingShare == 1 && springShare == 1) { return step(tyre, penetrationM, rate, compressionM, ownRate, extraN, dt, scale); }
+        double damping = Math.clamp(Double.isNaN(dampingShare) ? 1 : dampingShare, 0.0, 1.0), share = Math.clamp(Double.isNaN(springShare) ? 1 : springShare, 0.0, 1.0);
+        double c = Math.max(compressionM, 0), delta = penetrationM - c;
+        double kt = delta > 0 ? tyre.verticalStiffness(delta) : 0, ft = delta > 0 ? tyre.verticalForceN(delta) : 0;
+        double ks = share * rate(c, scale), fs = share * force(c, scale);
+        double guess = ownRate;
+        for (int i = 0; i < 4; i++) { guess = (ft - fs - extraN + kt * dt * rate) / (kt + ks + damping * damper.coefficient(guess) / dt + 1e-9) / dt; }
+        // the 1e-9 N/m the passes above carry stays in the damping: a strut with nothing left (no spring, no damping, off
+        // the ground) stays finite here and in Step.compression
+        double cd = damping * damper.coefficient(guess) + 1e-9 * dt;
+        double d = kt + ks + cd / dt;
+        double next = c + (ft - fs - extraN + kt * dt * rate) / d;
+        if (next < 0) { return new Step(ft + kt * c, kt * dt, c, delta, ft, 0, 0, kt, fs, extraN, true); }
+        double a = (ks + cd / dt) / d;
+        return new Step(fs + extraN + a * (ft - fs - extraN), a * kt * dt, c, delta, ft, ks, cd, kt, fs, extraN, false);
+    }
 }

@@ -23,6 +23,12 @@ import java.util.Objects;
  * "pitch" (0..1) sets the blade between its fine and coarse stops; a part wrapping it (a constant-speed governor) can
  * give the setting itself. Loads only from the air: the disk's share in water (the immersion of a sphere of its
  * radius) gives nothing (the blades would break). It goes first in a step: surfaces in its race read its thrust.
+ *
+ * <p>0.42: a propeller given a Wearing (wearing) has one condition, BLADES (0), which only the game changes (it does not
+ * wear itself). Damaged blades give less thrust (times Wearing.thrustShare: 1 - thrustLoss x used, failedThrust at 1)
+ * for the same torque: the shaft's load does not fall, the power is wasted. The thrust it publishes for surfaces in
+ * its race falls with it. Diagnostic "bladesUsed"; "thrustN" is the damaged one. A part wrapping it lists the condition
+ * first. Without a Wearing: no conditions, as before 0.42.
  */
 public final class AirPropellerPart implements Part {
     /** Blade settings tabulated between the stops, and the Mach numbers (resultant at 0.7 R). */
@@ -35,9 +41,38 @@ public final class AirPropellerPart implements Part {
     private final MassProperties mass;
     private final List<DesignIssue> issues;
     private volatile AirPropeller.Table table;
+    private final Wearing wearing;
+
+    /** 0.42: the name of a wearing propeller's condition (index 0). */
+    public static final String BLADES = "blades";
+    private static final List<String> CONDITIONS = List.of(BLADES);
+
+    /**
+     * 0.42: what damage does to the blades (the caller's rule): the share of the thrust lost as they come to the end
+     * (in proportion before), and the share of the thrust left with them used up (broken off short).
+     */
+    public record Wearing(double thrustLoss, double failedThrust) {
+        public Wearing {
+            if (!(thrustLoss >= 0 && thrustLoss <= 1) || !(failedThrust >= 0 && failedThrust <= 1)) { throw new IllegalArgumentException("Thrust shares 0..1"); }
+        }
+        /** Rule: bent and chipped blades lose up to 0.6 of their thrust; stubs give a tenth. */
+        public static Wearing typical() { return new Wearing(0.6, 0.1); }
+        /** The share of its thrust a propeller keeps with so much of its blades used. */
+        public double thrustShare(double used) {
+            if (!(used > 0)) { return 1; }
+            return used >= 1 ? failedThrust : 1 - thrustLoss * used;
+        }
+    }
 
     /** fineDeg, coarseDeg: blade settings (deg added to the design's blade angles) at pitch 0 and 1. */
     public AirPropellerPart(PartDesign design, AirPropeller.Geometry geometry, double fineDeg, double coarseDeg, MassProperties mass, List<DesignIssue> issues) {
+        this(design, geometry, fineDeg, coarseDeg, mass, issues, null, null);
+    }
+
+    private AirPropellerPart(PartDesign design, AirPropeller.Geometry geometry, double fineDeg, double coarseDeg, MassProperties mass, List<DesignIssue> issues,
+                             Wearing wearing, AirPropeller.Table built) {
+        this.wearing = wearing;
+        this.table = built;
         this.design = Objects.requireNonNull(design, "design");
         this.geometry = Objects.requireNonNull(geometry, "geometry");
         if (!(coarseDeg >= fineDeg) || !Double.isFinite(fineDeg + coarseDeg)) { throw new IllegalArgumentException("Coarse stop must not be below the fine stop"); }
@@ -50,6 +85,12 @@ public final class AirPropellerPart implements Part {
     public AirPropeller.Geometry geometry() { return geometry; }
     public double fineDeg() { return fineDeg; }
     public double coarseDeg() { return coarseDeg; }
+
+    /** 0.42: this propeller damageable by this rule, with the condition BLADES; null: one that is not. A copy (sharing the table already built). */
+    public AirPropellerPart wearing(Wearing wearing) { return new AirPropellerPart(design, geometry, fineDeg, coarseDeg, mass, issues, wearing, table); }
+    /** 0.42: what damage does to this propeller, or null. */
+    public Wearing wearing() { return wearing; }
+    @Override public List<String> conditions() { return wearing == null ? List.of() : CONDITIONS; }
 
     /** The coefficient table, built on first use (a client only drawing the propeller never builds it). */
     public AirPropeller.Table table() {
@@ -103,11 +144,18 @@ public final class AirPropellerPart implements Part {
         double ahead = PropellerSolver.load(step.state(), step.properties(), propeller, rps + dn, air).torqueNm();
         double torque = share * load.torqueNm(), slope = share * (ahead - load.torqueNm()) / (dn * 2 * Math.PI);
         Vec3d force = load.force().force().scale(share);
+        double thrust = share * load.thrustN();
+        if (wearing != null) {
+            // 0.42: damaged blades push less for the same torque
+            double used = step.used(0);
+            if (used > 0) { double left = wearing.thrustShare(used); force = force.scale(left); thrust *= left; }
+            step.diagnostic("bladesUsed", used);
+        }
         if (force.lengthSquared() > 0) { step.force(new AppliedForce(AppliedForce.Kind.THRUST, load.force().offset(), force)); }
         step.rotorTorque(0, -torque, -slope, true);
-        step.thrust(0, share * load.thrustN(), d);
+        step.thrust(0, thrust, d);
         step.diagnostic("rps", rps);
-        step.diagnostic("thrustN", share * load.thrustN());
+        step.diagnostic("thrustN", thrust);
         step.diagnostic("torqueNm", torque);
         step.diagnostic("shaftPowerW", share * load.shaftPowerW());
         step.diagnostic("advanceMps", advance);

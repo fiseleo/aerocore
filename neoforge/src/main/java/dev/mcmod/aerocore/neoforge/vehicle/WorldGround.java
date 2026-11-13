@@ -17,12 +17,14 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * The world's blocks as ground for wheels (0.24): rays walk the block cells they cross (Amanatides and Woo) and clip
  * each block's collision shape, so slabs, stairs, snow layers, carpets and multi-box shapes count as they are; a cell
  * also tries the block below it (fences and walls stand 1.5 m tall). The surface is GroundSurfaces' (wet in rain).
+ * 0.42: a block that implements SlopedGround (a road ramp) is met on its sloped top, with the slope's normal.
  * Blocks in chunks that are not loaded are no ground (never loads a chunk). Shapes and surfaces are kept until clear(),
  * which the owner calls once a tick (blocks may change between ticks, not within one).
  */
 public final class WorldGround implements Ground {
-    private record Cell(VoxelShape shape, GroundContact.Surface surface) {}
-    private static final Cell EMPTY = new Cell(null, null);
+    /** slope: the block's sloped top (0.42, SlopedGround), or null: its shape is the ground. */
+    private record Cell(VoxelShape shape, GroundContact.Surface surface, dev.mcmod.aerocore.api.ground.SlopedCell slope) {}
+    private static final Cell EMPTY = new Cell(null, null, null);
 
     private final Level level;
     private final Long2ObjectOpenHashMap<Cell> cells = new Long2ObjectOpenHashMap<>();
@@ -50,7 +52,7 @@ public final class WorldGround implements Ground {
         int limit = 3 * ((int) Math.ceil(maxM) + 2);
         for (int visited = 0; visited < limit; visited++) {
             for (int below = 0; below <= 1; below++) {
-                Hit hit = clip(cell[0], cell[1] - below, cell[2], start, end, from);
+                Hit hit = clip(cell[0], cell[1] - below, cell[2], start, end, from, direction, maxM);
                 if (hit != null && (best == null || hit.distanceM() < best.distanceM())) { best = hit; }
             }
             int axis = next[0] <= next[1] ? (next[0] <= next[2] ? 0 : 2) : (next[1] <= next[2] ? 1 : 2);
@@ -62,12 +64,29 @@ public final class WorldGround implements Ground {
         return best;
     }
 
-    private Hit clip(int x, int y, int z, Vec3 start, Vec3 end, Vec3d from) {
+    private Hit clip(int x, int y, int z, Vec3 start, Vec3 end, Vec3d from, Vec3d direction, double maxM) {
         Cell c = cell(x, y, z);
         if (c.shape() == null) { return null; }
+        // 0.42: a sloped block's top is its plane; its shape (steps) only gives the cell's sides
+        if (c.slope() != null) {
+            Hit top = c.slope().cast(from, direction, maxM, c.surface());
+            if (top != null) { return top; }
+        }
         BlockHitResult r = c.shape().clip(start, end, new BlockPos(x, y, z));
         if (r == null) { return null; }
         Vec3d normal = new Vec3d(r.getDirection().getStepX(), r.getDirection().getStepY(), r.getDirection().getStepZ());
+        if (c.slope() != null) {
+            // in a step that stands a little proud of the plane: on the slope
+            if (r.isInside()) { return new Hit(from, c.slope().normal(), 0, c.surface()); }
+            // a tread or a riser inside the cell is not there for wheels; a face on the cell's boundary is a real side
+            Vec3 p = r.getLocation();
+            boolean side = switch (r.getDirection().getAxis()) {
+                case X -> Math.abs(p.x - x) < 1e-6 || Math.abs(p.x - x - 1) < 1e-6;
+                case Z -> Math.abs(p.z - z) < 1e-6 || Math.abs(p.z - z - 1) < 1e-6;
+                case Y -> r.getDirection() == net.minecraft.core.Direction.DOWN;
+            };
+            if (!side) { return null; }
+        }
         if (r.isInside()) { return new Hit(from, normal, 0, c.surface()); }
         Vec3 at = r.getLocation();
         Vec3d point = new Vec3d(at.x, at.y, at.z);
@@ -84,7 +103,9 @@ public final class WorldGround implements Ground {
         } else {
             BlockState state = level.getBlockState(pos);
             VoxelShape shape = state.isAir() ? null : state.getCollisionShape(level, pos, CollisionContext.empty());
-            c = shape == null || shape.isEmpty() ? EMPTY : new Cell(shape, GroundSurfaces.of(level, pos));
+            double[] slope = state.getBlock() instanceof SlopedGround sloped ? sloped.groundSlope(state) : null;
+            c = shape == null || shape.isEmpty() ? EMPTY : new Cell(shape, GroundSurfaces.of(level, pos),
+                    slope == null || slope.length != 3 ? null : new dev.mcmod.aerocore.api.ground.SlopedCell(x, y, z, slope[0], slope[1], slope[2]));
         }
         cells.put(key, c);
         return c;

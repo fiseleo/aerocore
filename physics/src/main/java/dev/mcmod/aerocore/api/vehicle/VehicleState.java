@@ -36,6 +36,10 @@ public final class VehicleState {
     final double[] supply;
     /** Parts that asked to be cast off (PartStep.jettison, 0.28), until the game takes them. */
     final java.util.Set<String> jettisons = new java.util.LinkedHashSet<>();
+    /** How much of each part's conditions is used up (Part.conditions; 0 new .. 1 failed), in installed order (0.42). */
+    final double[] used;
+    /** Cargo in each hold (Vehicle.holds), kg (0.42). */
+    final double[] holdKg;
     List<AppliedForce> forces = List.of();
     Map<String, Map<String, Double>> diagnostics = Map.of();
 
@@ -56,6 +60,8 @@ public final class VehicleState {
         }
         supply = new double[vehicle.installed().size()];
         java.util.Arrays.fill(supply, 1);
+        used = new double[vehicle.conditions()];
+        holdKg = new double[vehicle.holds().size()];
         for (Vehicle.Installed i : vehicle.installed()) {
             double[] start = i.part().initialInternals();
             if (start.length != i.part().internalStates()) { throw new IllegalStateException("Part " + i.id() + " gives the wrong number of initial internals"); }
@@ -135,6 +141,99 @@ public final class VehicleState {
         return tankKg[tank];
     }
 
+    // ----- condition and cargo (0.42) -----
+
+    private int condition(String partId, int i) {
+        Vehicle.Installed p = vehicle.installed(partId);
+        if (p == null) { throw new IllegalArgumentException("No part " + partId); }
+        if (i < 0 || i >= p.part().conditions().size()) { throw new IndexOutOfBoundsException("Condition " + i + " of part " + partId); }
+        return vehicle.firstCondition(p.index()) + i;
+    }
+
+    /** How much of a part's i-th condition (Part.conditions) is used up: 0 new .. 1 failed. */
+    public double used(String partId, int i) { return used[condition(partId, i)]; }
+
+    /** The same by name; 0 for a part or a name the vehicle does not have (nothing there to wear). */
+    public double used(String partId, String name) {
+        Vehicle.Installed p = vehicle.installed(partId);
+        int i = p == null ? -1 : p.part().conditions().indexOf(name);
+        return i < 0 ? 0 : used[vehicle.firstCondition(p.index()) + i];
+    }
+
+    /**
+     * Sets how much of a part's i-th condition is used up, from outside its step: damage (a crash, corrosion) or a
+     * repair. Kept within 0..1; a value that is not a number is refused.
+     */
+    public void setUsed(String partId, int i, double value) {
+        if (Double.isNaN(value)) { throw new IllegalArgumentException("Condition must be a number"); }
+        used[condition(partId, i)] = Math.clamp(value, 0.0, 1.0);
+    }
+
+    /** Adds to a part's i-th condition (damage; negative mends) and returns what it then is, within 0..1. */
+    public double addUsed(String partId, int i, double amount) {
+        if (Double.isNaN(amount)) { throw new IllegalArgumentException("Condition must be a number"); }
+        int at = condition(partId, i);
+        return used[at] = Math.clamp(used[at] + amount, 0.0, 1.0);
+    }
+
+    /** All condition values in installed order (a copy), for sending to clients. */
+    public double[] usedValues() { return used.clone(); }
+    /** Replaces the condition values (a client's copy of the server's); values that do not fit or are not finite are skipped. */
+    public void setUsedValues(double[] values) {
+        for (int i = 0; i < Math.min(values.length, used.length); i++) { if (Double.isFinite(values[i])) { used[i] = Math.clamp(values[i], 0.0, 1.0); } }
+    }
+    /** The worst of all conditions (0 for a vehicle with none): whether anything needs looking at. */
+    public double worstUsed() { double w = 0; for (double u : used) { w = Math.max(w, u); } return w; }
+
+    /** Cargo in a hold (index in Vehicle.holds), kg. */
+    public double holdKg(int hold) { return holdKg[hold]; }
+    /** All the cargo aboard, kg. */
+    public double cargoKg() { double kg = 0; for (double h : holdKg) { kg += h; } return kg; }
+    /**
+     * Sets the mass of what a hold carries (kg; the game adds up its cargo). The mass is not held to the hold's volume:
+     * what fits is the game's rule, and an overloaded vehicle is the physics' to show.
+     */
+    public void setHold(int hold, double kg) {
+        if (!(kg >= 0) || !Double.isFinite(kg)) { throw new IllegalArgumentException("Cargo mass must be finite and nonnegative"); }
+        holdKg[hold] = kg;
+    }
+
+    /**
+     * Takes another state's conditions and cargo, by part id and name and by hold id: a state built anew (after a
+     * physics fault) keeps what its hardware has worn and what it carries.
+     */
+    public void keepHardware(VehicleState from) { from.carryCondition(this); }
+
+    /**
+     * Condition by part id and name and cargo by hold id, carried into out (separate, refitted, placed, restyled): they
+     * belong to the hardware, whatever else about the part changed. A part or hold that is new starts new and empty.
+     */
+    private void carryCondition(VehicleState out) {
+        Vehicle next = out.vehicle;
+        if (used.length > 0 && out.used.length > 0) {
+            java.util.Map<String, Vehicle.Installed> old = new java.util.HashMap<>();
+            for (Vehicle.Installed i : vehicle.installed()) { old.put(i.id(), i); }
+            for (Vehicle.Installed i : next.installed()) {
+                List<String> names = i.part().conditions();
+                Vehicle.Installed was = names.isEmpty() ? null : old.get(i.id());
+                if (was == null) { continue; }
+                List<String> before = was.part().conditions();
+                for (int k = 0; k < names.size(); k++) {
+                    int j = before.indexOf(names.get(k));
+                    if (j >= 0) { out.used[next.firstCondition(i.index()) + k] = used[vehicle.firstCondition(was.index()) + j]; }
+                }
+            }
+        }
+        if (holdKg.length > 0 && out.holdKg.length > 0) {
+            java.util.Map<String, Integer> old = new java.util.HashMap<>();
+            for (int k = 0; k < vehicle.holds().size(); k++) { old.put(vehicle.holds().get(k).id(), k); }
+            for (int k = 0; k < next.holds().size(); k++) {
+                Integer was = old.get(next.holds().get(k).id());
+                if (was != null) { out.holdKg[k] = holdKg[was]; }
+            }
+        }
+    }
+
     /** The parts that have asked to be cast off since the last call (PartStep.jettison, 0.28), by id; clears them. */
     public List<String> takeJettisons() {
         List<String> out = List.copyOf(jettisons);
@@ -159,6 +258,7 @@ public final class VehicleState {
         Vec3d velocity = s.velocity().add(omega.cross(com.subtract(s.position())));
         VehicleState out = new VehicleState(next, new RigidBodyState(com, velocity, s.orientation(), q.inertia().applyWorld(s.orientation(), omega)), dt);
         carryParts(out);
+        carryCondition(out);
         java.util.Map<String, Integer> tanks = tankIndex();
         for (int k = 0; k < next.tanks().size(); k++) {
             Integer was = tanks.get(next.tanks().get(k).id());
@@ -215,6 +315,7 @@ public final class VehicleState {
     public Refitted refitted(Vehicle next, java.util.function.ToDoubleFunction<String> densityKgPerM3) {
         VehicleState out = next.newState(origin(), body.orientation(), dt);
         carryParts(out);
+        carryCondition(out);
         java.util.Map<String, Integer> tanks = tankIndex();
         Map<String, Double> spilled = new java.util.LinkedHashMap<>();
         for (int k = 0; k < next.tanks().size(); k++) {
@@ -284,6 +385,7 @@ public final class VehicleState {
         if (radiation != null) { out.radiation.copyFrom(radiation); }
         out.primed = primed;
         out.jettisons.addAll(jettisons);
+        carryCondition(out);
         out.forces = forces;
         out.diagnostics = diagnostics;
         return out;
@@ -304,6 +406,8 @@ public final class VehicleState {
         System.arraycopy(tankFuel, 0, out.tankFuel, 0, tankFuel.length);
         System.arraycopy(supply, 0, out.supply, 0, supply.length);
         out.jettisons.addAll(jettisons);
+        System.arraycopy(used, 0, out.used, 0, used.length);
+        System.arraycopy(holdKg, 0, out.holdKg, 0, holdKg.length);
         out.diagnostics = diagnostics;   // until the next step replaces them
         return out;
     }
@@ -323,9 +427,25 @@ public final class VehicleState {
         for (double s : internals) { parts.add(s); }
         List<Object> tanks = new ArrayList<>();
         for (int k = 0; k < tankKg.length; k++) { tanks.add(Fields.object("fuel", tankFuel[k], "kg", tankKg[k])); }
-        return Fields.object("position", Fields.vector(body.position()), "velocity", Fields.vector(body.velocity()),
+        Map<String, Object> out = Fields.object("position", Fields.vector(body.position()), "velocity", Fields.vector(body.velocity()),
                 "orientation", List.of(q.w(), q.x(), q.y(), q.z()), "angularMomentum", Fields.vector(body.angularMomentum()), "trainSpeeds", speeds,
                 "internals", parts, "tanks", tanks);
+        // 0.42: what is worn (by part id and condition name) and what the holds carry (by hold id); nothing when new and empty
+        Map<String, Object> condition = new java.util.LinkedHashMap<>();
+        for (Vehicle.Installed i : vehicle.installed()) {
+            List<String> names = i.part().conditions();
+            Map<String, Object> of = new java.util.LinkedHashMap<>();
+            for (int k = 0; k < names.size(); k++) {
+                double u = used[vehicle.firstCondition(i.index()) + k];
+                if (u > 0) { of.put(names.get(k), u); }
+            }
+            if (!of.isEmpty()) { condition.put(i.id(), of); }
+        }
+        if (!condition.isEmpty()) { out.put("condition", condition); }
+        Map<String, Object> holds = new java.util.LinkedHashMap<>();
+        for (int k = 0; k < holdKg.length; k++) { if (holdKg[k] > 0) { holds.put(vehicle.holds().get(k).id(), holdKg[k]); } }
+        if (!holds.isEmpty()) { out.put("holds", holds); }
+        return out;
     }
 
     public static VehicleState fromJson(Vehicle vehicle, Object json, double dt) {
@@ -362,6 +482,25 @@ public final class VehicleState {
         if (parts.size() == state.internals.length) {   // a changed blueprint starts its parts afresh
             for (int i = 0; i < parts.size(); i++) {
                 if (parts.get(i) instanceof Number n && Double.isFinite(n.doubleValue())) { state.internals[i] = n.doubleValue(); }
+            }
+        }
+        // 0.42: by part id and name, so a changed blueprint keeps what still is there; saves from before have neither
+        if (f.raw("condition") instanceof Map<?, ?> condition) {
+            for (Vehicle.Installed i : vehicle.installed()) {
+                if (!(condition.get(i.id()) instanceof Map<?, ?> of)) { continue; }
+                List<String> names = i.part().conditions();
+                for (int k = 0; k < names.size(); k++) {
+                    if (of.get(names.get(k)) instanceof Number n && Double.isFinite(n.doubleValue())) {
+                        state.used[vehicle.firstCondition(i.index()) + k] = Math.clamp(n.doubleValue(), 0.0, 1.0);
+                    }
+                }
+            }
+        }
+        if (f.raw("holds") instanceof Map<?, ?> holds) {
+            for (int k = 0; k < state.holdKg.length; k++) {
+                if (holds.get(vehicle.holds().get(k).id()) instanceof Number n && Double.isFinite(n.doubleValue()) && n.doubleValue() > 0) {
+                    state.holdKg[k] = n.doubleValue();
+                }
             }
         }
         return state;

@@ -1,4 +1,4 @@
-# Release checklist (AeroCore 0.41.0)
+# Release checklist (AeroCore 0.42.0)
 
 Accounts, uploads and pushes are done by the user; each public step is agreed first. AeroCore goes up before hdfv.
 
@@ -6,7 +6,7 @@ Accounts, uploads and pushes are done by the user; each public step is agreed fi
 
 - [ ] `.\dev.ps1 clean build publish` passes (`verifyReleaseJar` included); `.\dev.ps1 :neoforge:runGameTestServer` passes.
 - [ ] The release test (`scripts/release-test/release_test.py`) with hdfv: no suspicious lines.
-- [ ] The JAR: `aerocore-neoforge-1.21.1-0.41.0.jar` (not `-sources`, never `aerocore-devtools`), from the local build
+- [ ] The JAR: `aerocore-neoforge-1.21.1-0.42.0.jar` (not `-sources`, never `aerocore-devtools`), from the local build
       folder (`.\dev.ps1 showBuildDirectories -q`, `neoforge\libs`).
 
 ## Modrinth
@@ -24,8 +24,8 @@ Accounts, uploads and pushes are done by the user; each public step is agreed fi
 | Discord invite | https://discord.gg/4y2mubMg7e (never expires) |
 | Icon | `%USERPROFILE%\.mcmod\release\aerocore\icon.png` (512 x 512) |
 | Gallery | `%USERPROFILE%\.mcmod\release\aerocore\gallery\*.png` |
-| Version | 0.41.0, release type **Beta**, loader NeoForge, game version 1.21.1 |
-| Changelog | release/notes-0.41.0.md |
+| Version | 0.42.0, release type **Beta**, loader NeoForge, game version 1.21.1 |
+| Changelog | release/notes-0.42.0.md |
 
 ## CurseForge
 
@@ -34,5 +34,5 @@ Same texts and pictures; project type Mod, main category API and Library, extra 
 
 ## GitHub
 
-- [ ] Push `main` and the tag `v0.41.0` to `fiseleo/aerocore` (agreed).
-- [ ] A release `v0.41.0` from the tag, the notes, the JAR attached; marked pre-release (beta).
+- [ ] Push `main` and the tag `v0.42.0` to `fiseleo/aerocore` (agreed).
+- [ ] A release `v0.42.0` from the tag, the notes, the JAR attached; marked pre-release (beta).

@@ -119,6 +119,29 @@ public final class PartStep {
         out.nextInternals[installed.firstInternal() + i] = value;
     }
 
+    /** 0.42: how many conditions the installed part has (Part.conditions; a part wrapping another may have more than it). */
+    public int conditionCount() { return installed.part().conditions().size(); }
+
+    /**
+     * 0.42: how much of this part's i-th condition (Part.conditions) was used up at the step's start: 0 new .. 1 failed.
+     * 0 for an index the installed part does not have, so an inner part read through a wrapper that names fewer
+     * conditions behaves as new.
+     */
+    public double used(int i) {
+        if (i < 0 || i >= installed.part().conditions().size()) { return 0; }
+        return out.used[out.vehicle.firstCondition(installed.index()) + i];
+    }
+
+    /**
+     * 0.42: wears this part's i-th condition by amount (a share of its life, not negative) in this step; committed by
+     * VehicleDynamics.finish, where the condition stops at 1. Nothing for an index the installed part does not have.
+     */
+    public void wear(int i, double amount) {
+        if (!(amount >= 0) || !Double.isFinite(amount)) { throw new IllegalArgumentException("Wear must be finite and not negative"); }
+        if (i < 0 || i >= installed.part().conditions().size() || amount == 0) { return; }
+        out.worn[out.vehicle.firstCondition(installed.index()) + i] += amount;
+    }
+
     /** Speed of this part's k-th rotor at the step start, rad/s. */
     public double rotorSpeed(int k) { return out.rotorSpeed(installed.firstRotor() + k); }
     /** Waterplane radius last recorded for this part's k-th radiation point (unsmoothed), m. */
