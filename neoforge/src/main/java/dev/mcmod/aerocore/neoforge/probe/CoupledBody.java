@@ -60,6 +60,10 @@ public interface CoupledBody {
     default java.util.UUID leaderId() { return null; }
     /** How this body hangs on its leader (null when it hangs on none). */
     default dev.mcmod.aerocore.api.vehicle.Coupling leaderCoupling() { return null; }
+    /** 0.43: the coupling as it stands this substep with its leader (a rope's sheave and length); leaderCoupling() by default. */
+    default dev.mcmod.aerocore.api.vehicle.Coupling leaderCoupling(CoupledBody leader) { return leaderCoupling(); }
+    /** 0.43: how fast its leader's winch reels the rope in or out this substep (m/s, positive paying out); 0 by default. */
+    default double leaderReelMps(CoupledBody leader) { return 0; }
     /** The entity UUIDs of the bodies hanging on this one. */
     default java.util.Collection<java.util.UUID> followerIds() { return List.of(); }
     /** What this body's coupling to its leader carried in the substep just solved. */

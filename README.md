@@ -48,8 +48,8 @@ AeroCore is a calculation API plus a game-side vehicle framework:
 - `dev.mcmod.aerocore.api` (pure Java, no Minecraft): rigid bodies and contacts, `api.aero` (airfoils, wings,
   propellers, rotors), `api.engine` (piston cycle, turbojet, turbofan, free turbine, ramjet, scramjet, pulsejet),
   `api.body`, `api.wheel`, `api.drive`, `api.frame`, `api.vehicle` (part blueprints, `VehicleDynamics`),
-  `api.acoustics`, `api.manufacture`, `api.metallurgy`, `api.petroleum`, `api.power`, `api.mesh`. Everything can be
-  called offline, for test benches and design screens.
+  `api.acoustics`, `api.hydraulic`, `api.earthmoving`, `api.lifting`, `api.manufacture`, `api.metallurgy`, `api.petroleum`,
+  `api.power`, `api.mesh`. Everything can be called offline, for test benches and design screens.
 - `dev.mcmod.aerocore.neoforge.vehicle.PartVehicle`: a generic vehicle entity built from a blueprint, with sync,
   saving, sea, wind, ground and part renderers.
 

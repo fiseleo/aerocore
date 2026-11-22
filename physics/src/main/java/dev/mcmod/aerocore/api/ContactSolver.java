@@ -380,11 +380,14 @@ public final class ContactSolver {
     public record Touch(Vec3d offset, Vec3d normal, double approachMps, double normalImpulseNs, double slideMps, int other, ContactMaterial material) {}
 
     /** 0.36: body follower hangs on body leader by a coupling (indices into the bodies of the solve). */
-    public record Joint(int leader, int follower, dev.mcmod.aerocore.api.vehicle.Coupling coupling) {
+    public record Joint(int leader, int follower, dev.mcmod.aerocore.api.vehicle.Coupling coupling, double reelMps) {
         public Joint {
             if (leader < 0 || follower < 0 || leader == follower) { throw new IllegalArgumentException("A joint needs two distinct bodies"); }
             Objects.requireNonNull(coupling, "coupling");
+            if (!Double.isFinite(reelMps)) { throw new IllegalArgumentException("Reel rate must be finite"); }
         }
+        /** As before 0.43 (a rope's length standing still). */
+        public Joint(int leader, int follower, dev.mcmod.aerocore.api.vehicle.Coupling coupling) { this(leader, follower, coupling, 0); }
     }
     /**
      * What a joint carried in a solve: the force on the follower at its point and the couple of the stops on it (world;
@@ -605,11 +608,38 @@ public final class ContactSolver {
         /** The impulse on the follower at its point so far. */
         private Vec3d point = Vec3d.ZERO;
 
+        /** 0.43, a rope: its direction (leader to follower, unit), its row's mass, softness and target rate, and its impulse so far (a pull: not above 0). */
+        private Vec3d ropeAxis;
+        private double ropeMass, ropeGamma, ropeTarget, ropeImpulse;
+
         private JointRows(Joint joint, MovingBody leader, MovingBody follower, double dt) {
             this.leader = leader; this.follower = follower;
             var c = joint.coupling();
             g = c.geometry(leader.initial, leader.properties, follower.initial, follower.properties);
             rl = g.leaderOffset(); rf = g.followerOffset();
+            if (c.rope()) {
+                // 0.43: one row along the rope: the follower may not move away faster than the slack (and the reel) allows;
+                // stretched, Catto's soft constraint of the rope's E A / L and damping pulls it back
+                double length = g.gap().length();
+                ropeAxis = length > 1e-9 ? g.gap().scale(1 / length) : Vec3d.Y.scale(-1);
+                double[] k = block(leader, rl, follower, rf);
+                Vec3d kn = times(k, ropeAxis);
+                double inverseMass = ropeAxis.dot(kn);
+                double room = c.ropeLengthM() - length;
+                double stiffness = c.ropeStiffnessN() == Double.POSITIVE_INFINITY ? Double.POSITIVE_INFINITY : c.ropeStiffnessN() / Math.max(c.ropeLengthM(), 0.1);
+                if (room >= 0 || stiffness == Double.POSITIVE_INFINITY) {
+                    ropeGamma = 0;
+                    ropeTarget = room >= 0 ? room / dt + joint.reelMps() : Math.max(JOINT_BAUMGARTE * room / dt, -MAX_JOINT_BIAS) + joint.reelMps();
+                } else {
+                    double d = c.ropeDampingNs(), denominator = d + dt * stiffness;
+                    ropeGamma = 1 / (dt * denominator);
+                    ropeTarget = dt * stiffness / denominator * room / dt + joint.reelMps();
+                }
+                ropeMass = 1 / (inverseMass + ropeGamma);
+                inverse = null;
+                bias = Vec3d.ZERO;
+                return;
+            }
             inverse = invert(block(leader, rl, follower, rf));
             double gap = g.gap().length();
             Vec3d b = gap > JOINT_SLOP ? g.gap().scale(JOINT_BAUMGARTE * (gap - JOINT_SLOP) / gap / dt) : Vec3d.ZERO;
@@ -638,6 +668,18 @@ public final class ContactSolver {
         }
 
         private void iterate() {
+            if (ropeAxis != null) {
+                double rate = ropeAxis.dot(follower.velocityAt(rf).subtract(leader.velocityAt(rl)));
+                double candidate = Math.min(ropeImpulse - (rate - ropeTarget + ropeGamma * ropeImpulse) * ropeMass, 0);
+                double delta = candidate - ropeImpulse;
+                if (delta == 0) { return; }
+                Vec3d impulse = ropeAxis.scale(delta);
+                follower.applyImpulse(rf, impulse);
+                leader.applyImpulse(rl, impulse.scale(-1));
+                point = point.add(impulse);
+                ropeImpulse = candidate;
+                return;
+            }
             for (Angular s : stops) { s.iterate(leader, follower); }
             Vec3d v = follower.velocityAt(rf).subtract(leader.velocityAt(rl)).add(bias);
             Vec3d impulse = times(inverse, v).scale(-1);
@@ -797,6 +839,23 @@ public final class ContactSolver {
         var g = c.geometry(bl.state(), bl.properties(), bf.state(), bf.properties());
         MovingBody ml = new MovingBody(bl.state(), bl.properties()), mf = new MovingBody(bf.state(), bf.properties());
         boolean moved = false;
+        if (c.rope()) {
+            // 0.43: a rope's separation pulls back only an inextensible rope past its length (an elastic one is the solve's spring)
+            if (c.ropeStiffnessN() != Double.POSITIVE_INFINITY) { return false; }
+            Vec3d gap = g.gap().add(shift[f].add(turn[f].cross(g.followerOffset()))).subtract(shift[l].add(turn[l].cross(g.leaderOffset())));
+            double over = gap.length() - c.ropeLengthM();
+            if (!(over > JOINT_SLOP)) { return false; }
+            double close = Math.min(JOINT_PROJECTION * (over - JOINT_SLOP), MAX_JOINT_PROJECTION);
+            Vec3d n = gap.normalized();
+            double[] k = block(ml, g.leaderOffset(), mf, g.followerOffset());
+            double inverseMass = n.dot(times(k, n));
+            Vec3d impulse = n.scale(-close / inverseMass);
+            shift[f] = shift[f].add(impulse.scale(1 / bf.properties().massKg()));
+            turn[f] = turn[f].add(mf.spin(g.followerOffset().cross(impulse)));
+            shift[l] = shift[l].subtract(impulse.scale(1 / bl.properties().massKg()));
+            turn[l] = turn[l].subtract(ml.spin(g.leaderOffset().cross(impulse)));
+            return true;
+        }
         Vec3d gap = g.gap().add(shift[f].add(turn[f].cross(g.followerOffset()))).subtract(shift[l].add(turn[l].cross(g.leaderOffset())));
         double length = gap.length();
         if (length > JOINT_SLOP) {

@@ -24,6 +24,13 @@ public final class PartStep {
     private final RigidBodyProperties properties;
     private final Vec3d omega, gravity;
     private final VehicleEnvironment environment;
+    /** 0.43: the vehicle's geometry this step (its joints' pose) and this part's installed index. */
+    private final VehiclePose pose;
+    private final int index;
+    /** 0.43: whether this part rides on a joint that moves this step (its points then move against the vehicle frame). */
+    private final boolean riding;
+    private VehicleEnvironment ridden;
+    private RigidBodyProperties posedProperties;
     private final Map<String, Double> controls;
     private final double time, dt;
     /** Where this part's rows and rolling forces start in the collector's lists (they are contiguous: one loads() call). */
@@ -35,7 +42,11 @@ public final class PartStep {
              VehicleEnvironment environment, Map<String, Double> controls, Vec3d gravity, double time, double dt) {
         this.out = out; this.installed = installed; this.state = state; this.properties = properties; this.omega = omega;
         this.environment = environment; this.controls = controls; this.gravity = gravity; this.time = time; this.dt = dt;
-        Orientation q = state.orientation().multiply(installed.rotation());
+        this.pose = out.pose; this.index = installed.index();
+        boolean moving = false;
+        for (int j : out.vehicle.chain(index)) { moving |= out.rates0[j] != 0; }
+        this.riding = moving;
+        Orientation q = state.orientation().multiply(pose.rotation(index));
         // Same COM point and velocity; the angular momentum is a world vector, unchanged by the choice of body axes.
         this.partState = new RigidBodyState(state.position(), state.velocity(), q, state.angularMomentum());
         this.firstRow = out.rows.size();
@@ -45,10 +56,33 @@ public final class PartStep {
     // ----- reading -----
     public String id() { return installed.id(); }
     public Mount mount() { return installed.mount(); }
+    /** 0.43: where the part's frame sits in the vehicle frame this step (its mount, moved by the joints above it). */
+    public Vec3d position() { return pose.position(index); }
+    /** 0.43: the part's frame turned into the vehicle frame this step. */
+    public Orientation rotation() { return pose.rotation(index); }
+    /** 0.43: the vehicle's geometry this step. */
+    public VehiclePose pose() { return pose; }
     public RigidBodyState state() { return state; }
     public RigidBodyProperties properties() { return properties; }
     public Vec3d angularVelocity() { return omega; }
-    public VehicleEnvironment environment() { return environment; }
+    /**
+     * The environment the part samples. 0.43: for a part riding on a moving joint the ground moves the other way under
+     * it (each hit's velocity less the part's own velocity against the vehicle frame there), so wheels and tools that
+     * take the contact velocity as the body's plus the ground's see the joint's motion too.
+     */
+    public VehicleEnvironment environment() {
+        if (!riding) { return environment; }
+        if (ridden == null) {
+            dev.mcmod.aerocore.api.ground.Ground ground = environment.ground();
+            ridden = environment.withGround((from, direction, maxM) -> {
+                dev.mcmod.aerocore.api.ground.Ground.Hit hit = ground.cast(from, direction, maxM);
+                if (hit == null) { return null; }
+                return new dev.mcmod.aerocore.api.ground.Ground.Hit(hit.point(), hit.normal(), hit.distanceM(), hit.surface(),
+                        hit.velocity().subtract(relativeVelocityAt(hit.point())));
+            });
+        }
+        return ridden;
+    }
     public Vec3d gravity() { return gravity; }
     public double time() { return time; }
     public double dt() { return dt; }
@@ -56,10 +90,19 @@ public final class PartStep {
     /** The vehicle's state with the part's axes (same COM point, velocity and angular momentum). */
     public RigidBodyState partState() { return partState; }
     /** The vehicle's mass, COM and inertia expressed in the part frame, to go with partState. */
-    public RigidBodyProperties partProperties() { return installed.partProperties(); }
+    public RigidBodyProperties partProperties() {
+        if (out.vehicle.joints().isEmpty()) { return installed.partProperties(); }
+        if (posedProperties == null) {
+            Orientation inverse = pose.rotation(index).inverse();
+            MassProperties total = pose.mass();
+            MassProperties seen = MassProperties.of(total.massKg(), Vec3d.ZERO, total.inertia()).transformed(Vec3d.ZERO, inverse);
+            posedProperties = new RigidBodyProperties(total.massKg(), inverse.rotate(total.centre().subtract(pose.position(index))), seen.inertia());
+        }
+        return posedProperties;
+    }
 
     /** A part-frame point in the vehicle frame. */
-    public Vec3d vehiclePoint(Vec3d partPoint) { return installed.mount().position().add(installed.rotation().rotate(partPoint)); }
+    public Vec3d vehiclePoint(Vec3d partPoint) { return pose.position(index).add(pose.rotation(index).rotate(partPoint)); }
     /** World offset from the COM of a part-frame point. */
     public Vec3d offset(Vec3d partPoint) { return state.worldOffset(properties, vehiclePoint(partPoint)); }
     /** World position of a part-frame point. */
@@ -67,14 +110,88 @@ public final class PartStep {
     /** The part-frame point at a world position (the inverse of point()). */
     public Vec3d partPoint(Vec3d worldPoint) {
         Vec3d local = state.orientation().inverse().rotate(worldPoint.subtract(state.position())).add(properties.centerOfMassLocal());
-        return installed.rotation().inverse().rotate(local.subtract(installed.mount().position()));
+        return pose.rotation(index).inverse().rotate(local.subtract(pose.position(index)));
     }
     /** World direction of a part-frame direction. */
-    public Vec3d axis(Vec3d partDirection) { return state.orientation().rotate(installed.rotation().rotate(partDirection)); }
+    public Vec3d axis(Vec3d partDirection) { return state.orientation().rotate(pose.rotation(index).rotate(partDirection)); }
     /** A world direction (or vector) in the part frame. */
-    public Vec3d partDirection(Vec3d worldDirection) { return installed.rotation().inverse().rotate(state.orientation().inverse().rotate(worldDirection)); }
+    public Vec3d partDirection(Vec3d worldDirection) { return pose.rotation(index).inverse().rotate(state.orientation().inverse().rotate(worldDirection)); }
     /** World velocity of a part-frame point. */
-    public Vec3d velocity(Vec3d partPoint) { return state.velocity().add(omega.cross(offset(partPoint))); }
+    public Vec3d velocity(Vec3d partPoint) {
+        Vec3d v = state.velocity().add(omega.cross(offset(partPoint)));
+        return riding ? v.add(state.orientation().rotate(pose.relativeVelocity(index, vehiclePoint(partPoint), out.rates0))) : v;
+    }
+
+    /** 0.43: the world velocity a world point fixed on this part has against the vehicle frame from the joints moving it (zero when none moves). */
+    public Vec3d relativeVelocityAt(Vec3d worldPoint) {
+        if (!riding) { return Vec3d.ZERO; }
+        Vec3d local = state.orientation().inverse().rotate(worldPoint.subtract(state.position())).add(properties.centerOfMassLocal());
+        return state.orientation().rotate(pose.relativeVelocity(index, local, out.rates0));
+    }
+
+    // ----- tools (0.43; Part.tools) -----
+
+    /**
+     * Reports that this part's tool cut m3 of bank material from cell (x, y, z) this step, into its hold holdName (""
+     * none): the game takes it after the tick (VehicleState.takeCuts) and digs the block.
+     */
+    public void cut(String tool, int x, int y, int z, double m3, String holdName) {
+        if (!(m3 > 0) || !Double.isFinite(m3)) { return; }
+        out.cuts.add(new VehicleState.Cut(installed.id(), tool, x, y, z, m3, holdName.isEmpty() ? "" : installed.id() + "." + holdName));
+    }
+
+    // ----- hydraulics (0.43): circuits by name, solved after every part's loads (VehicleDynamics) -----
+
+    /** The share (0..1) of the flow this circuit's actuators asked for that its pumps gave in the last step (1 for one not yet seen). */
+    public double hydraulicShare(String circuit) { double[] c = out.lastCircuits.get(circuit); return c == null ? 1 : c[0]; }
+    /** The circuit's pressure in the last step, Pa: the highest its actuators asked for, at most its relief (0 for one not yet seen). */
+    public double hydraulicPressure(String circuit) { double[] c = out.lastCircuits.get(circuit); return c == null ? 0 : c[1]; }
+
+    /** A pump on the circuit gives up to flowM3PerS this step and relieves at reliefPa (both not negative). */
+    public void hydraulicSupply(String circuit, double flowM3PerS, double reliefPa) {
+        if (!(flowM3PerS >= 0) || !Double.isFinite(flowM3PerS) || !(reliefPa >= 0)) { throw new IllegalArgumentException("Supply and relief must be finite and not negative"); }
+        double[] c = out.circuit(circuit);
+        c[0] += flowM3PerS;
+        c[3] = Math.min(c[3], reliefPa);
+    }
+
+    /** An actuator on the circuit asks for flowM3PerS this step at the pressure its load needs (Pa; both not negative). */
+    public void hydraulicDemand(String circuit, double flowM3PerS, double pressurePa) {
+        if (!(flowM3PerS >= 0) || !Double.isFinite(flowM3PerS) || !(pressurePa >= 0) || !Double.isFinite(pressurePa)) {
+            throw new IllegalArgumentException("Demand and pressure must be finite and not negative");
+        }
+        double[] c = out.circuit(circuit);
+        c[1] += flowM3PerS;
+        if (flowM3PerS > 0) { c[2] = Math.max(c[2], pressurePa); }
+    }
+
+    // ----- this part's joint (0.43; Part.joint) -----
+
+    private int joint() {
+        int j = out.vehicle.jointOf(index);
+        if (j < 0) { throw new IllegalStateException("Part " + installed.id() + " has no joint"); }
+        return j;
+    }
+    /** This part's joint value at the step's start (rad or m). */
+    public double jointValue() { return pose.value(joint()); }
+    /** This part's joint rate in the last step (rad/s or m/s). */
+    public double jointRate() { return out.rates0[joint()]; }
+    /** The generalized force this part's joint actuator gave in the last step (N m or N). */
+    public double jointEffort() { return out.effort0[joint()]; }
+    /** The generalized load on this part's joint from outside what it moves in the last step, weight included (N m or N; positive pushes q up). */
+    public double jointLoad() { return out.load0[joint()]; }
+
+    /**
+     * Drives this part's joint this step: it moves at rateTarget (rad/s or m/s) while its actuator can push up to
+     * upMax the way q grows and downMax the other way (N m or N, not negative; infinite for a rigid lock); beyond that it
+     * gives way. Not called: the joint holds where it is.
+     */
+    public void driveJoint(double rateTarget, double upMax, double downMax) {
+        if (!Double.isFinite(rateTarget) || !(upMax >= 0) || !(downMax >= 0)) {
+            throw new IllegalArgumentException("A joint's drive needs a finite rate and reaches that are not negative");
+        }
+        out.commands[joint()] = new JointDrive.Command(rateTarget, upMax, downMax);
+    }
 
     /**
      * The input bound to role (offset + scale * channel, summed over bindings), or fallback when nothing is bound; a
@@ -151,9 +268,9 @@ public final class PartStep {
 
     // ----- writing -----
     /** A load that is also drawn (its kind sorts it in the result's sums). */
-    public void force(AppliedForce force) { out.force(force, true); }
+    public void force(AppliedForce force) { out.force(index, force, true); }
     /** A load whose wrench is given in full (for example with a couple or a moment not at one point), drawn as display. */
-    public void load(Wrench wrench, AppliedForce.Kind kind) { out.wrench(wrench, kind); }
+    public void load(Wrench wrench, AppliedForce.Kind kind) { out.wrench(index, wrench, kind); }
     /** An arrow for display only; the load must be given by load() as well. */
     public void display(AppliedForce force) { out.force(force, false); }
     /** Wave excitation or ideal-fluid terms, counted with the added-mass reaction as inertia. */
@@ -331,6 +448,7 @@ public final class PartStep {
      */
     public void damper(Vec3d offset, Vec3d direction, double coefficient, double referenceSpeed) {
         out.dampers.add(new RigidBodyDynamics.LineDamper(offset, direction, coefficient, referenceSpeed));
+        if (out.damperOwner != null) { out.damperOwner.add(index); }
     }
 
     /** 0.30: how many shown values the installed part has (a part wrapping another may show fewer than it). */

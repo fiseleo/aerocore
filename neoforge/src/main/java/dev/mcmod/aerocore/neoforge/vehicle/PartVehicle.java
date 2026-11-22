@@ -22,6 +22,7 @@ import dev.mcmod.aerocore.api.vehicle.Vehicle;
 import dev.mcmod.aerocore.api.vehicle.VehicleBlueprint;
 import dev.mcmod.aerocore.api.vehicle.VehicleDynamics;
 import dev.mcmod.aerocore.api.vehicle.VehicleEnvironment;
+import dev.mcmod.aerocore.api.vehicle.VehiclePose;
 import dev.mcmod.aerocore.api.vehicle.VehicleState;
 import dev.mcmod.aerocore.neoforge.MinecraftUnits;
 import dev.mcmod.aerocore.neoforge.probe.BodyCollisions;
@@ -129,8 +130,8 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
 
     private VehicleBlueprint blueprint;
     private Vehicle vehicle;
-    /** Vehicle-frame bounds of the contact spheres and decks, for boxFor (see envelope). */
-    private Vehicle boxFor;
+    /** Vehicle-frame bounds of the contact spheres and decks, for boxFor (see envelope; 0.43: a pose, which joints change). */
+    private Object boxFor;
     private double[] boxLow, boxHigh;
     private java.util.concurrent.CompletableFuture<Void> warm;
     private VehicleState state;
@@ -180,6 +181,9 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
     private VehicleContacts.Scrape clientScrape;
     /** 0.42: the parts' conditions (0..1, installed order) and the holds' cargo (kg) as the client last heard. */
     private double[] clientUsed = new double[0], clientHoldKg = new double[0];
+    /** 0.43: the joints' values the server sent (DISPLAY "j") and the ones before, and the pose they make on this client. */
+    private double[] clientJoints = new double[0], previousClientJoints = new double[0];
+    private VehiclePose clientPose;
 
     public PartVehicle(EntityType<? extends PartVehicle> type, Level level) {
         super(type, level);
@@ -439,6 +443,17 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         public boolean taken() { return taken; }
     }
 
+    /**
+     * Server (0.43): a vehicle with joints or tools has finished a tick's physics. A mod that works the world with
+     * what the vehicle carries (a bucket that cut soil: VehicleState.takeCuts; a load on its hook; a dump body tipped)
+     * does it here, between ticks, where it may change blocks and set the holds (setHold); the next tick sees both.
+     */
+    public static final class Stepped extends net.neoforged.bus.api.Event {
+        private final PartVehicle vehicle;
+        public Stepped(PartVehicle vehicle) { this.vehicle = vehicle; }
+        public PartVehicle vehicle() { return vehicle; }
+    }
+
     @Override public boolean hurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
         if (level().isClientSide || isRemoved() || isInvulnerableTo(source) || !(amount > 0)) { return false; }
         Hurt event = new Hurt(this, source, amount);
@@ -563,14 +578,36 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
      * and visual orientation about the centre of mass.
      */
     public Vec3d partPoint(Vehicle.Installed installed, Vec3d local, float partialTick) {
-        Vec3d inVehicle = installed.mount().position().add(installed.rotation().rotate(local)).subtract(centerOfMassLocal());
+        VehiclePose pose = pose(partialTick);
+        Vec3d inVehicle = pose.apply(installed.index(), local).subtract(pose.properties().centerOfMassLocal());
         net.minecraft.world.phys.Vec3 at = getPosition(partialTick);
         return new Vec3d(at.x, at.y, at.z).add(drawnShift(partialTick)).add(visualOrientation(partialTick).rotate(inVehicle));
     }
 
     /** 0.29: a direction in a part's own frame in the world, as drawn at a partial tick. */
     public Vec3d partDirection(Vehicle.Installed installed, Vec3d local, float partialTick) {
-        return visualOrientation(partialTick).rotate(installed.rotation().rotate(local));
+        return visualOrientation(partialTick).rotate(pose(partialTick).rotation(installed.index()).rotate(local));
+    }
+
+    /**
+     * 0.43: the vehicle's geometry as it stands: its joints' pose (VehiclePose; the compiled geometry for a vehicle
+     * without joints). The server's is the state's, a client's the last values the server sent.
+     */
+    public VehiclePose pose() {
+        if (vehicle == null) { throw new IllegalStateException("No vehicle"); }
+        if (!level().isClientSide) { return state != null ? state.pose() : vehicle.restPose(); }
+        if (clientJoints.length == 0) { return vehicle.restPose(); }
+        if (clientPose == null || !java.util.Arrays.equals(clientPose.values(), clientJoints)) { clientPose = vehicle.pose(clientJoints); }
+        return clientPose;
+    }
+
+    /** 0.43: the pose between the last two the server sent, at a partial tick (a client's drawing); pose() on the server. */
+    public VehiclePose pose(float partialTick) {
+        if (!level().isClientSide || clientJoints.length == 0 || java.util.Arrays.equals(previousClientJoints, clientJoints)) { return pose(); }
+        double t = Math.clamp(partialTick, 0, 1);
+        double[] q = new double[clientJoints.length];
+        for (int k = 0; k < q.length; k++) { q[k] = previousClientJoints[k] + t * (clientJoints[k] - previousClientJoints[k]); }
+        return vehicle.pose(q);
     }
 
     public Orientation visualOrientation(float partialTick) {
@@ -609,6 +646,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             clientRotorSpeeds = new double[rotors]; rotorAngles = new double[rotors]; previousRotorAngles = new double[rotors];
             int values = vehicle.shownValues();
             syncedShown = new double[values]; shown = new double[values]; previousShown = new double[values];
+            clientJoints = vehicle.restPose().values(); previousClientJoints = clientJoints.clone(); clientPose = null;
             // Start building the hull's wake (drawn here too) before the first tick asks for it.
             wakeDesign();
         } catch (RuntimeException e) {
@@ -650,6 +688,11 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             // 0.42: conditions in per cent and cargo in kg; neither is written while all are zero
             clientUsed = m.get("u") instanceof List<?> u ? numbers(u, 0.01) : new double[0];
             clientHoldKg = m.get("h") instanceof List<?> h ? numbers(h, 1) : new double[0];
+            // 0.43: the joints (radians or metres); the last ones are kept to draw between them
+            if (m.get("j") instanceof List<?> j && j.size() == clientJoints.length) {
+                previousClientJoints = clientJoints.clone();
+                clientJoints = numbers(j, 1);
+            }
         } catch (RuntimeException ignored) {
             // A malformed display update only affects animation.
         }
@@ -716,6 +759,8 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
     private final Map<Long, FluidState> air = new java.util.HashMap<>();
     /** The world's blocks as ground for wheels (0.24), read once a tick. */
     private WorldGround ground;
+    /** 0.43: the blocks as material for the tools (only a vehicle with tools has one). */
+    private WorldTerrain terrain;
 
     @Override public Entity entity() { return this; }
 
@@ -734,8 +779,9 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         seaLevel = server.getChunkSource().getGenerator().getSeaLevel();
         RigidBodyState s = state.body();
         double reach = 0;
-        for (CollisionSphere c : vehicle.collision()) { reach = Math.max(reach, c.centerLocal().subtract(vehicle.properties().centerOfMassLocal()).length() + c.radiusM()); }
-        double turning = s.angularVelocity(vehicle.properties()).length() * reach;
+        VehiclePose pose = state.pose();
+        for (CollisionSphere c : pose.collision()) { reach = Math.max(reach, c.centerLocal().subtract(pose.properties().centerOfMassLocal()).length() + c.radiusM()); }
+        double turning = s.angularVelocity(pose.properties()).length() * reach;
         double travel = (s.velocity().length() + turning) * MinecraftUnits.TICK_SECONDS;
         fast = s.velocity().length() >= FAST_MPS;
         if (!(s.velocity().length() < MAX_MPS)) {
@@ -752,15 +798,15 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             keepAhead(server, s);
             // the chunks are not ready: wait here, moving as before, until they are
             for (AABB box : corridor) { if (!loaded(box)) { publish(); return false; } }
-            collision = new FloatingBodyDynamics.Collision(vehicle.collision(), WorldObstacles.collect(this, corridor), vehicle.contactMaterial());
+            collision = new FloatingBodyDynamics.Collision(pose.collision(), WorldObstacles.collect(this, corridor), vehicle.contactMaterial());
         } else {
             region = envelope(s.position(), s.orientation()).inflate(2 * travel + 1);
             corridor = List.of(region);
             if (!loaded(region)) { publish(); return false; }   // wait for the chunks (0.28: the motion is kept, no longer zeroed)
-            collision = new FloatingBodyDynamics.Collision(vehicle.collision(), WorldObstacles.collect(this, region), vehicle.contactMaterial());
+            collision = new FloatingBodyDynamics.Collision(pose.collision(), WorldObstacles.collect(this, region), vehicle.contactMaterial());
         }
         startTime = server.getGameTime() * MinecraftUnits.TICK_SECONDS;
-        Vec3d origin = vehicle.origin(s);
+        Vec3d origin = state.origin();
         waves = WaveRegions.of(server).at(server, origin.x(), origin.z());
         environment.setSea(waves);
         sampler.drifting(waves.region());
@@ -769,6 +815,10 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         air.clear();
         if (ground == null) { ground = new WorldGround(server); }
         ground.clear();
+        if (!vehicle.tools().isEmpty()) {
+            if (terrain == null) { terrain = new WorldTerrain(server); }
+            terrain.clear();
+        }
         moving = true;
         return true;
     }
@@ -777,7 +827,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
     /** 0.28: a fast vehicle; 0.36: a joined one (its group steps when one of it stands in a ticking chunk). */
     @Override public boolean stepsWhereLoaded() { return state != null && (state.body().velocity().length() >= FAST_MPS || leaderId != null || !followers.isEmpty()); }
     @Override public RigidBodyState physicsState() { return state.body(); }
-    @Override public RigidBodyProperties properties() { return vehicle.properties(); }
+    @Override public RigidBodyProperties properties() { return state != null ? state.properties() : vehicle.properties(); }
     @Override public List<CollisionSphere> collisionShape() { return collision.shape(); }
     @Override public ContactMaterial contactMaterial() { return vehicle.contactMaterial(); }
     @Override public List<WorldBox> staticObstacles() { return collision.obstacles(); }
@@ -801,6 +851,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             }
             @Override public WaveField waves() { return field; }
             @Override public dev.mcmod.aerocore.api.ground.Ground ground() { return ground == null ? dev.mcmod.aerocore.api.ground.Ground.NONE : ground; }
+            @Override public dev.mcmod.aerocore.api.ground.Terrain terrain() { return terrain == null ? dev.mcmod.aerocore.api.ground.Terrain.NONE : terrain; }
         };
     }
 
@@ -813,13 +864,14 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         double time = startTime + i * SUBSTEP;
         RigidBodyState s = state.body();
         lastGood = s;
-        RigidBodyProperties p = vehicle.properties();
+        RigidBodyProperties p = state.properties();
         List<AppliedForce> external = new ArrayList<>(entityLoads.forces(s, p));
         // Riders' weight on their seats.
         List<Entity> riders = getPassengers();
-        for (int k = 0; k < Math.min(riders.size(), vehicle.seats().size()); k++) {
+        List<Vec3d> seats = state.pose().seats();
+        for (int k = 0; k < Math.min(riders.size(), seats.size()); k++) {
             double mass = EntityMasses.massKg(riders.get(k));
-            external.add(new AppliedForce(AppliedForce.Kind.CONTACT, s.worldOffset(p, vehicle.seats().get(k)), GRAVITY.scale(mass)));
+            external.add(new AppliedForce(AppliedForce.Kind.CONTACT, s.worldOffset(p, seats.get(k)), GRAVITY.scale(mass)));
         }
         pending = VehicleDynamics.prepare(vehicle, state, environment(time), controls, GRAVITY, external, time, SUBSTEP);
         return pending.damped();
@@ -852,6 +904,10 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         VehicleContacts.Impact impact = tally.impact();
         VehicleContacts.Scrape scrape = tally.scrape(MinecraftUnits.TICK_SECONDS);
         publish(scrape);
+        // 0.43: the tick is stepped; a mod's world work with the vehicle's tools and joints goes here
+        if (vehicle != null && (!vehicle.joints().isEmpty() || !vehicle.tools().isEmpty())) {
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(new Stepped(this));
+        }
         if (impact != null || scrape != null) {
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(new VehicleContacts.Contacted(this, impact, scrape));
             // a vehicle pressed into something (two jammed together) closes on it every tick: the players hear the first
@@ -912,7 +968,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             if (up == follower) { return Couplings.Result.CYCLE; }
             up = up.leader();
         }
-        double gap = how.geometry(state.body(), vehicle.properties(), follower.state.body(), follower.vehicle.properties()).gap().length();
+        double gap = how.geometry(state.body(), state.properties(), follower.state.body(), follower.state.properties()).gap().length();
         if (gap > how.captureM()) { return Couplings.Result.TOO_FAR; }
         follower.leaderId = getUUID();
         follower.coupling = how;
@@ -1000,7 +1056,10 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
         leaderSeen = leader.position3();
         leader.followers.putIfAbsent(getUUID(), position3());
         if (coupling == null || leader.state == null || leader.vehicle == null) { return; }
-        double gap = coupling.geometry(leader.state.body(), leader.vehicle.properties(), state.body(), vehicle.properties()).gap().length();
+        // 0.43: a rope hangs its load as far off as its length (where the rope leaves the leader as it stands now)
+        Coupling now = coupling.rope() ? leaderCoupling(leader) : coupling;
+        double gap = now.geometry(leader.state.body(), leader.state.properties(), state.body(), state.properties()).gap().length();
+        if (now.rope()) { gap = Math.max(gap - now.ropeLengthM(), 0); }
         if (gap > Couplings.BREAK_M) {
             LOGGER.warn("Vehicle {} came {} m off its leader {}: uncoupled", getId(), gap, leader.getId());
             uncouple(Couplings.Reason.BROKEN);
@@ -1017,7 +1076,46 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
     @Override public UUID leaderId() { return leaderId; }
     @Override public Coupling leaderCoupling() { return coupling; }
     @Override public java.util.Collection<UUID> followerIds() { return followers.keySet(); }
-    @Override public void carried(ContactSolver.JointResult joint) { lastJoint = joint; }
+    @Override public void carried(ContactSolver.JointResult joint) {
+        lastJoint = joint;
+        // 0.43: a rope gives its winch its pull, on the leader's channel for it
+        if (reeving != null && coupling != null && coupling.rope() && leader() instanceof PartVehicle l) {
+            l.setControl(Coupling.tensionChannel(reeving.winchPart()), Math.max(joint.forceN().length(), 0));
+        }
+    }
+
+    /**
+     * 0.43: how this vehicle's rope (a ROPE coupling) is reeved on its leader (a hook block on a crane: the sheave at the
+     * boom tip, the winch that winds it), or null for a rope of fixed length from a fixed point. Kept with the coupling.
+     */
+    private Coupling.Reeving reeving;
+    public Coupling.Reeving reeving() { return reeving; }
+    public void setReeving(Coupling.Reeving how) { reeving = how; }
+
+    /**
+     * The coupling as it stands this substep (0.43: a reeved rope's point at its sheave, its length on its winch's drum)
+     * and the winch's reel rate (m/s), for BodyWorld's joint.
+     */
+    @Override public Coupling leaderCoupling(dev.mcmod.aerocore.neoforge.probe.CoupledBody leaderBody) {
+        if (reeving == null || coupling == null || !coupling.rope() || !(leaderBody instanceof PartVehicle l) || l.vehicle == null || l.state == null) { return coupling; }
+        Vehicle.Installed sheave = l.vehicle.installed(reeving.sheavePart()), winch = l.vehicle.installed(reeving.winchPart());
+        if (sheave == null) { return coupling; }
+        dev.mcmod.aerocore.api.vehicle.Mount point = sheave.part().mountPoints().get(reeving.sheavePoint());
+        Vec3d at = l.state.pose().apply(sheave.index(), point == null ? Vec3d.ZERO : point.position());
+        double length = coupling.ropeLengthM();
+        if (winch != null && winch.part() instanceof dev.mcmod.aerocore.api.vehicle.part.HydraulicMotorPart m && m.drum() != null) {
+            length = l.state.internal(winch.id(), 1);
+        }
+        return coupling.withRope(at, length);
+    }
+    @Override public double leaderReelMps(dev.mcmod.aerocore.neoforge.probe.CoupledBody leaderBody) {
+        if (reeving == null || !(leaderBody instanceof PartVehicle l) || l.vehicle == null || l.state == null) { return 0; }
+        Vehicle.Installed winch = l.vehicle.installed(reeving.winchPart());
+        if (winch != null && winch.part() instanceof dev.mcmod.aerocore.api.vehicle.part.HydraulicMotorPart m && m.drum() != null) {
+            return l.state.rotorSpeed(winch.firstRotor()) * m.drum().radiusM() / m.drum().partsOfLine();
+        }
+        return 0;
+    }
 
     /** A missing partner whose last place is loaded is waited for PATIENCE_TICKS, then the link with it ends (REMOVED). */
     @Override public void groupWaits(ServerLevel level, java.util.Set<UUID> missing) {
@@ -1094,7 +1192,8 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             return false;
         }
         RigidBodyState s = state.body();
-        RigidBodyProperties p = vehicle.properties();
+        RigidBodyProperties p = state.properties();
+        VehiclePose pose = state.pose();
         Vec3d omega = s.angularVelocity(p);
         List<Jettisoned.Dropped> dropped = new ArrayList<>();
         java.util.Set<Integer> goneSeats = new java.util.HashSet<>();
@@ -1103,7 +1202,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             boolean gone = split.removed().contains(i.id());
             for (int k = 0; k < i.part().seats().size(); k++, seat++) { if (gone) { goneSeats.add(seat); } }
             if (!gone) { continue; }
-            Vec3d at = s.worldPoint(p, i.mount().position());
+            Vec3d at = s.worldPoint(p, pose.position(i.index()));
             Vec3d velocity = s.velocity().add(omega.cross(at.subtract(s.position())));
             Map<String, Double> kg = new LinkedHashMap<>();
             Map<String, String> fuel = new LinkedHashMap<>();
@@ -1111,7 +1210,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
                 Vehicle.Tank t = vehicle.tanks().get(k);
                 if (t.part() == i.index()) { kg.put(t.tank().name(), state.tankKg(k)); fuel.put(t.tank().name(), state.tankFuel(k)); }
             }
-            dropped.add(new Jettisoned.Dropped(blueprint.part(i.id()), at, s.orientation().multiply(i.rotation()), velocity, kg, fuel));
+            dropped.add(new Jettisoned.Dropped(blueprint.part(i.id()), at, s.orientation().multiply(pose.rotation(i.index())), velocity, kg, fuel));
         }
         List<Entity> riders = getPassengers();
         for (int k = riders.size() - 1; k >= 0; k--) { if (goneSeats.contains(k)) { riders.get(k).stopRiding(); } }
@@ -1213,6 +1312,12 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             for (int k = 0; k < vehicle.holds().size(); k++) { list.add((double) Math.round(state.holdKg(k))); }
             display.put("h", list);
         }
+        // 0.43: the joints, to a tenth of a milliradian or millimetre (a machine at rest sends nothing new)
+        if (!vehicle.joints().isEmpty()) {
+            List<Object> list = new ArrayList<>();
+            for (double value : state.jointValues()) { list.add(Math.rint(value * 1e4) / 1e4); }
+            display.put("j", list);
+        }
         // 0.37: the true velocity (2 cm/s steps: one at rest sends nothing new) and scraping
         Vec3d v = s.velocity();
         display.put("v", List.of(Math.rint(v.x() * 50) / 50, Math.rint(v.y() * 50) / 50, Math.rint(v.z() * 50) / 50));
@@ -1232,12 +1337,12 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
 
     @Override public Vec3d poseCenter() { return level().isClientSide || state == null ? new Vec3d(getX(), getY(), getZ()) : state.body().position(); }
     @Override public Orientation poseOrientation() { return level().isClientSide || state == null ? clientRotation : state.body().orientation(); }
-    @Override public Vec3d centerOfMassLocal() { return vehicle == null ? Vec3d.ZERO : vehicle.properties().centerOfMassLocal(); }
-    @Override public List<WorldBox> solidBoxesLocal() { return vehicle == null ? List.of() : vehicle.deck(); }
+    @Override public Vec3d centerOfMassLocal() { return vehicle == null ? Vec3d.ZERO : pose().properties().centerOfMassLocal(); }
+    @Override public List<WorldBox> solidBoxesLocal() { return vehicle == null ? List.of() : pose().deck(); }
     @Override public Vec3d velocityAt(Vec3d point) {
         if (level().isClientSide || state == null) { return Vec3d.ZERO; }
         RigidBodyState s = state.body();
-        return s.velocity().add(s.angularVelocity(vehicle.properties()).cross(point.subtract(s.position())));
+        return s.velocity().add(s.angularVelocity(state.properties()).cross(point.subtract(s.position())));
     }
     @Override public void addEntityLoad(Vec3d localPoint, Vec3d worldForce) { if (!level().isClientSide) { entityLoads.add(localPoint, worldForce); } }
 
@@ -1248,23 +1353,24 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
 
     /** The box around the contact spheres and decks, turned into the world, for a COM at position. */
     public AABB envelope(Vec3d position, Orientation q) {
-        if (boxFor != vehicle) {
-            // Vehicle-frame box, once per compiled vehicle (BodyWorld asks for the envelope of every pair every substep).
+        VehiclePose pose = pose();
+        if (boxFor != pose) {
+            // Vehicle-frame box, once per compiled vehicle (BodyWorld asks for the envelope of every pair every substep; 0.43: once per pose)
             double[] lo = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE}, hi = {-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
-            for (CollisionSphere c : vehicle.collision()) {
+            for (CollisionSphere c : pose.collision()) {
                 Vec3d v = c.centerLocal();
                 double[] xyz = {v.x(), v.y(), v.z()};
                 for (int k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], xyz[k] - c.radiusM()); hi[k] = Math.max(hi[k], xyz[k] + c.radiusM()); }
             }
-            for (WorldBox b : vehicle.deck()) {
+            for (WorldBox b : pose.deck()) {
                 double[] mn = {b.min().x(), b.min().y(), b.min().z()}, mx = {b.max().x(), b.max().y(), b.max().z()};
                 for (int k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], mn[k]); hi[k] = Math.max(hi[k], mx[k]); }
             }
-            boxLow = lo; boxHigh = hi; boxFor = vehicle;
+            boxLow = lo; boxHigh = hi; boxFor = pose;
         }
         double[] lo = boxLow, hi = boxHigh;
         if (lo[0] > hi[0]) { return new AABB(position.x() - 0.5, position.y() - 0.5, position.z() - 0.5, position.x() + 0.5, position.y() + 0.5, position.z() + 0.5); }
-        Vec3d com = vehicle.properties().centerOfMassLocal();
+        Vec3d com = pose.properties().centerOfMassLocal();
         AABB result = null;
         for (int corner = 0; corner < 8; corner++) {
             Vec3d local = new Vec3d((corner & 1) == 0 ? lo[0] : hi[0], (corner & 2) == 0 ? lo[1] : hi[1], (corner & 4) == 0 ? lo[2] : hi[2]);
@@ -1296,7 +1402,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
 
     // ---------------------------------------------------------------- riders
 
-    @Override protected boolean canAddPassenger(Entity passenger) { return vehicle != null && getPassengers().size() < vehicle.seats().size(); }
+    @Override protected boolean canAddPassenger(Entity passenger) { return vehicle != null && getPassengers().size() < pose().seats().size(); }
 
     /**
      * 0.30: how far below a seat's point (its cushion) a rider's own position is, along the vehicle's up: a sitting
@@ -1307,8 +1413,8 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
 
     @Override protected void positionRider(Entity passenger, MoveFunction move) {
         int index = getPassengers().indexOf(passenger);
-        if (vehicle == null || index < 0 || index >= vehicle.seats().size()) { super.positionRider(passenger, move); return; }
-        Vec3d seat = toWorld(vehicle.seats().get(index).subtract(new Vec3d(0, SEATED_HIP_M, 0)));
+        if (vehicle == null || index < 0 || index >= pose().seats().size()) { super.positionRider(passenger, move); return; }
+        Vec3d seat = toWorld(pose().seats().get(index).subtract(new Vec3d(0, SEATED_HIP_M, 0)));
         move.accept(passenger, seat.x(), seat.y(), seat.z());
     }
 
@@ -1348,7 +1454,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
                 })).getNow(null);
             }
             if (source instanceof WakeSource.Planing planing) {
-                Vec3d ahead = poseOrientation().rotate(installed.rotation().rotate(Vec3d.X));
+                Vec3d ahead = poseOrientation().rotate(pose().rotation(installed.index()).rotate(Vec3d.X));
                 double trim = Math.asin(Math.clamp(ahead.y(), -1, 1)), wetted = 0;
                 if (state != null) {
                     Map<String, Double> d = state.diagnostics().get(installed.id());
@@ -1367,11 +1473,11 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
     }
     @Override public Vec3d wakeOrigin() {
         Vehicle.Installed part = vehicle == null ? null : wakePart();
-        return toWorld(part == null ? Vec3d.ZERO : part.mount().position());
+        return toWorld(part == null ? Vec3d.ZERO : pose().position(part.index()));
     }
     @Override public Vec3d wakeForward() {
         Vehicle.Installed part = vehicle == null ? null : wakePart();
-        return poseOrientation().rotate(part == null ? Vec3d.X : part.rotation().rotate(Vec3d.X));
+        return poseOrientation().rotate(part == null ? Vec3d.X : pose().rotation(part.index()).rotate(Vec3d.X));
     }
     @Override public Vec3d wakeVelocity() {
         return level().isClientSide || state == null ? new Vec3d(getX() - xo, getY() - yo, getZ() - zo).scale(1 / MinecraftUnits.TICK_SECONDS) : state.body().velocity();
@@ -1407,6 +1513,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
             CompoundTag link = place(leaderSeen);
             link.putUUID("Leader", leaderId);
             link.putString("Spec", coupling.write());
+            if (reeving != null) { link.putString("Reeving", dev.mcmod.aerocore.api.vehicle.Json.write(reeving.toJson())); }
             tag.put("Coupling", link);
         }
         if (!followers.isEmpty()) {
@@ -1440,6 +1547,7 @@ public class PartVehicle extends Entity implements CoupledBody, SolidBody, Debug
                 coupling = Coupling.parse(link.getString("Spec"));
                 leaderId = link.getUUID("Leader");
                 leaderSeen = place(link);
+                reeving = link.contains("Reeving") ? Coupling.Reeving.fromJson(dev.mcmod.aerocore.api.vehicle.Fields.of(Json.parse(link.getString("Reeving")), "reeving")) : null;
             } catch (RuntimeException e) {
                 coupling = null;
                 LOGGER.warn("Vehicle at {} has a coupling that cannot be read: {}", blockPosition(), e.getMessage());

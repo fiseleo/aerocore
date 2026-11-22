@@ -43,7 +43,7 @@ AeroCore 是计算 API 加上游戏端的载具框架：
 
 - `dev.mcmod.aerocore.api`（纯 Java，不依赖 Minecraft）：刚体与接触、`api.aero`（翼型、机翼、螺旋桨、旋翼）、
   `api.engine`（活塞循环、涡喷、涡扇、自由涡轮、冲压、超燃、脉冲喷射）、`api.body`、`api.wheel`、`api.drive`、`api.frame`、
-  `api.vehicle`（零件蓝图、`VehicleDynamics`）、`api.acoustics`、`api.manufacture`、`api.metallurgy`、`api.petroleum`、`api.power`、`api.mesh`。
+  `api.vehicle`（零件蓝图、`VehicleDynamics`）、`api.acoustics`、`api.hydraulic`（液压）、`api.earthmoving`（土方与施工）、`api.lifting`（起重）、`api.manufacture`、`api.metallurgy`、`api.petroleum`、`api.power`、`api.mesh`。
   全部都能脱机呼叫，给试算台与设计界面用。
 - `dev.mcmod.aerocore.neoforge.vehicle.PartVehicle`：由蓝图创建的通用载具实体，包含同步、存盘、海、风、地面与零件绘制。
 

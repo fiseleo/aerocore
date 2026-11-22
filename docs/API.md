@@ -734,6 +734,44 @@ level.addFreshEntity(entity);
   伺服器與其他載具照常運作。`resume()`（指令 `/aerocore vehicle resume`）讓它從靜止重新開始；原因沒排除就會再停一次。
   零件仍應保持有限、有界（例如 `SectionPolar` 從不丟例外）：停用是保護，不是正常結果。
 
+## 0.43 相容性變更
+
+使用者 2026-11-21 要「加入重型機械」（hdfv 0.26：挖土機、推土機、裝載機、鏟運機、平地機、壓路機、鋪築機、冷刨機、起重機、塔吊、礦用卡車、
+鉸接式卡車、採礦電鏟，以及維基「重型動力機械」的四類機種）。只新增：沒有關節、工具、液壓與繩索的載具每一步與 0.42 逐位元相同
+（`VehicleTest` 1e-9；沒有關節時用的是同一批物件），0.42 的存檔照讀、沒用新功能的載具存出來的內容不變。詳見 [MACHINERY.md](MACHINERY.md)，
+公式與來源見 [EARTHMOVING.md](EARTHMOVING.md)。
+
+- `api.vehicle`：
+  - `Part.Joint`（`REVOLUTE`／`PRISMATIC`、原點、軸、上下限、初值；`revolute(...)`、`prismatic(...)`）與 `Part.joint()`（預設 null：固定）。
+  - `Part.Tool`（名稱、刃的兩端 a、b、切削方向、深度、前角、種類 `EDGE`／`TOOTH`／`MILL`／`FACE`、裝進哪個貨艙、`Face`）、`Part.Face`
+    （盤形滾刀數、直徑、刀尖寬、間距）與 `Part.tools()`（預設沒有）。
+  - 新類別 `VehiclePose`（一組關節值下每個零件的位置與轉向，以及質量性質、碰撞球、座位、甲板、油箱與貨艙中心、轉子軸、關節的原點與軸、
+    騎在關節上的點的相對速度）與 `JointDrive`（關節的驅動解：子樹、廣義慣量、在致動器能力內給速度，否則讓開）。
+  - `Vehicle.Joint`、`Vehicle.Tool`、`joints()`、`tools()`、`restPose()`、`pose(值)`、`parent(i)`、`jointOf(i)`、`chain(i)`、`moves(j, i)`。
+    會扭的車架不能有關節，也不能掛在關節上（編譯時丟 `IllegalStateException`）。
+  - `VehicleState`：`pose()`、`properties()`（依姿態）、`jointValue`／`jointRate`／`jointEffort`／`jointLoad`、`joint(零件 id)`、`setJointValues`；
+    液壓的 `hydraulicShare`／`hydraulicPressure`／`hydraulicFlows`／`hydraulicCircuits`；`Cut`（零件、工具、格子、m³、貨艙）與 `takeCuts()`（不存檔）。
+    `toJson` 多 `joints` 鍵（`{零件 id: [q, q̇]}`，只有有關節的載具才寫）；`placed`、`restyled`、`refitted`、`separate`、`keepHardware` 都帶過去。
+  - `PartStep`：`position()`、`rotation()`、`pose()`、`relativeVelocityAt`、`jointValue`／`Rate`／`Effort`／`Load`、`driveJoint(速度, 往上的力, 往下的力)`、
+    `hydraulicShare`／`Pressure`／`Supply`／`Demand(迴路, …)`、`cut(工具, x, y, z, m³, 貨艙)`；`force`／`load` 依碰撞球的擁有者分到零件。
+  - `VehicleDynamics.Prepared` 多 `joints`、`circuits`、`cuts` 三個元件（保留舊的建構子）；`commitJoints()`。
+  - `VehicleEnvironment.terrain()`（預設 `Terrain.NONE`）與 `withTerrain`；`TestTrack` 可以給地形。
+  - `Coupling.Kind.ROPE`：`Coupling.rope(前車點, 後車點, 長度, 剛度, 阻尼)`、`withRope(點, 長度)`；`Coupling.Reeving`（滑輪零件與點、捲揚機零件）；
+    `tensionChannel(捲揚機)` 是 `"rope_tension." + 捲揚機`。`ContactSolver.Joint` 多一個 `reelMps`（保留三個參數的建構子）。
+- 新的執行時零件（`api.vehicle.part`）：`LinkPart`（關節＋`Ram`／`Slew`／`Free`、`Cutter`、工具）、`HydraulicPumpPart`、`HydraulicMotorPart`
+  （`Drum`：捲揚機）、`TrackPart`、`DrumPart`、`HangPart`（從外面給錨點的吊鉤組）、`ToolCutter`（工具的切削）。`api.wheel.RigidRoller`。
+- 新套件（純 Java）：`api.ground.Terrain`（`Cell`、`of`、`NONE`、`grid`）、`api.hydraulic`、`api.earthmoving`、`api.lifting`；
+  `api.acoustics.HydraulicNoise`、`TrackNoise`。
+- 遊戲端：
+  - `vehicle/WorldTerrain`（`register(Resolver)`：方塊→材料由載具 Mod 登記）；載具的地形從這裡來。
+  - `PartVehicle`：`pose()`／`pose(partialTick)`（客戶端內插關節值）；DISPLAY 多 `"j"`（關節值，只有有關節的載具才寫）；碰撞、座位與甲板跟著姿態；
+    事件 `PartVehicle.Stepped`（有關節或工具的載具每 tick 後發出，帶這一 tick 的切削）；繩索接頭與穿繞（`leaderCoupling`、`leaderReelMps`），
+    繩子拉斷的距離是「間距 − 繩長」，張力寫到 `rope_tension.<捲揚機>`。
+  - `client/VehicleControls.suppress(條件)`：載具 Mod 在客戶端暫時關掉 AeroCore 對移動鍵的預設對應（作業模式的搖桿）。
+  - `client/PartVehicleRenderer` 依姿態畫零件（載具 Mod 不必為關節另寫動畫）。
+- 測試：`physics` JUnit 817 項（0.42：742；新的 `JointTest`、`TrackTest`、`RopeTest`、`HydraulicDriveTest`、`ToolTest`、`HydraulicTest`、`EarthmovingTest`、
+  `ConstructionTest`、`LiftingTest`、`MachineryNoiseTest` 共 75 項）；GameTest 60 項（新的 `MachineryGameTests` 2 項：關節的伺服器狀態與存讀、繩索吊球）。
+
 ## 0.42 相容性變更
 
 使用者 2026-11-12 要「修理系統」與「儲物箱系統」（hdfv 0.25：四種損壞來源、修理廠與急修、車身貨艙、儲物箱零件、儲物方塊）。只新增：

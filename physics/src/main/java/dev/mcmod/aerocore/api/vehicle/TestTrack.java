@@ -86,7 +86,7 @@ public final class TestTrack {
      * about +y), level: the hitched start of a convoy.
      */
     public static Vec3d hitchedOrigin(Vehicle leader, VehicleState leaderState, Coupling coupling, double yawRad) {
-        Vec3d at = leaderState.body().worldPoint(leader.properties(), coupling.leaderPoint());
+        Vec3d at = leaderState.body().worldPoint(leaderState.properties(), coupling.leaderPoint());
         return at.subtract(Orientation.rotationVector(Vec3d.Y.scale(yawRad)).rotate(coupling.followerPoint()));
     }
 
@@ -118,7 +118,7 @@ public final class TestTrack {
             List<ContactSolver.Body> bodies = new ArrayList<>(n);
             for (int k = 0; k < n; k++) {
                 prepared[k] = VehicleDynamics.prepare(vehicles.get(k), states.get(k), environment, controls.get(k), gravity, driver.external(k, t, states.get(k)), t, DT);
-                bodies.add(new ContactSolver.Body(prepared[k].damped(), vehicles.get(k).properties()));
+                bodies.add(new ContactSolver.Body(prepared[k].damped(), states.get(k).properties()));
             }
             ContactSolver.Solution solved = ContactSolver.solveAll(bodies, List.of(), joints, DT);
             for (int k = 0; k < n; k++) {
@@ -126,7 +126,7 @@ public final class TestTrack {
                 results[k] = VehicleDynamics.finish(prepared[k], r.state(), r.wrench(), r.forces(), 0, null);
             }
             List<ContactSolver.Body> now = new ArrayList<>(n);
-            for (int k = 0; k < n; k++) { now.add(new ContactSolver.Body(states.get(k).body(), vehicles.get(k).properties())); }
+            for (int k = 0; k < n; k++) { now.add(new ContactSolver.Body(states.get(k).body(), states.get(k).properties())); }
             List<RigidBodyState> separated = ContactSolver.separateAll(now, b -> List.of(), joints);
             for (int k = 0; k < n; k++) { if (separated.get(k) != now.get(k).state()) { states.get(k).setBody(separated.get(k)); } }
             boolean last = stop.test(states) || i == steps - 1;

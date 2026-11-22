@@ -80,6 +80,18 @@ public final class VehicleDynamics {
         /** 0.42: the parts' conditions at the step's start (Part.conditions) and what they wore in it. */
         final double[] used, worn;
         final Vehicle vehicle;
+        /** 0.43: the pose at the step's start, the joints' last rates, efforts and loads, what the parts ask of them this step. */
+        final VehiclePose pose;
+        final double[] rates0, effort0, load0;
+        final JointDrive.Command[] commands;
+        /** 0.43, only for a vehicle with joints: each part's loads this step (world, about the COM), and who made each damper. */
+        final Wrench[] partLoads;
+        final List<Integer> damperOwner;
+        /** 0.43: what the parts told the hydraulic circuits this step, by name: {supply m^3/s, demand m^3/s, highest demand pressure Pa, lowest relief Pa}. */
+        final Map<String, double[]> hydraulic = new LinkedHashMap<>();
+        final Map<String, double[]> lastCircuits;
+        /** 0.43: what the tools cut this step. */
+        final List<VehicleState.Cut> cuts = new ArrayList<>();
 
         Collector(Vehicle v, VehicleState st) {
             vehicle = v;
@@ -96,6 +108,16 @@ public final class VehicleDynamics {
             carried = new Object[v.installed().size()];
             kept = new Object[v.installed().size()];
             supply = st.supply.clone();
+            pose = st.pose();
+            lastCircuits = st.circuits;
+            rates0 = st.jointRates.clone(); effort0 = st.jointEffort.clone(); load0 = st.jointLoad.clone();
+            commands = new JointDrive.Command[st.jointRates.length];
+            if (v.joints().isEmpty()) { partLoads = null; damperOwner = null; }
+            else {
+                partLoads = new Wrench[v.installed().size()];
+                java.util.Arrays.fill(partLoads, Wrench.ZERO);
+                damperOwner = new ArrayList<>();
+            }
         }
 
         double rotorSpeed(int k) { return speeds[k]; }
@@ -107,6 +129,15 @@ public final class VehicleDynamics {
             if (load) { sums.merge(f.kind(), f.wrench(), Wrench::add); }
         }
         void wrench(Wrench w, AppliedForce.Kind kind) { sums.merge(kind, w, Wrench::add); }
+        /** A part's load (0.43: kept by part for its joints when the vehicle has any). */
+        void force(int owner, AppliedForce f, boolean load) {
+            force(f, load);
+            if (partLoads != null && load) { partLoads[owner] = partLoads[owner].add(f.wrench()); }
+        }
+        void wrench(int owner, Wrench w, AppliedForce.Kind kind) {
+            wrench(w, kind);
+            if (partLoads != null) { partLoads[owner] = partLoads[owner].add(w); }
+        }
         void inertia(Wrench w) { inertia = inertia.add(w); }
         void addedMass(double[][] world) {
             if (added == null) { added = new double[6][6]; }
@@ -122,6 +153,7 @@ public final class VehicleDynamics {
         void radiation(int k, double radius, double share) { radii[k] = Math.max(0, radius); shares[k] = Math.clamp(share, 0, 1); }
         void thrust(String id, double water, double air, double diameter) { thrusts.put(id, new double[]{water, air, diameter}); }
         void diagnostic(String id, String key, double value) { diagnostics.computeIfAbsent(id, k -> new LinkedHashMap<>()).put(key, value); }
+        double[] circuit(String name) { return hydraulic.computeIfAbsent(name, k -> new double[]{0, 0, 0, Double.POSITIVE_INFINITY}); }
     }
 
     /**
@@ -131,7 +163,24 @@ public final class VehicleDynamics {
     public record Prepared(Vehicle vehicle, VehicleState state, RigidBodyState start, RigidBodyState damped, List<AppliedForce> forces,
                            Map<AppliedForce.Kind, Wrench> loads, Wrench inertia, List<RigidBodyDynamics.PointMass> masses,
                            double[] trainSpeeds, double[] radii, Map<String, Map<String, Double>> diagnostics, double dt, double[] internals,
-                           Drive drive, List<Collector.Burn> burns, java.util.Set<String> jettisons, double[] worn) {}
+                           Drive drive, List<Collector.Burn> burns, java.util.Set<String> jettisons, double[] worn, Joints joints,
+                           Map<String, double[]> circuits, List<VehicleState.Cut> cuts) {
+        /** As before 0.43 (a vehicle without joints). */
+        public Prepared(Vehicle vehicle, VehicleState state, RigidBodyState start, RigidBodyState damped, List<AppliedForce> forces,
+                        Map<AppliedForce.Kind, Wrench> loads, Wrench inertia, List<RigidBodyDynamics.PointMass> masses,
+                        double[] trainSpeeds, double[] radii, Map<String, Map<String, Double>> diagnostics, double dt, double[] internals,
+                        Drive drive, List<Collector.Burn> burns, java.util.Set<String> jettisons, double[] worn) {
+            this(vehicle, state, start, damped, forces, loads, inertia, masses, trainSpeeds, radii, diagnostics, dt, internals, drive, burns, jettisons, worn, null,
+                    Map.of(), List.of());
+        }
+    }
+
+    /**
+     * 0.43: the joints' step (null for a vehicle without joints): the pose it started at, the end values and rates, the
+     * actuators' efforts, the loads they took, the moving parts' momentum against the frame (P world, H vehicle frame)
+     * and what the dampers on the moving parts did (generalized, for the next step).
+     */
+    public record Joints(VehiclePose pose, double[] values, double[] rates, double[] effort, double[] load, Vec3d linear, Vec3d angular, double[] damped) {}
 
     /**
      * What the drivetrain left for Part.after (0.24): every row's torque (N m) and every rolling force's end value (N)
@@ -199,15 +248,15 @@ public final class VehicleDynamics {
         if (st.vehicle() != v) { throw new IllegalArgumentException("State belongs to another vehicle"); }
         if (Math.abs(dt - st.dt()) > 1e-12) { throw new IllegalArgumentException("Step " + dt + " s differs from the state's substep " + st.dt() + " s"); }
         RigidBodyState s = st.body();
-        RigidBodyProperties p = v.properties();
-        Vec3d omega = s.angularVelocity(p);
         Collector c = new Collector(v, st);
+        RigidBodyProperties p = c.pose.properties();
+        Vec3d omega = s.angularVelocity(p);
         c.force(new AppliedForce(AppliedForce.Kind.WEIGHT, Vec3d.ZERO, gravity.scale(p.massKg())), true);
         // fuel in the tanks: point masses with their weight (0.26)
         for (int k = 0; k < v.tanks().size(); k++) {
             double kg = st.tankKg[k];
             if (!(kg > 0)) { continue; }
-            Vec3d at = s.worldOffset(p, v.tanks().get(k).centre());
+            Vec3d at = s.worldOffset(p, c.pose.tankCentre(k));
             c.pointMass(new RigidBodyDynamics.PointMass(at, kg), null);
             c.force(new AppliedForce(AppliedForce.Kind.WEIGHT, at, gravity.scale(kg)), true);
         }
@@ -215,7 +264,7 @@ public final class VehicleDynamics {
         for (int k = 0; k < v.holds().size(); k++) {
             double kg = st.holdKg[k];
             if (!(kg > 0)) { continue; }
-            Vec3d at = s.worldOffset(p, v.holds().get(k).centre());
+            Vec3d at = s.worldOffset(p, c.pose.holdCentre(k));
             c.pointMass(new RigidBodyDynamics.PointMass(at, kg), null);
             c.force(new AppliedForce(AppliedForce.Kind.WEIGHT, at, gravity.scale(kg)), true);
         }
@@ -257,7 +306,7 @@ public final class VehicleDynamics {
             double[] forces = st.radiation.verticalForces(rho);
             for (int k = 0; k < forces.length; k++) {
                 double f = forces[k] * c.shares[k];
-                if (f != 0) { c.force(new AppliedForce(AppliedForce.Kind.RADIATION, s.worldOffset(p, v.radiationPoints().get(k)), up.scale(f)), true); }
+                if (f != 0) { c.force(new AppliedForce(AppliedForce.Kind.RADIATION, s.worldOffset(p, c.pose.radiationPoints().get(k)), up.scale(f)), true); }
             }
         }
         for (AppliedForce f : external) { c.force(f, true); }
@@ -297,8 +346,8 @@ public final class VehicleDynamics {
                 double alpha = r.ratio() * (trainSpeeds[r.train()] - st.trainSpeeds[r.train()]) / dt;
                 double onRotor = r.momentumKgM2() * alpha - c.external[k];
                 if (onRotor == 0) { continue; }
-                Vec3d axis = s.orientation().rotate(r.axis());
-                c.force(new AppliedForce(AppliedForce.Kind.THRUST, s.worldOffset(p, r.position()), Vec3d.ZERO, axis.scale(-onRotor)), true);
+                Vec3d axis = s.orientation().rotate(c.pose.rotorAxis(k));
+                c.force(r.part(), new AppliedForce(AppliedForce.Kind.THRUST, s.worldOffset(p, c.pose.rotorPosition(k)), Vec3d.ZERO, axis.scale(-onRotor)), true);
             }
             // The gyroscopic reaction (the body turning at omega swings each rotor's spin momentum H, which needs omega x H)
             // is taken in the drift in finish, with the rotation (RigidBodyDynamics.drift of a gyrostat).
@@ -310,8 +359,10 @@ public final class VehicleDynamics {
             Vehicle.Rotor rotor = rotors.get(r.rotor());
             double force = r.force() + r.slope() * (rotor.ratio() * trainSpeeds[rotor.train()] - c.speeds[r.rotor()]);
             rollingForces[i] = force;
-            if (force != 0) { c.force(new AppliedForce(AppliedForce.Kind.CONTACT, r.offset(), r.direction().scale(force)), true); }
+            if (force != 0) { c.force(r.owner(), new AppliedForce(AppliedForce.Kind.CONTACT, r.offset(), r.direction().scale(force)), true); }
         }
+        // 0.43: the joints move by their drives against what loads the parts they carry; their momentum's change is the body's reaction
+        Joints joints = v.joints().isEmpty() ? null : joints(v, st, c, s, p, gravity, dt);
         Wrench load = c.inertia;
         for (Wrench w : c.sums.values()) { load = load.add(w); }
         Wrench excitation = Wrench.ZERO;
@@ -330,9 +381,17 @@ public final class VehicleDynamics {
             if (coefficient > 0) { c.force(new AppliedForce(AppliedForce.Kind.DRAG, r, relative.scale(-coefficient)), true); }
         }
         // Line dampers at the velocity the solve gave them (ground contact: a tyre's slip, a suspension's damping).
-        for (RigidBodyDynamics.LineDamper d : c.dampers) {
+        for (int i = 0; i < c.dampers.size(); i++) {
+            RigidBodyDynamics.LineDamper d = c.dampers.get(i);
             Vec3d force = d.force(damped.velocity().add(afterOmega.cross(d.offset())));
-            if (force.lengthSquared() > 0) { c.force(new AppliedForce(AppliedForce.Kind.CONTACT, d.offset(), force), true); }
+            if (force.lengthSquared() > 0) {
+                c.force(new AppliedForce(AppliedForce.Kind.CONTACT, d.offset(), force), true);
+                // 0.43: what a moving part's dampers did, for its joints next step
+                if (joints != null) {
+                    int owner = c.damperOwner.get(i);
+                    for (int j : v.chain(owner)) { joints.damped()[j] += JointDrive.generalized(v, c.pose, j, Wrench.atOffset(force, d.offset()), s.orientation()); }
+                }
+            }
         }
         // Inertia: excitation and ideal-fluid terms, minus the added masses' reaction to this step's acceleration.
         Vec3d omega0 = omega, dv = damped.velocity().subtract(s.velocity()), dw = afterOmega.subtract(omega0);
@@ -366,7 +425,58 @@ public final class VehicleDynamics {
         Drive drive = new Drive(rowTorques, firstRow, rowCount, rollingForces, firstRolling, rollingCount, c.carried, c.shown, c.speeds, time,
                 iterations, fallback);
         return new Prepared(v, st, s, damped, List.copyOf(c.display), new EnumMap<>(c.sums), inertia, List.copyOf(c.masses),
-                trainSpeeds, c.radii, c.diagnostics, dt, c.nextInternals, drive, List.copyOf(c.burns), java.util.Set.copyOf(c.jettisons), c.worn);
+                trainSpeeds, c.radii, c.diagnostics, dt, c.nextInternals, drive, List.copyOf(c.burns), java.util.Set.copyOf(c.jettisons), c.worn, joints,
+                circuits(c), c.cuts.isEmpty() ? List.of() : List.copyOf(c.cuts));
+    }
+
+    /**
+     * 0.43: the hydraulic circuits' step: each one's pumps give what they can (supply), its actuators ask (demand) at the
+     * pressure their loads need; the share every actuator gets is supply / demand when that is short (flow sharing:
+     * all slow down together), and the pressure is the highest asked, up to the lowest relief. The parts read both
+     * next step (PartStep.hydraulicShare, hydraulicPressure): a pump's torque on its engine follows the pressure, an
+     * actuator's speed the share. {share, pressure Pa, supply m^3/s, demand m^3/s} by name; empty when no part told any.
+     */
+    private static Map<String, double[]> circuits(Collector c) {
+        if (c.hydraulic.isEmpty()) { return Map.of(); }
+        Map<String, double[]> out = new LinkedHashMap<>();
+        for (Map.Entry<String, double[]> e : c.hydraulic.entrySet()) {
+            double[] h = e.getValue();
+            double supply = h[0], demand = h[1];
+            double share = demand > supply && demand > 0 ? supply / demand : 1;
+            double relief = Double.isFinite(h[3]) ? h[3] : h[2];
+            double pressure = supply > 0 ? Math.min(h[2], relief) : 0;
+            out.put(e.getKey(), new double[]{share, pressure, supply, demand});
+        }
+        return out;
+    }
+
+    /**
+     * 0.43: the joints' step (JointDrive): each joint's load from outside what it carries (that subtree's weight, its
+     * parts' loads this step, what contacts and dampers did to it last step), the drives resolved, and the reaction of
+     * the moving parts' change of momentum on the body (a force and a couple at the COM).
+     */
+    private static Joints joints(Vehicle v, VehicleState st, Collector c, RigidBodyState s, RigidBodyProperties p, Vec3d gravity, double dt) {
+        int n = v.joints().size();
+        VehiclePose pose = c.pose;
+        double[] load = new double[n], resist = new double[n], inertia = new double[n], values = new double[n], rates = new double[n], effort = new double[n];
+        for (Vehicle.Joint j : v.joints()) {
+            int k = j.index();
+            MassProperties sub = JointDrive.subtree(v, pose, st, k);
+            inertia[k] = JointDrive.inertia(v, pose, sub, k);
+            Wrench w = sub.massKg() > 0 ? Wrench.atOffset(gravity.scale(sub.massKg()), s.worldOffset(p, sub.centre())) : Wrench.ZERO;
+            for (Vehicle.Installed i : v.installed()) { if (v.moves(k, i.index())) { w = w.add(c.partLoads[i.index()]); } }
+            load[k] = JointDrive.generalized(v, pose, k, w, s.orientation());
+            resist[k] = st.jointLagged[k];
+        }
+        JointDrive.resolve(v, pose.values(), c.rates0, c.commands, load, resist, inertia, dt, values, rates, effort);
+        for (int k = 0; k < n; k++) { load[k] += resist[k]; }   // the load reported: all of it
+        JointDrive.Relative rel = JointDrive.relative(v, pose, st, rates);
+        Vec3d linear = s.orientation().rotate(rel.linear());
+        Vec3d dP = linear.subtract(st.relativeLinear), dH = s.orientation().rotate(rel.angular().subtract(st.relativeAngular));
+        if (dP.lengthSquared() > 0 || dH.lengthSquared() > 0) {
+            c.force(new AppliedForce(AppliedForce.Kind.INERTIA, Vec3d.ZERO, dP.scale(-1 / dt), dH.scale(-1 / dt)), true);
+        }
+        return new Joints(pose, values, rates, effort, load, linear, rel.angular(), new double[n]);
     }
 
     /**
@@ -418,16 +528,21 @@ public final class VehicleDynamics {
                                 double contactFrictionW, FloatingBodyDynamics.Collision collision) {
         Vehicle v = prepared.vehicle();
         VehicleState st = prepared.state();
-        RigidBodyProperties p = v.properties();
+        Joints joints = prepared.joints();
+        VehiclePose pose = joints == null ? st.pose() : joints.pose();
+        RigidBodyProperties p = pose.properties();
         List<AppliedForce> forces = new ArrayList<>(prepared.forces());
         forces.addAll(contactForces);
         Wrench inertia = prepared.inertia();
         // the rotors' spin momentum at this step's train speeds rides with the body through the drift (gyroscopic couples)
         Vec3d spin = Vec3d.ZERO;
-        for (Vehicle.Rotor r : v.rotors()) {
+        for (int k = 0; k < v.rotors().size(); k++) {
+            Vehicle.Rotor r = v.rotors().get(k);
             double speed = r.ratio() * prepared.trainSpeeds()[r.train()];
-            if (speed != 0) { spin = spin.add(r.axis().scale(r.momentumKgM2() * speed)); }
+            if (speed != 0) { spin = spin.add(pose.rotorAxis(k).scale(r.momentumKgM2() * speed)); }
         }
+        // 0.43: the moving parts' angular momentum against the frame rides with the rotors' spin
+        if (joints != null && joints.angular().lengthSquared() > 0) { spin = spin.add(joints.angular()); }
         RigidBodyState next = RigidBodyDynamics.driftWithPointMasses(afterContact, p, prepared.masses(), spin, prepared.dt());
         Vec3d exchangeForce = next.velocity().subtract(afterContact.velocity()).scale(p.massKg() / prepared.dt());
         Vec3d exchangeCouple = next.angularMomentum().subtract(afterContact.angularMomentum()).scale(1 / prepared.dt());
@@ -437,6 +552,7 @@ public final class VehicleDynamics {
             inertia = inertia.add(exchange.wrench());
         }
         if (collision != null) { next = ContactSolver.separate(next, p, collision.shape(), collision.obstacles()); }
+        if (joints != null) { next = commitJoints(v, st, joints, next, p, contactForces); }
         st.setBody(next);
         System.arraycopy(prepared.trainSpeeds(), 0, st.trainSpeeds, 0, st.trainSpeeds.length);
         System.arraycopy(prepared.internals(), 0, st.internals, 0, st.internals.length);
@@ -452,12 +568,57 @@ public final class VehicleDynamics {
         if (st.radiation != null) {
             // The first step starts the waterplane radii where the vehicle floats (Memory.prime), not at zero.
             if (!st.primed) { st.radiation.prime(prepared.radii()); st.primed = true; }
-            st.radiation.recordAt(next, p, v.radiationPoints(), Vec3d.Y, prepared.radii());
+            st.radiation.recordAt(next, st.properties(), st.pose().radiationPoints(), Vec3d.Y, prepared.radii());
             System.arraycopy(prepared.radii(), 0, st.radii, 0, st.radii.length);
         }
         st.forces = List.copyOf(forces);
         st.diagnostics = prepared.diagnostics();
+        // 0.43: what the tools cut waits for the game
+        if (!prepared.cuts().isEmpty()) { st.cuts.addAll(prepared.cuts()); }
+        // 0.43: the hydraulic circuits for the next step's parts
+        if (!prepared.circuits().isEmpty() || !st.circuits.isEmpty()) {
+            st.circuits.clear();
+            st.circuits.putAll(prepared.circuits());
+        }
         return new Result(next, st.forces, prepared.loads(), inertia, contact, prepared.diagnostics(), contactFrictionW);
+    }
+
+    /**
+     * 0.43: the joints' end values into the state, the body re-referenced to the centre of mass of the new pose (the
+     * vehicle frame's points keep their place and motion), and the load the contacts put on the parts each joint
+     * carries kept for the next step with what their dampers did (contact forces go to the part of the nearest sphere).
+     */
+    private static RigidBodyState commitJoints(Vehicle v, VehicleState st, Joints joints, RigidBodyState next, RigidBodyProperties p,
+                                               List<AppliedForce> contactForces) {
+        int n = v.joints().size();
+        VehiclePose pose = joints.pose();
+        double[] lagged = joints.damped().clone();
+        if (!contactForces.isEmpty()) {
+            RigidBodyState start = st.body();
+            List<dev.mcmod.aerocore.api.CollisionSphere> spheres = pose.collision();
+            for (AppliedForce f : contactForces) {
+                int owner = -1;
+                double best = Double.MAX_VALUE;
+                for (int k = 0; k < spheres.size(); k++) {
+                    double gap = start.worldOffset(p, spheres.get(k).centerLocal()).subtract(f.offset()).length() - spheres.get(k).radiusM();
+                    if (gap < best) { best = gap; owner = pose.collisionOwner(k); }
+                }
+                if (owner < 0) { continue; }
+                for (int j : v.chain(owner)) { lagged[j] += JointDrive.generalized(v, pose, j, f, start.orientation()); }
+            }
+        }
+        System.arraycopy(joints.values(), 0, st.jointValues, 0, n);
+        System.arraycopy(joints.rates(), 0, st.jointRates, 0, n);
+        System.arraycopy(joints.effort(), 0, st.jointEffort, 0, n);
+        System.arraycopy(joints.load(), 0, st.jointLoad, 0, n);
+        System.arraycopy(lagged, 0, st.jointLagged, 0, n);
+        st.relativeLinear = joints.linear();
+        st.relativeAngular = joints.angular();
+        // the centre of mass moves to where the new pose has it; the velocity stays the frame's at the centre of mass (the
+        // momentum the parts carry against the frame is P, whose change the next step reacts to, so M v + P is kept exactly)
+        Vec3d shift = next.orientation().rotate(st.pose().properties().centerOfMassLocal().subtract(p.centerOfMassLocal()));
+        if (shift.lengthSquared() == 0) { return next; }
+        return new RigidBodyState(next.position().add(shift), next.velocity(), next.orientation(), next.angularMomentum());
     }
 
     /**
@@ -500,8 +661,9 @@ public final class VehicleDynamics {
                               List<AppliedForce> external, FloatingBodyDynamics.Collision collision, double time, double dt) {
         Prepared prepared = prepare(v, st, environment, controls, gravity, external, time, dt);
         if (collision == null) { return finish(prepared, prepared.damped(), Wrench.ZERO, List.of(), 0, null); }
-        List<ContactSolver.Contact> contacts = ContactSolver.generate(prepared.damped(), v.properties(), collision.shape(), collision.obstacles(), dt);
-        ContactSolver.Result solved = ContactSolver.solve(prepared.damped(), v.properties(), contacts, collision.material(), dt);
+        RigidBodyProperties p = prepared.joints() == null ? st.properties() : prepared.joints().pose().properties();
+        List<ContactSolver.Contact> contacts = ContactSolver.generate(prepared.damped(), p, collision.shape(), collision.obstacles(), dt);
+        ContactSolver.Result solved = ContactSolver.solve(prepared.damped(), p, contacts, collision.material(), dt);
         return finish(prepared, solved.state(), solved.wrench(), solved.forces(), solved.frictionDissipationW(), collision);
     }
 }

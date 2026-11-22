@@ -73,6 +73,30 @@ final class TestParts {
                 hydro, 6, m, Map.of(), List.of(), List.of()));
     }
 
+    /**
+     * 0.43: a solid block (a box's inertia) of a mass centred at centre, with mount points, contact spheres and an
+     * optional joint; a bound "rate" input drives the joint at that rate with the given reach both ways (unbound: held).
+     */
+    static PartDesign solid(String name, Vec3d sizeM, double massKg, Vec3d centre, Map<String, Mount> points, Part.Joint joint, double reach,
+                            List<dev.mcmod.aerocore.api.CollisionSphere> spheres) {
+        MassProperties box = MassShapes.box(sizeM, 1e9);
+        MassProperties m = box.scaled(massKg / box.massKg()).transformed(centre, dev.mcmod.aerocore.api.Orientation.IDENTITY);
+        return new Fixture(name, "solid " + sizeM + " " + massKg + " " + centre + " " + points + " " + joint + " " + reach + " " + spheres, d -> new Part() {
+            @Override public PartDesign design() { return d; }
+            @Override public MassProperties mass() { return m; }
+            @Override public List<dev.mcmod.aerocore.api.CollisionSphere> collision() { return spheres; }
+            @Override public List<DesignIssue> issues() { return List.of(); }
+            @Override public Map<String, Mount> mountPoints() { return points; }
+            @Override public Part.Joint joint() { return joint; }
+            @Override public List<String> inputs() { return joint == null ? List.of() : List.of("rate"); }
+            @Override public void loads(PartStep step) {
+                if (joint == null) { return; }
+                double rate = step.input("rate", Double.NaN);
+                if (!Double.isNaN(rate)) { step.driveJoint(rate, reach, reach); }
+            }
+        });
+    }
+
     static PartDesign ballast(String name, double massKg) {
         return new Fixture(name, "ballast " + massKg, d -> new MassPart(d, MassProperties.point(massKg, Vec3d.ZERO), List.of()));
     }

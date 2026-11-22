@@ -54,6 +54,16 @@ public final class Vehicle {
      */
     public record Flex(int part, double[] stationX, double[][] twistNmPerRad, double[] weights) {}
 
+    /**
+     * 0.43: a joint of the vehicle (Part.joint): its index among the vehicle's joints, its part (installed index) and id,
+     * the joint, the part it is attached to (-1 at the root) and where it sits in that part's frame (its own mount at the
+     * root): the joint turns or slides the part from there.
+     */
+    public record Joint(int index, int part, String id, Part.Joint joint, int parent, Mount base) {}
+
+    /** 0.43: a tool of the vehicle (Part.tools): its part (installed index), id ("part.tool") and the tool. */
+    public record Tool(int part, String id, Part.Tool tool) {}
+
     private final VehicleBlueprint blueprint;
     private final List<Installed> installed;
     private final MassProperties mass;
@@ -71,10 +81,18 @@ public final class Vehicle {
     /** Where each part's condition values start (Part.conditions, by installed index), and how many there are in all (0.42). */
     private final int[] firstCondition;
     private final int conditions;
+    /** 0.43: the part each is attached to (-1 at the root), its placement there, its own joint (-1 none), the joints above it (root first, its own last). */
+    private final int[] parent, jointOf;
+    private final Mount[] relative;
+    private final int[][] chain;
+    private final List<Joint> joints;
+    private final List<Tool> tools;
+    private final VehiclePose rest;
 
     private Vehicle(VehicleBlueprint blueprint, List<Installed> installed, MassProperties mass, RigidBodyProperties properties,
                     List<CollisionSphere> collision, List<Vec3d> radiationPoints, List<Vec3d> seats, List<WorldBox> deck,
-                    List<Rotor> rotors, int trains, List<Freewheel> freewheels, List<Tank> tanks, List<Hold> holds, List<DesignIssue> issues, Flex flex) {
+                    List<Rotor> rotors, int trains, List<Freewheel> freewheels, List<Tank> tanks, List<Hold> holds, List<DesignIssue> issues, Flex flex,
+                    int[] parent, Mount[] relative, List<MassProperties> masses) {
         this.blueprint = blueprint; this.installed = installed; this.mass = mass; this.properties = properties; this.collision = collision;
         this.radiationPoints = radiationPoints; this.seats = seats; this.deck = deck; this.rotors = rotors; this.trains = trains;
         this.freewheels = freewheels; this.tanks = tanks; this.holds = holds; this.issues = issues; this.flex = flex;
@@ -87,7 +105,59 @@ public final class Vehicle {
             n += names.size();
         }
         conditions = n;
+        this.parent = parent; this.relative = relative;
+        jointOf = new int[installed.size()];
+        java.util.Arrays.fill(jointOf, -1);
+        List<Joint> js = new ArrayList<>();
+        for (Installed i : installed) {
+            Part.Joint j = i.part().joint();
+            if (j == null) { continue; }
+            jointOf[i.index()] = js.size();
+            js.add(new Joint(js.size(), i.index(), i.id(), j, parent[i.index()], relative[i.index()]));
+        }
+        joints = List.copyOf(js);
+        List<Tool> ts = new ArrayList<>();
+        for (Installed i : installed) { for (Part.Tool t : i.part().tools()) { ts.add(new Tool(i.index(), i.id() + "." + t.name(), t)); } }
+        tools = List.copyOf(ts);
+        chain = new int[installed.size()][];
+        for (Installed i : installed) {
+            List<Integer> up = new ArrayList<>();
+            for (int at = i.index(), guard = 0; at >= 0 && guard <= installed.size(); at = parent[at], guard++) {
+                if (jointOf[at] >= 0) { up.add(0, jointOf[at]); }
+            }
+            chain[i.index()] = up.stream().mapToInt(Integer::intValue).toArray();
+        }
+        if (joints.isEmpty()) {
+            rest = VehiclePose.fixed(this, masses);
+        } else {
+            double[] start = new double[joints.size()];
+            for (Joint j : joints) { start[j.index()] = j.joint().initial(); }
+            rest = VehiclePose.of(this, start);
+        }
     }
+
+    /** 0.43: the vehicle's joints (Part.joint), in installed order; none for most vehicles. */
+    public List<Joint> joints() { return joints; }
+    /** 0.43: the vehicle's tools (Part.tools), in installed order. */
+    public List<Tool> tools() { return tools; }
+    /** 0.43: the pose of a new vehicle (every joint at its initial value); for a vehicle without joints the compiled geometry itself. */
+    public VehiclePose restPose() { return rest; }
+    /** 0.43: the pose at these joint values (Vehicle.joints order); the rest pose without joints. */
+    public VehiclePose pose(double[] values) {
+        if (joints.isEmpty()) { return rest; }
+        if (values.length != joints.size()) { throw new IllegalArgumentException("Expected " + joints.size() + " joint values"); }
+        return VehiclePose.of(this, values);
+    }
+    /** The part installed part i is attached to (-1 when it is mounted on the vehicle itself). */
+    public int parent(int part) { return parent[part]; }
+    /** Where installed part i sits in its parent's frame (its own mount at the root). */
+    Mount relative(int part) { return relative[part]; }
+    /** Installed part i's own joint (index in joints()), or -1. */
+    public int jointOf(int part) { return jointOf[part]; }
+    /** The joints that move installed part i, root first (its own last when it has one); empty when it sits fixed. */
+    public int[] chain(int part) { return chain[part]; }
+    /** Whether joint j moves installed part i. */
+    public boolean moves(int joint, int part) { for (int j : chain[part]) { if (j == joint) { return true; } } return false; }
 
     public VehicleBlueprint blueprint() { return blueprint; }
     public List<Installed> installed() { return installed; }
@@ -143,7 +213,7 @@ public final class Vehicle {
      * substep dt (s; the wave-radiation memory is built for it).
      */
     public VehicleState newState(Vec3d origin, Orientation q, double dt) {
-        RigidBodyState body = new RigidBodyState(origin.add(q.rotate(properties.centerOfMassLocal())), Vec3d.ZERO, q, Vec3d.ZERO);
+        RigidBodyState body = new RigidBodyState(origin.add(q.rotate(rest.properties().centerOfMassLocal())), Vec3d.ZERO, q, Vec3d.ZERO);
         return new VehicleState(this, body, dt);
     }
 
@@ -269,9 +339,27 @@ public final class Vehicle {
         List<Freewheel> freewheels = new ArrayList<>();
         int trains = trains(blueprint, installed, rotors, index, issues, freewheels);
         Flex flex = flex(installed, masses, issues);
+        // 0.43: each part's parent and its placement there, for joints (Part.joint) to move what is attached below them
+        int[] parent = new int[entries.size()];
+        Mount[] relative = new Mount[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            Mount m = entries.get(i).mount();
+            Integer host = m.attached() ? index.get(m.attachPart()) : null;
+            Mount point = host == null ? null : parts.get(host).mountPoints().get(m.attachPoint());
+            parent[i] = point == null ? -1 : host;
+            relative[i] = point == null ? mounts.get(i) : point.then(m.detached());
+        }
+        if (flex != null && installed.get(flex.part()).part().joint() != null) {
+            issues.add(DesignIssue.invalid("parts." + installed.get(flex.part()).id(), "A twisting frame does not move on a joint"));
+        }
         DesignException.throwIfInvalid(issues);
-        return new Vehicle(blueprint, List.copyOf(installed), total, properties, List.copyOf(collision), List.copyOf(radiation), List.copyOf(seats),
-                List.copyOf(deck), List.copyOf(rotors), trains, List.copyOf(freewheels), List.copyOf(tanks), List.copyOf(holds), List.copyOf(issues), flex);
+        Vehicle v = new Vehicle(blueprint, List.copyOf(installed), total, properties, List.copyOf(collision), List.copyOf(radiation), List.copyOf(seats),
+                List.copyOf(deck), List.copyOf(rotors), trains, List.copyOf(freewheels), List.copyOf(tanks), List.copyOf(holds), List.copyOf(issues), flex,
+                parent, relative, masses);
+        if (flex != null && v.chain(flex.part()).length > 0) {
+            throw new DesignException(List.of(DesignIssue.invalid("parts." + installed.get(flex.part()).id(), "A twisting frame does not ride on a joint")));
+        }
+        return v;
     }
 
     /** The vehicle's twisting frame (0.33): one part's at most, mounted level and square (no turn), its stations' mass shares. */

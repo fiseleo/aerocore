@@ -40,6 +40,46 @@ public final class VehicleState {
     final double[] used;
     /** Cargo in each hold (Vehicle.holds), kg (0.42). */
     final double[] holdKg;
+    /** 0.43: each joint's value (Vehicle.joints; rad or m) and rate, and the pose they make (built when asked, kept while they stand). */
+    final double[] jointValues, jointRates;
+    /**
+     * 0.43: what the parts outside a joint did to the parts it moves in the last step (contacts on their spheres, their
+     * tyres' dampers), as a generalized force on the joint (N m or N): the next step's drive takes it with this step's
+     * loads. And the generalized force each joint's actuator gave (the drive's effort; for pressures and gauges).
+     */
+    final double[] jointLagged, jointEffort;
+    /** 0.43: the whole generalized load on each joint the last step's drive took (weight, loads, lagged contacts; N m or N). */
+    final double[] jointLoad;
+    /** 0.43: the moving parts' momentum against the vehicle frame in the last step: linear (world, kg m/s) and angular (vehicle frame, about the COM). */
+    Vec3d relativeLinear = Vec3d.ZERO, relativeAngular = Vec3d.ZERO;
+    private VehiclePose pose;
+    private double[] poseValues;
+    /**
+     * 0.43: each hydraulic circuit's last step (by name, VehicleDynamics): the share of the flow its actuators asked for
+     * that its pumps could give (1 when they could give it all), its pressure (Pa), the flow its pumps could give and
+     * the flow asked (m^3/s). Not saved: a circuit is back within a step.
+     */
+    final Map<String, double[]> circuits = new java.util.LinkedHashMap<>();
+    /**
+     * 0.43: what the tools cut since the game last took it (PartStep.cut): by part, tool, cell, volume (m^3 of bank
+     * material) and the hold it went into. Not saved: the game takes it every tick (takeCuts).
+     */
+    final List<Cut> cuts = new ArrayList<>();
+
+    /** 0.43: a tool's cut: the part's id, the tool's name, the cell, the bank volume (m^3) and the hold's id it went into ("" none). */
+    public record Cut(String part, String tool, int x, int y, int z, double m3, String hold) {}
+
+    /** 0.43: what the tools cut since the last call (each cell's volume summed per tool), and clears it. */
+    public List<Cut> takeCuts() {
+        if (cuts.isEmpty()) { return List.of(); }
+        java.util.LinkedHashMap<String, Cut> sum = new java.util.LinkedHashMap<>();
+        for (Cut c : cuts) {
+            String key = c.part() + "|" + c.tool() + "|" + c.x() + "|" + c.y() + "|" + c.z() + "|" + c.hold();
+            sum.merge(key, c, (a, b) -> new Cut(a.part(), a.tool(), a.x(), a.y(), a.z(), a.m3() + b.m3(), a.hold()));
+        }
+        cuts.clear();
+        return List.copyOf(sum.values());
+    }
     List<AppliedForce> forces = List.of();
     Map<String, Map<String, Double>> diagnostics = Map.of();
 
@@ -67,9 +107,86 @@ public final class VehicleState {
             if (start.length != i.part().internalStates()) { throw new IllegalStateException("Part " + i.id() + " gives the wrong number of initial internals"); }
             System.arraycopy(start, 0, internals, i.firstInternal(), start.length);
         }
+        int joints = vehicle.joints().size();
+        jointValues = new double[joints]; jointRates = new double[joints]; jointLagged = new double[joints]; jointEffort = new double[joints];
+        jointLoad = new double[joints];
+        for (Vehicle.Joint j : vehicle.joints()) { jointValues[j.index()] = j.joint().initial(); }
     }
 
     public Vehicle vehicle() { return vehicle; }
+
+    // ----- joints (0.43) -----
+
+    /** The vehicle's geometry at its joints' values now (VehiclePose); the compiled geometry for a vehicle without joints. */
+    public VehiclePose pose() {
+        if (jointValues.length == 0) { return vehicle.restPose(); }
+        if (pose == null || !java.util.Arrays.equals(poseValues, jointValues)) {
+            pose = vehicle.pose(jointValues);
+            poseValues = jointValues.clone();
+        }
+        return pose;
+    }
+    /** Mass, centre and inertia of the vehicle as it stands (Vehicle.properties for a vehicle without joints). */
+    public dev.mcmod.aerocore.api.RigidBodyProperties properties() { return pose().properties(); }
+    /** Joint j's value (rad or m; Vehicle.joints). */
+    public double jointValue(int joint) { return jointValues[joint]; }
+    /** Joint j's rate in the last step (rad/s or m/s). */
+    public double jointRate(int joint) { return jointRates[joint]; }
+    /** The generalized force joint j's actuator gave in the last step (N m or N; positive pushes q up). */
+    public double jointEffort(int joint) { return jointEffort[joint]; }
+    /** The generalized load on joint j from outside what it moves in the last step, weight included (N m or N). */
+    public double jointLoad(int joint) { return jointLoad[joint]; }
+    /** The joint of part partId, or -1 when it has none. */
+    public int joint(String partId) {
+        Vehicle.Installed p = vehicle.installed(partId);
+        return p == null ? -1 : vehicle.jointOf(p.index());
+    }
+    /** All joint values (a copy), for sending to clients. */
+    public double[] jointValues() { return jointValues.clone(); }
+
+    /** 0.43: a hydraulic circuit's share of the asked flow its pumps gave in the last step (1 for a circuit not seen). */
+    public double hydraulicShare(String circuit) { double[] c = circuits.get(circuit); return c == null ? 1 : c[0]; }
+    /** 0.43: a hydraulic circuit's pressure in the last step, Pa (0 for a circuit not seen). */
+    public double hydraulicPressure(String circuit) { double[] c = circuits.get(circuit); return c == null ? 0 : c[1]; }
+    /** 0.43: the flow a circuit's pumps could give and the flow its actuators asked in the last step, m^3/s ({supply, demand}). */
+    public double[] hydraulicFlows(String circuit) { double[] c = circuits.get(circuit); return c == null ? new double[2] : new double[]{c[2], c[3]}; }
+    /** 0.43: the names of the hydraulic circuits seen in the last step. */
+    public java.util.Set<String> hydraulicCircuits() { return java.util.Set.copyOf(circuits.keySet()); }
+
+    /**
+     * Sets joints from outside a step (a client's copy of the server's, a command, a teleport), within their ranges,
+     * at rest; the vehicle frame stays where it is and the body's centre of mass follows the parts. Values that do not
+     * fit or are not finite are skipped.
+     */
+    public void setJointValues(double[] values) {
+        if (jointValues.length == 0) { return; }
+        Vec3d origin = origin();
+        for (int k = 0; k < Math.min(values.length, jointValues.length); k++) {
+            if (!Double.isFinite(values[k])) { continue; }
+            Part.Joint j = vehicle.joints().get(k).joint();
+            jointValues[k] = Math.clamp(values[k], j.minimum(), j.maximum());
+            jointRates[k] = 0;
+        }
+        relativeLinear = Vec3d.ZERO; relativeAngular = Vec3d.ZERO;
+        reference(origin);
+    }
+
+    /** Puts the body's centre of mass where the pose puts it with the vehicle frame's origin at origin (world), same motion. */
+    private void reference(Vec3d origin) {
+        Vec3d com = origin.add(body.orientation().rotate(pose().properties().centerOfMassLocal()));
+        body = new RigidBodyState(com, body.velocity(), body.orientation(), body.angularMomentum());
+    }
+
+    /** Copies another state's joints by part id (a changed blueprint keeps what is still there), keeping this one's frame. */
+    private void carryJoints(VehicleState from) {
+        if (jointValues.length == 0 || from.jointValues.length == 0) { return; }
+        double[] values = jointValues.clone();
+        for (Vehicle.Joint j : vehicle.joints()) {
+            int was = from.joint(j.id());
+            if (was >= 0) { values[j.index()] = from.jointValues[was]; }
+        }
+        setJointValues(values);
+    }
     public double dt() { return dt; }
     public RigidBodyState body() { return body; }
     /** Replaces the rigid-body state (a contact correction, a teleport); shaft speeds and wave memory stay. */
@@ -202,7 +319,7 @@ public final class VehicleState {
      * Takes another state's conditions and cargo, by part id and name and by hold id: a state built anew (after a
      * physics fault) keeps what its hardware has worn and what it carries.
      */
-    public void keepHardware(VehicleState from) { from.carryCondition(this); }
+    public void keepHardware(VehicleState from) { from.carryCondition(this); carryJoints(from); }
 
     /**
      * Condition by part id and name and cargo by hold id, carried into out (separate, refitted, placed, restyled): they
@@ -251,7 +368,7 @@ public final class VehicleState {
      */
     public VehicleState separate(Vehicle next) {
         RigidBodyState s = body;
-        var p = vehicle.properties();
+        var p = properties();
         var q = next.properties();
         Vec3d omega = s.angularVelocity(p);
         Vec3d com = s.worldPoint(p, q.centerOfMassLocal());
@@ -259,6 +376,7 @@ public final class VehicleState {
         VehicleState out = new VehicleState(next, new RigidBodyState(com, velocity, s.orientation(), q.inertia().applyWorld(s.orientation(), omega)), dt);
         carryParts(out);
         carryCondition(out);
+        out.carryJoints(this);
         java.util.Map<String, Integer> tanks = tankIndex();
         for (int k = 0; k < next.tanks().size(); k++) {
             Integer was = tanks.get(next.tanks().get(k).id());
@@ -316,6 +434,7 @@ public final class VehicleState {
         VehicleState out = next.newState(origin(), body.orientation(), dt);
         carryParts(out);
         carryCondition(out);
+        out.carryJoints(this);
         java.util.Map<String, Integer> tanks = tankIndex();
         Map<String, Double> spilled = new java.util.LinkedHashMap<>();
         for (int k = 0; k < next.tanks().size(); k++) {
@@ -386,6 +505,13 @@ public final class VehicleState {
         out.primed = primed;
         out.jettisons.addAll(jettisons);
         carryCondition(out);
+        // 0.43: the joints as they stand (the body is the same, so the pose must be too)
+        System.arraycopy(jointValues, 0, out.jointValues, 0, jointValues.length);
+        System.arraycopy(jointRates, 0, out.jointRates, 0, jointRates.length);
+        System.arraycopy(jointLagged, 0, out.jointLagged, 0, jointLagged.length);
+        System.arraycopy(jointEffort, 0, out.jointEffort, 0, jointEffort.length);
+        System.arraycopy(jointLoad, 0, out.jointLoad, 0, jointLoad.length);
+        out.relativeLinear = relativeLinear; out.relativeAngular = relativeAngular;
         out.forces = forces;
         out.diagnostics = diagnostics;
         return out;
@@ -408,6 +534,7 @@ public final class VehicleState {
         out.jettisons.addAll(jettisons);
         System.arraycopy(used, 0, out.used, 0, used.length);
         System.arraycopy(holdKg, 0, out.holdKg, 0, holdKg.length);
+        out.carryJoints(this);
         out.diagnostics = diagnostics;   // until the next step replaces them
         return out;
     }
@@ -417,7 +544,7 @@ public final class VehicleState {
     /** Diagnostics of the last step by part id. */
     public Map<String, Map<String, Double>> diagnostics() { return diagnostics; }
     /** World position of the vehicle frame's origin. */
-    public Vec3d origin() { return vehicle.origin(body); }
+    public Vec3d origin() { return body.worldPoint(properties(), Vec3d.ZERO); }
 
     /** Rigid-body state, train speeds and part internals (the wave memory is not saved; it refills within its 8 s span). */
     public Map<String, Object> toJson() {
@@ -445,6 +572,12 @@ public final class VehicleState {
         Map<String, Object> holds = new java.util.LinkedHashMap<>();
         for (int k = 0; k < holdKg.length; k++) { if (holdKg[k] > 0) { holds.put(vehicle.holds().get(k).id(), holdKg[k]); } }
         if (!holds.isEmpty()) { out.put("holds", holds); }
+        // 0.43: each joint's value and rate by its part's id; only a vehicle with joints has them
+        if (jointValues.length > 0) {
+            Map<String, Object> joints = new java.util.LinkedHashMap<>();
+            for (Vehicle.Joint j : vehicle.joints()) { joints.put(j.id(), List.of(jointValues[j.index()], jointRates[j.index()])); }
+            out.put("joints", joints);
+        }
         return out;
     }
 
@@ -502,6 +635,19 @@ public final class VehicleState {
                     state.holdKg[k] = n.doubleValue();
                 }
             }
+        }
+        // 0.43: joints by part id; the saved position is the centre of mass with them as saved, so no re-referencing
+        if (state.jointValues.length > 0 && f.raw("joints") instanceof Map<?, ?> joints) {
+            for (Vehicle.Joint j : vehicle.joints()) {
+                if (!(joints.get(j.id()) instanceof List<?> pair) || pair.size() != 2) { continue; }
+                if (pair.get(0) instanceof Number value && Double.isFinite(value.doubleValue())) {
+                    state.jointValues[j.index()] = Math.clamp(value.doubleValue(), j.joint().minimum(), j.joint().maximum());
+                }
+                if (pair.get(1) instanceof Number r && Double.isFinite(r.doubleValue())) { state.jointRates[j.index()] = r.doubleValue(); }
+            }
+            JointDrive.Relative rel = JointDrive.relative(vehicle, state.pose(), state, state.jointRates);
+            state.relativeLinear = orientation.rotate(rel.linear());
+            state.relativeAngular = rel.angular();
         }
         return state;
     }

@@ -97,6 +97,80 @@ public interface Part {
     default boolean early() { return false; }
 
     /**
+     * 0.43: how this part moves against what it is mounted on (an excavator's boom about its foot pin, a slewing ring's
+     * upper half, a loader's front frame about the centre hinge, a telescopic section, a dump body's tip), or null: it
+     * sits fixed. The part, everything mounted on its mount points and everything below them move together; the vehicle
+     * stays one rigid body whose mass, inertia and geometry follow the joints (VehiclePose). The value q is radians
+     * (REVOLUTE: a turn about axis through origin) or metres (PRISMATIC: a slide along axis), 0 as the part is built
+     * and mounted, kept within minimum..maximum, initial for a new vehicle. The part drives it in loads
+     * (PartStep.driveJoint); undriven it is held.
+     */
+    record Joint(Kind kind, Vec3d origin, Vec3d axis, double minimum, double maximum, double initial) {
+        public enum Kind { REVOLUTE, PRISMATIC }
+        public Joint {
+            java.util.Objects.requireNonNull(kind, "kind"); java.util.Objects.requireNonNull(origin, "origin");
+            if (!(axis.length() > 0)) { throw new IllegalArgumentException("A joint has an axis"); }
+            axis = axis.normalized();
+            if (Double.isNaN(minimum) || Double.isNaN(maximum) || minimum > maximum || !Double.isFinite(initial) || initial < minimum || initial > maximum) {
+                throw new IllegalArgumentException("A joint's range is ordered and holds its initial value: " + minimum + " .. " + maximum + ", " + initial);
+            }
+        }
+        /** A turning joint about axis through origin (part frame), radians. */
+        public static Joint revolute(Vec3d origin, Vec3d axis, double minimumRad, double maximumRad, double initialRad) {
+            return new Joint(Kind.REVOLUTE, origin, axis, minimumRad, maximumRad, initialRad);
+        }
+        /** A sliding joint along axis (part frame), metres. */
+        public static Joint prismatic(Vec3d axis, double minimumM, double maximumM, double initialM) {
+            return new Joint(Kind.PRISMATIC, Vec3d.ZERO, axis, minimumM, maximumM, initialM);
+        }
+    }
+
+    /** 0.43: this part's joint (Joint), or null: it sits fixed where it is mounted. */
+    default Joint joint() { return null; }
+
+    /**
+     * 0.43: a tool's cutting edge (part frame): a straight edge from a to b (a bucket's lip, a blade's cutting edge, a
+     * ripper's tip as a short one, a cutter drum's width along its bottom), cutting into the ground the way cut points
+     * (unit, part frame: the edge's motion when it digs), at most depthM deep at once (what the tool holds above its
+     * edge: a blade's height, a bucket's depth), at a rake (rad from the horizontal in the cut's direction: a dozer
+     * blade's 55 degrees, a bucket's lip 30 to 45). The part computes the cutting force in its loads from the ground it
+     * finds (VehicleEnvironment.terrain, api.earthmoving.Digging) and reports what it cut (PartStep.cut) into its hold
+     * ("" for none: a blade pushes it on, a ripper leaves it loosened). Kinds: EDGE, a wide edge moving through the
+     * ground (bucket, blade, moldboard, scraper's edge); TOOTH, a narrow one (ripper shank, a trencher's tooth); MILL, a
+     * drum turning on its own rotor (a cold planer's, a roadheader's head, a bucket wheel) whose picks cut at the rim's
+     * speed, the edge its axis; FACE, a tunnel boring machine's cutterhead (a disc of radius |b - a| about a, facing the
+     * cut) with disc cutters (face).
+     */
+    record Tool(String name, Vec3d a, Vec3d b, Vec3d cut, double depthM, double rakeRad, Kind kind, String hold, Face face) {
+        public enum Kind { EDGE, TOOTH, MILL, FACE }
+        public Tool {
+            java.util.Objects.requireNonNull(name); java.util.Objects.requireNonNull(a); java.util.Objects.requireNonNull(b);
+            java.util.Objects.requireNonNull(kind); java.util.Objects.requireNonNull(hold);
+            if (!(cut.length() > 0) || !(depthM > 0) || !Double.isFinite(depthM) || !(rakeRad > 0 && rakeRad < Math.PI)) {
+                throw new IllegalArgumentException("A tool cuts some way, some depth, at a rake");
+            }
+            if (kind == Kind.FACE && face == null) { throw new IllegalArgumentException("A cutterhead has its discs"); }
+            cut = cut.normalized();
+        }
+        /** An edge or tooth (no cutterhead). */
+        public Tool(String name, Vec3d a, Vec3d b, Vec3d cut, double depthM, double rakeRad, Kind kind, String hold) {
+            this(name, a, b, cut, depthM, rakeRad, kind, hold, null);
+        }
+        /** The edge's width, m (a cutterhead's radius). */
+        public double widthM() { return b.subtract(a).length(); }
+    }
+
+    /** 0.43: a cutterhead's disc cutters: how many, their diameter and tip width (m), and their spacing on the face (m). */
+    record Face(int discs, double discDiameterM, double tipWidthM, double spacingM) {
+        public Face {
+            if (discs < 1 || !(discDiameterM > 0) || !(tipWidthM > 0) || !(spacingM > 0)) { throw new IllegalArgumentException("Disc cutter values out of range"); }
+        }
+    }
+
+    /** 0.43: this part's cutting tools (none by default). */
+    default List<Tool> tools() { return List.of(); }
+
+    /**
      * 0.33: the frame this part twists as (a chassis, a car body; FrameTwist), or null: rigid. A vehicle has one at most; it
      * keeps the stations' twists (rad) as its first internal states, which VehicleDynamics solves (FrameFlex) and writes.
      */

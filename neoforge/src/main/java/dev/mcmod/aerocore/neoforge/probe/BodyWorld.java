@@ -338,7 +338,10 @@ public final class BodyWorld {
                 for (int k = 0; k < active.size(); k++) { index.put(active.get(k).body().entity().getUUID(), k); }
             }
             Integer l = index.get(b.leaderId());
-            if (l != null && l != i && !down.contains(active.get(l).body())) { joints.add(new ContactSolver.Joint(l, i, b.leaderCoupling())); }
+            if (l != null && l != i && !down.contains(active.get(l).body())) {
+                CoupledBody leader = active.get(l).body();
+                joints.add(new ContactSolver.Joint(l, i, b.leaderCoupling(leader), b.leaderReelMps(leader)));
+            }
         }
         return joints;
     }

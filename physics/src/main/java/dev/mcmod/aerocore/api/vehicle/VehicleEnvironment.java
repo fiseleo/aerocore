@@ -23,8 +23,10 @@ public interface VehicleEnvironment {
     default WaveField waves() { return WaveField.NONE; }
     /** The ground wheels cast their rays at (0.24). */
     default Ground ground() { return Ground.NONE; }
+    /** 0.43: what the ground is made of, for tools that dig it (none unless given). */
+    default dev.mcmod.aerocore.api.ground.Terrain terrain() { return dev.mcmod.aerocore.api.ground.Terrain.NONE; }
 
-    /** This environment with the given ground. */
+    /** This environment with the given ground (0.43: and the same terrain). */
     default VehicleEnvironment withGround(Ground ground) {
         VehicleEnvironment inner = this;
         java.util.Objects.requireNonNull(ground, "ground");
@@ -33,6 +35,20 @@ public interface VehicleEnvironment {
             @Override public HullDynamics.Water point(Vec3d worldPoint) { return inner.point(worldPoint); }
             @Override public WaveField waves() { return inner.waves(); }
             @Override public Ground ground() { return ground; }
+            @Override public dev.mcmod.aerocore.api.ground.Terrain terrain() { return inner.terrain(); }
+        };
+    }
+
+    /** 0.43: this environment with the given terrain (the same ground). */
+    default VehicleEnvironment withTerrain(dev.mcmod.aerocore.api.ground.Terrain terrain) {
+        VehicleEnvironment inner = this;
+        java.util.Objects.requireNonNull(terrain, "terrain");
+        return new VehicleEnvironment() {
+            @Override public FloatingBodyDynamics.Contact sphere(Vec3d centre, double radiusM) { return inner.sphere(centre, radiusM); }
+            @Override public HullDynamics.Water point(Vec3d worldPoint) { return inner.point(worldPoint); }
+            @Override public WaveField waves() { return inner.waves(); }
+            @Override public Ground ground() { return inner.ground(); }
+            @Override public dev.mcmod.aerocore.api.ground.Terrain terrain() { return terrain; }
         };
     }
 

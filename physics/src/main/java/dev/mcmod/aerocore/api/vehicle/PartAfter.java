@@ -19,11 +19,18 @@ public final class PartAfter {
     private final RigidBodyState state;
     private final RigidBodyProperties properties;
     private final Vec3d omega;
+    /** 0.43: the pose at the step's end (the joints' new values) and whether this part rides on a joint that moved. */
+    private final VehiclePose pose;
+    private final boolean riding;
 
     PartAfter(VehicleDynamics.Prepared prepared, Vehicle.Installed installed, VehicleState st, RigidBodyState state) {
         this.prepared = prepared; this.installed = installed; this.st = st; this.state = state;
-        this.properties = prepared.vehicle().properties();
+        this.pose = st.pose();
+        this.properties = pose.properties();
         this.omega = state.angularVelocity(properties);
+        boolean moving = false;
+        for (int j : prepared.vehicle().chain(installed.index())) { moving |= st.jointRates[j] != 0; }
+        this.riding = moving;
     }
 
     public String id() { return installed.id(); }
@@ -38,7 +45,7 @@ public final class PartAfter {
     public double time() { return prepared.drive().time(); }
 
     /** A part-frame point in the vehicle frame. */
-    public Vec3d vehiclePoint(Vec3d partPoint) { return installed.mount().position().add(installed.rotation().rotate(partPoint)); }
+    public Vec3d vehiclePoint(Vec3d partPoint) { return pose.position(installed.index()).add(pose.rotation(installed.index()).rotate(partPoint)); }
     /** World offset from the end COM of a part-frame point. */
     public Vec3d offset(Vec3d partPoint) { return state.worldOffset(properties, vehiclePoint(partPoint)); }
     /** World position of a part-frame point at the end. */
@@ -48,8 +55,11 @@ public final class PartAfter {
     /** A world direction in the part frame at the end. */
     public Vec3d partDirection(Vec3d worldDirection) { return orientation().inverse().rotate(worldDirection); }
     /** World velocity of a part-frame point at the end. */
-    public Vec3d velocity(Vec3d partPoint) { return state.velocity().add(omega.cross(offset(partPoint))); }
-    private Orientation orientation() { return state.orientation().multiply(installed.rotation()); }
+    public Vec3d velocity(Vec3d partPoint) {
+        Vec3d v = state.velocity().add(omega.cross(offset(partPoint)));
+        return riding ? v.add(state.orientation().rotate(pose.relativeVelocity(installed.index(), vehiclePoint(partPoint), st.jointRates))) : v;
+    }
+    private Orientation orientation() { return state.orientation().multiply(pose.rotation(installed.index())); }
 
     private Vehicle.Rotor rotor(int k) {
         if (k < 0 || k >= installed.part().rotors().size()) { throw new IndexOutOfBoundsException("Rotor " + k + " of part " + installed.id()); }

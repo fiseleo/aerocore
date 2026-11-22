@@ -30,8 +30,22 @@ import java.util.Objects;
  */
 public record Coupling(Kind kind, Vec3d leaderPoint, Vec3d followerPoint, Vec3d pitchAxis, Vec3d yawAxis,
                        double pitchLimitRad, double yawLimitRad, double rollLimitRad, double rollStiffnessNmPerRad, double rollDampingNms,
-                       double captureM, List<String> forwarded, boolean collide) {
-    public enum Kind { BALL, FIFTH_WHEEL }
+                       double captureM, List<String> forwarded, boolean collide, double ropeLengthM, double ropeStiffnessN, double ropeDampingNs) {
+    /**
+     * BALL and FIFTH_WHEEL hold the two points together; ROPE (0.43: a crane's hoist rope, a sling) only keeps them at
+     * most ropeLengthM apart (a pull, never a push) through the rope's elasticity ropeStiffnessN = E A (N; infinite is
+     * inextensible: the stiffness of a length L is E A / L) and a damper ropeDampingNs (N s/m), with no stops: the load
+     * swings. The length may change while it hangs (ContactSolver.Joint's length and reel rate: a winch).
+     */
+    public enum Kind { BALL, FIFTH_WHEEL, ROPE }
+
+    /** As before 0.43 (not a rope). */
+    public Coupling(Kind kind, Vec3d leaderPoint, Vec3d followerPoint, Vec3d pitchAxis, Vec3d yawAxis,
+                    double pitchLimitRad, double yawLimitRad, double rollLimitRad, double rollStiffnessNmPerRad, double rollDampingNms,
+                    double captureM, List<String> forwarded, boolean collide) {
+        this(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchLimitRad, yawLimitRad, rollLimitRad, rollStiffnessNmPerRad, rollDampingNms,
+                captureM, forwarded, collide, 0, Double.POSITIVE_INFINITY, 0);
+    }
 
     /** A fifth wheel's default capture distance, m. */
     public static final double CAPTURE_M = 0.15;
@@ -52,8 +66,44 @@ public record Coupling(Kind kind, Vec3d leaderPoint, Vec3d followerPoint, Vec3d 
         if (!(rollDampingNms >= 0) || !Double.isFinite(rollDampingNms)) { throw new IllegalArgumentException("Roll damping must be finite and nonnegative"); }
         if (rollLimitRad > 0 && rollStiffnessNmPerRad == Double.POSITIVE_INFINITY) { throw new IllegalArgumentException("A roll with play cannot be rigid"); }
         if (!(captureM >= 0) || !Double.isFinite(captureM)) { throw new IllegalArgumentException("Capture distance must be finite and nonnegative"); }
+        if (!(ropeLengthM >= 0) || !Double.isFinite(ropeLengthM) || !(ropeStiffnessN > 0) || !(ropeDampingNs >= 0) || !Double.isFinite(ropeDampingNs)) {
+            throw new IllegalArgumentException("A rope has a finite length, a positive stiffness and a finite damping");
+        }
         forwarded = List.copyOf(forwarded);
     }
+
+    /**
+     * 0.43: a rope from the leader's point (a boom tip's sheave) to the follower's (a hook block's) of a length (m), of
+     * E A stiffnessN (N) and damping (N s/m); it swings free of both bodies' turning. Capture is the length's own: a
+     * rope is hooked on where it reaches.
+     */
+    public static Coupling rope(Vec3d leaderPoint, Vec3d followerPoint, double lengthM, double stiffnessN, double dampingNs) {
+        return new Coupling(Kind.ROPE, leaderPoint, followerPoint, Vec3d.Z, Vec3d.Y, Math.PI, Math.PI, Math.PI, 0, 0, Math.max(lengthM, CAPTURE_M), List.of(), false,
+                lengthM, stiffnessN, dampingNs);
+    }
+
+    /** 0.43: the same rope at another length (a winch's), or leader point (a boom moving its sheave). */
+    public Coupling withRope(Vec3d leaderPoint, double lengthM) {
+        return new Coupling(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchLimitRad, yawLimitRad, rollLimitRad,
+                rollStiffnessNmPerRad, rollDampingNms, Math.max(lengthM, CAPTURE_M), forwarded, collide, lengthM, ropeStiffnessN, ropeDampingNs);
+    }
+    /** 0.43: whether this is a rope (ROPE). */
+    public boolean rope() { return kind == Kind.ROPE; }
+
+    /**
+     * 0.43: a rope reeved over a sheave on the leader and wound on its winch: where the rope leaves the leader is the
+     * sheave part's mount point (it moves with the boom), and its length is the winch's drum (a HydraulicMotorPart with
+     * a drum: its rope state and speed). In the world the game resolves them every substep; the leader then gets the
+     * rope's pull back on the control channel tensionChannel(winch) for the winch's "tension" input.
+     */
+    public record Reeving(String sheavePart, String sheavePoint, String winchPart) {
+        public Reeving { java.util.Objects.requireNonNull(sheavePart); java.util.Objects.requireNonNull(sheavePoint); java.util.Objects.requireNonNull(winchPart); }
+        public Map<String, Object> toJson() { return Fields.object("sheavePart", sheavePart, "sheavePoint", sheavePoint, "winchPart", winchPart); }
+        public static Reeving fromJson(Fields f) { return new Reeving(f.string("sheavePart"), f.string("sheavePoint"), f.string("winchPart")); }
+    }
+
+    /** 0.43: the control channel on which the game gives a winch its rope's pull (N). */
+    public static String tensionChannel(String winchPart) { return "rope_tension." + winchPart; }
 
     /** A fifth wheel: the hinge across the leader (+z), the kingpin up the follower (+y), roll locked rigidly, the default capture. */
     public static Coupling fifthWheel(Vec3d leaderPoint, Vec3d followerPoint, double pitchLimitRad, double yawLimitRad) {
@@ -68,23 +118,23 @@ public record Coupling(Kind kind, Vec3d leaderPoint, Vec3d followerPoint, Vec3d 
 
     public Coupling withForwarded(List<String> channels) {
         return new Coupling(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchLimitRad, yawLimitRad, rollLimitRad,
-                rollStiffnessNmPerRad, rollDampingNms, captureM, channels, collide);
+                rollStiffnessNmPerRad, rollDampingNms, captureM, channels, collide, ropeLengthM, ropeStiffnessN, ropeDampingNs);
     }
     public Coupling withRoll(double limitRad, double stiffnessNmPerRad, double dampingNms) {
         return new Coupling(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchLimitRad, yawLimitRad, limitRad,
-                stiffnessNmPerRad, dampingNms, captureM, forwarded, collide);
+                stiffnessNmPerRad, dampingNms, captureM, forwarded, collide, ropeLengthM, ropeStiffnessN, ropeDampingNs);
     }
     public Coupling withLimits(double pitchRad, double yawRad) {
         return new Coupling(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchRad, yawRad, rollLimitRad,
-                rollStiffnessNmPerRad, rollDampingNms, captureM, forwarded, collide);
+                rollStiffnessNmPerRad, rollDampingNms, captureM, forwarded, collide, ropeLengthM, ropeStiffnessN, ropeDampingNs);
     }
     public Coupling withCapture(double metres) {
         return new Coupling(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchLimitRad, yawLimitRad, rollLimitRad,
-                rollStiffnessNmPerRad, rollDampingNms, metres, forwarded, collide);
+                rollStiffnessNmPerRad, rollDampingNms, metres, forwarded, collide, ropeLengthM, ropeStiffnessN, ropeDampingNs);
     }
     public Coupling withCollide(boolean on) {
         return new Coupling(kind, leaderPoint, followerPoint, pitchAxis, yawAxis, pitchLimitRad, yawLimitRad, rollLimitRad,
-                rollStiffnessNmPerRad, rollDampingNms, captureM, forwarded, on);
+                rollStiffnessNmPerRad, rollDampingNms, captureM, forwarded, on, ropeLengthM, ropeStiffnessN, ropeDampingNs);
     }
 
     /** Whether the roll is held (a spring or a rigid lock about square), rather than free or free within play. */
@@ -131,6 +181,11 @@ public record Coupling(Kind kind, Vec3d leaderPoint, Vec3d followerPoint, Vec3d 
         m.put("captureM", captureM);
         if (!forwarded.isEmpty()) { m.put("forwarded", new ArrayList<Object>(forwarded)); }
         if (collide) { m.put("collide", true); }
+        if (kind == Kind.ROPE) {
+            m.put("ropeLengthM", ropeLengthM);
+            if (ropeStiffnessN != Double.POSITIVE_INFINITY) { m.put("ropeStiffnessN", ropeStiffnessN); }
+            if (ropeDampingNs != 0) { m.put("ropeDampingNs", ropeDampingNs); }
+        }
         return m;
     }
 
@@ -142,7 +197,8 @@ public record Coupling(Kind kind, Vec3d leaderPoint, Vec3d followerPoint, Vec3d 
         return new Coupling(kind, f.vec("leaderPoint"), f.vec("followerPoint"), f.vec("pitchAxis", Vec3d.Z), f.vec("yawAxis", Vec3d.Y),
                 f.number("pitchLimitRad", Math.PI), f.number("yawLimitRad", Math.PI), f.number("rollLimitRad", 0),
                 f.number("rollStiffnessNmPerRad", Double.POSITIVE_INFINITY), f.number("rollDampingNms", 0),
-                f.number("captureM", CAPTURE_M), forwarded, f.bool("collide", false));
+                f.number("captureM", CAPTURE_M), forwarded, f.bool("collide", false), f.number("ropeLengthM", 0),
+                f.number("ropeStiffnessN", Double.POSITIVE_INFINITY), f.number("ropeDampingNs", 0));
     }
 
     public static Coupling parse(String json) { return fromJson(Json.parse(json), "coupling"); }

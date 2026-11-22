@@ -20,5 +20,6 @@ public final class AeroCoreGameTests {
         event.register(dev.mcmod.aerocore.neoforge.probe.HullGameTests.class);
         event.register(dev.mcmod.aerocore.neoforge.probe.SeaGameTests.class);
         event.register(dev.mcmod.aerocore.neoforge.vehicle.VehicleGameTests.class);
+        event.register(dev.mcmod.aerocore.neoforge.vehicle.MachineryGameTests.class);
     }
 }

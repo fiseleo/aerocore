@@ -3,6 +3,25 @@
 AeroCore's versions, newest first. Before 0.41 AeroCore was not released; the detailed development log (in Traditional
 Chinese) is [docs/HISTORY.zh-TW.md](docs/HISTORY.zh-TW.md), and each model's validation is in [docs](docs).
 
+## 0.43.0: heavy machinery
+
+- Joints inside a vehicle: a part can turn or slide on its joint (a boom, a stick, a slewing ring, a centre hinge, a
+  telescope, a mast, a dump body), carrying what is mounted on it. The vehicle stays one rigid body whose mass,
+  inertia, collision, seats, decks, holds and tanks follow the joints; the links' momentum is kept, so slewing the
+  upper turns the undercarriage back. A joint is driven within its actuator's reach and gives way beyond it.
+- Hydraulics: circuits by name, pumps (fixed, pressure-compensated, power-limited) loading the engine, rams, slew drives,
+  motors and winches sharing the flow; calculations in `api.hydraulic`.
+- Tracks and roller drums: road wheels on the ground, traction from the soil's shear, skid steering, sinkage and
+  compaction resistance; smooth and padfoot drums with their vibration.
+- Tools and terrain: blades, bucket lips, teeth, milling drums and cutterheads cut the ground cell by cell
+  (`api.ground.Terrain`); the forces resist the machine and the cut volumes go to the vehicle mod, which edits the world.
+- Ropes: a rope coupling with a length a winch reels, reeving over a boom's sheaves, the tension back on the winch; a
+  hook block hung from a fixed anchor (a tower crane's trolley).
+- Calculations: soil cutting, bucket and blade capacities, rock cutting, disc cutters, piling, compaction, hot mix
+  cooling and concrete maturity (`api.earthmoving`); wire ropes, reeving, outrigger stability and load charts
+  (`api.lifting`); hydraulic pump and track noise (`api.acoustics`).
+- A vehicle without joints, tools, hydraulics or ropes steps exactly as in 0.42; saves from 0.42 load unchanged.
+
 ## 0.42.0: wear, damage and cargo
 
 - Part conditions: a part names what wears out or gets damaged (an axle's tyres, brakes and suspension; a wing's

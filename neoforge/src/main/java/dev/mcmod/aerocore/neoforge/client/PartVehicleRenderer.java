@@ -138,7 +138,9 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
             if (shift.lengthSquared() > 0) { stack.translate(shift.x(), shift.y(), shift.z()); }
             Orientation q = entity.visualOrientation(partialTick);
             stack.mulPose(new Quaternionf((float) q.x(), (float) q.y(), (float) q.z(), (float) q.w()));
-            Vec3d com = vehicle.properties().centerOfMassLocal();
+            // 0.43: the joints' pose (the compiled geometry for a vehicle without joints)
+            dev.mcmod.aerocore.api.vehicle.VehiclePose pose = entity.pose(partialTick);
+            Vec3d com = pose.properties().centerOfMassLocal();
             stack.translate(-com.x(), -com.y(), -com.z());
             PartLayers layers = new PartLayers().gpu(true).late(true);   // the parts' bakes drawn from the GPU (PartGpu); glass after water (0.30)
             net.minecraft.world.phys.Vec3 at = entity.getPosition(partialTick).add(shift.x(), shift.y(), shift.z());
@@ -152,7 +154,7 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
                 PartRenderer renderer = PartRenderer.of(part);
                 if (renderer != null) {
                     stack.pushPose();
-                    mount(stack, installed);
+                    mount(stack, pose, installed);
                     MeshBakery.Baked baked = MeshBakery.get(part, () -> {
                         PartMesh local = new PartMesh();
                         renderer.mesh(part, local);
@@ -162,8 +164,8 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
                     PartRenderer.Drawn drawnNow = null;
                     if (baked != null && baked.radius() > 0) {
                         // where the part is in the world: its own light and how big it looks
-                        Vec3d local = installed.mount().position().add(installed.rotation().rotate(baked.centre())).subtract(com);
-                        if (beautify) { near.add(box(installed, baked, com)); }
+                        Vec3d local = pose.apply(installed.index(), baked.centre()).subtract(com);
+                        if (beautify) { near.add(box(pose, installed, baked, com)); }
                         Vec3d offset = q.rotate(local);
                         double wx = at.x + offset.x(), wy = at.y + offset.y(), wz = at.z + offset.z();
                         partLight = lightAt(entity, wx, wy, wz, light);
@@ -203,13 +205,13 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
     private static final Map<dev.mcmod.aerocore.api.mesh.PackedMesh, float[]> BOUNDS = new WeakHashMap<>();
 
     /** A part's box in the vehicle's frame (from its centre of mass): x0, y0, z0, x1, y1, z1. */
-    private static double[] box(Vehicle.Installed installed, MeshBakery.Baked baked, Vec3d com) {
+    private static double[] box(dev.mcmod.aerocore.api.vehicle.VehiclePose pose, Vehicle.Installed installed, MeshBakery.Baked baked, Vec3d com) {
         dev.mcmod.aerocore.api.mesh.PackedMesh far = baked.level(baked.levels().length - 1);
         float[] b = BOUNDS.computeIfAbsent(far, dev.mcmod.aerocore.api.mesh.PackedMesh::bounds);
         double[] out = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
         for (int i = 0; i < 8; i++) {
             Vec3d c = new Vec3d(b[(i & 1) == 0 ? 0 : 3], b[(i & 2) == 0 ? 1 : 4], b[(i & 4) == 0 ? 2 : 5]);
-            Vec3d v = installed.mount().position().add(installed.rotation().rotate(c)).subtract(com);
+            Vec3d v = pose.apply(installed.index(), c).subtract(com);
             out[0] = Math.min(out[0], v.x()); out[1] = Math.min(out[1], v.y()); out[2] = Math.min(out[2], v.z());
             out[3] = Math.max(out[3], v.x()); out[4] = Math.max(out[4], v.y()); out[5] = Math.max(out[5], v.z());
         }
@@ -257,9 +259,9 @@ public class PartVehicleRenderer extends EntityRenderer<PartVehicle> {
         return Math.min(now, last);
     }
 
-    private static void mount(PoseStack stack, Vehicle.Installed installed) {
-        Vec3d p = installed.mount().position();
-        Orientation r = installed.rotation();
+    private static void mount(PoseStack stack, dev.mcmod.aerocore.api.vehicle.VehiclePose pose, Vehicle.Installed installed) {
+        Vec3d p = pose.position(installed.index());
+        Orientation r = pose.rotation(installed.index());
         stack.translate(p.x(), p.y(), p.z());
         stack.mulPose(new Quaternionf((float) r.x(), (float) r.y(), (float) r.z(), (float) r.w()));
     }
